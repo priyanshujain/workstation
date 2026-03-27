@@ -1,0 +1,23 @@
+[package]
+name = "ws-cleanup"
+version.workspace = true
+edition.workspace = true
+description = "Disk audit and cleanup tools for macOS workstations"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ws-audit"
+path = "src/bin/ws-audit.rs"
+
+[[bin]]
+name = "ws-cleanup"
+path = "src/bin/ws-cleanup.rs"
+
+[dependencies]
+clap = { workspace = true }
+console = { workspace = true }
+dirs = { workspace = true }
+ratatui = "0.29"
+crossterm = "0.28"

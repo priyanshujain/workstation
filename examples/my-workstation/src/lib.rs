@@ -18,23 +18,80 @@ pub fn config() -> Workstation {
         // ============================================
         .scope("personal", |s| {
             s
-                // Terminal & Shell
-                .brew_cask("ghostty")           // Modern terminal emulator
+                // --- CLI Tools ---
+                .brew_formula("git")
+                .brew_formula("ripgrep")
+                .brew_formula("fzf")
+                .brew_formula("neovim")
+                .brew_formula("helix")
+                .brew_formula("imagemagick")
+                .brew_formula("ffmpeg")
+                .brew_formula("graphviz")
+                .brew_formula("pandoc")
+                .brew_formula("pandoc-crossref")
+                .brew_formula("weasyprint")
+                .brew_formula("et")
 
-                // Productivity
-                .brew_cask("raycast")           // Launcher and productivity tool
+                // --- Languages & Runtimes ---
+                .brew_formula("go")
+                .brew_formula("pyenv")
+                .brew_formula("nvm")
+                .brew_formula("rustup")
+                .brew_formula("pnpm")
+                .brew_formula("bun")
+                .brew_formula("clojure")
+                .brew_formula("sbcl")
+                .brew_formula("elixir")
+                .brew_formula("erlang")
 
-                // Code Editors
-                .brew_cask("visual-studio-code") // VS Code
+                // --- iOS & Mobile ---
+                .brew_formula("cocoapods")
+                .brew_formula("ios-deploy")
+                .brew_formula("applesimutils")
+                .brew_formula("fastlane")
+                .brew_formula("maestro")
 
-                // CLI Tools
-                .brew_formula("git")            // Version control
-                .brew_formula("ripgrep")        // Fast search (rg)
-                .brew_formula("fzf")            // Fuzzy finder
-                .brew_formula("neovim")         // Text editor
+                // --- Infra & DevOps ---
+                .brew_formula("terraform")
+                .brew_formula("istioctl")
 
-                // Containers
-                .brew_cask("docker")            // Docker Desktop
+                // --- Cross-compilation & Signing ---
+                .brew_formula("mingw-w64")
+                .brew_formula("makensis")
+                .brew_formula("osslsigncode")
+
+                // --- Misc ---
+                .brew_formula("timidity")
+                // --- Terminals ---
+                .brew_cask("ghostty")
+
+                // --- Editors & Dev Tools ---
+                .brew_cask("visual-studio-code")
+                .brew_cask("docker")
+                .brew_cask("figma")
+
+                // --- Communication ---
+                .brew_cask("slack")
+                .brew_cask("whatsapp")
+                .brew_cask("telegram")
+
+                // --- AI ---
+                .brew_cask("claude")
+
+                // --- Productivity ---
+                .brew_cask("raycast")
+                .brew_cask("google-chrome")
+                .brew_cask("google-drive")
+
+                // --- Security & Networking ---
+                .brew_cask("cloudflare-warp")
+                .brew_cask("protonvpn")
+                .brew_cask("bitwarden")
+                .brew_cask("tailscale")
+
+                // --- Media ---
+                .brew_cask("vlc")
+                .brew_cask("qbittorrent")
         })
 
         // ============================================
@@ -43,13 +100,12 @@ pub fn config() -> Workstation {
         // ============================================
         .scope("okcredit", |s| {
             s
-                // Database Tools
-                .brew_cask("datagrip")          // JetBrains DataGrip
+                .brew_cask("datagrip")
+                .brew_cask("google-cloud-sdk")
         })
 
         // ============================================
         // MACHINE PROFILES
-        // Define which scopes are active on each machine
         // ============================================
 
         // Personal MacBook: Only personal tools
@@ -91,15 +147,15 @@ mod tests {
     fn test_build_graph_personal() {
         let workstation = config();
         let graph = workstation.build_graph("personal-macbook").unwrap();
-        // Personal scope has: ghostty, raycast, vscode, git, ripgrep, fzf, neovim, docker = 8 resources
-        assert_eq!(graph.len(), 8);
+        // Personal scope: 33 formulae + 17 casks = 50 resources
+        assert_eq!(graph.len(), 50);
     }
 
     #[test]
     fn test_build_graph_work() {
         let workstation = config();
         let graph = workstation.build_graph("work-macbook").unwrap();
-        // Work scope has: personal (8) + okcredit (1) = 9 resources
-        assert_eq!(graph.len(), 9);
+        // Work scope: personal (50) + okcredit (2) = 52 resources
+        assert_eq!(graph.len(), 52);
     }
 }

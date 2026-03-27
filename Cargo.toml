@@ -5,6 +5,7 @@ members = [
     "crates/ws-core",
     "crates/ws-dsl",
     "crates/ws-cli",
+    "crates/ws-cleanup",
     "macos",
     "examples/my-workstation",
 ]
