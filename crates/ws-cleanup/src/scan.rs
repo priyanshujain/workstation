@@ -19,9 +19,16 @@ impl DiskOverview {
     }
 }
 
-/// Get disk overview for the root filesystem via `df`.
+/// Get disk overview via `df`.
+/// On macOS, uses `/System/Volumes/Data` (the APFS data volume) for accurate usage.
 pub fn disk_overview() -> Option<DiskOverview> {
-    let output = Command::new("df").args(["-k", "/"]).output().ok()?;
+    // macOS APFS: df / shows the small system volume, not actual disk usage
+    let path = if Path::new("/System/Volumes/Data").exists() {
+        "/System/Volumes/Data"
+    } else {
+        "/"
+    };
+    let output = Command::new("df").args(["-k", path]).output().ok()?;
     if !output.status.success() {
         return None;
     }
