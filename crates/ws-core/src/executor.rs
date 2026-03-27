@@ -126,12 +126,18 @@ impl ExecutionReport {
 
     /// Count of successful resources
     pub fn success_count(&self) -> usize {
-        self.results.iter().filter(|r| r.result.is_success()).count()
+        self.results
+            .iter()
+            .filter(|r| r.result.is_success())
+            .count()
     }
 
     /// Get all failures
     pub fn failures(&self) -> Vec<&ResourceResult> {
-        self.results.iter().filter(|r| r.result.is_failed()).collect()
+        self.results
+            .iter()
+            .filter(|r| r.result.is_failed())
+            .collect()
     }
 }
 

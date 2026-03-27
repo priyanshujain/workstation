@@ -62,7 +62,10 @@ pub struct Profile {
 
 impl Profile {
     /// Create a new profile with the given name and scopes
-    pub fn new(name: impl Into<String>, scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         Self {
             name: name.into(),
             scopes: scopes.into_iter().map(|s| s.into()).collect(),
@@ -120,20 +123,24 @@ impl ScopedResources {
     /// Collects all resources from scopes included in the profile
     /// and builds a dependency graph.
     pub fn build_graph_for_profile(&self, profile_name: &str) -> Result<ResourceGraph> {
-        let profile = self.profiles.get(profile_name).ok_or_else(|| {
-            Error::ProfileNotFound {
+        let profile = self
+            .profiles
+            .get(profile_name)
+            .ok_or_else(|| Error::ProfileNotFound {
                 name: profile_name.to_string(),
                 available: self.profile_names(),
-            }
-        })?;
+            })?;
 
         let mut graph = ResourceGraph::new();
 
         for scope_name in &profile.scopes {
-            let scope = self.scopes.get(scope_name).ok_or_else(|| Error::ScopeNotFound {
-                name: scope_name.clone(),
-                available: self.scope_names(),
-            })?;
+            let scope = self
+                .scopes
+                .get(scope_name)
+                .ok_or_else(|| Error::ScopeNotFound {
+                    name: scope_name.clone(),
+                    available: self.scope_names(),
+                })?;
 
             for resource in scope.resources() {
                 graph.add_boxed(resource.clone());

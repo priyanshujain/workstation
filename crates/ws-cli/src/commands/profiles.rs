@@ -8,7 +8,11 @@ pub fn run(workstation: &Workstation) -> anyhow::Result<()> {
     let profiles = workstation.profile_names();
     let scopes = workstation.scope_names();
 
-    println!("\n{} Workstation: {}\n", style("→").cyan(), style(&workstation.name).bold());
+    println!(
+        "\n{} Workstation: {}\n",
+        style("→").cyan(),
+        style(&workstation.name).bold()
+    );
 
     // Show scopes
     println!("{}:", style("Scopes").underlined());

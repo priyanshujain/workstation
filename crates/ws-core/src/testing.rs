@@ -67,12 +67,7 @@ impl MockCommandRunner {
     /// Add an expected command with its response
     ///
     /// Expectations are matched in order - the first matching expectation is used.
-    pub fn expect(
-        self,
-        program: &str,
-        args: &[&str],
-        response: CommandOutput,
-    ) -> Self {
+    pub fn expect(self, program: &str, args: &[&str], response: CommandOutput) -> Self {
         self.expectations.lock().unwrap().push_back(Expectation {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
@@ -185,8 +180,11 @@ mod tests {
 
     #[test]
     fn test_mock_command_runner_basic() {
-        let mock = MockCommandRunner::new()
-            .expect("brew", &["list"], CommandOutput::success("git\nripgrep"));
+        let mock = MockCommandRunner::new().expect(
+            "brew",
+            &["list"],
+            CommandOutput::success("git\nripgrep"),
+        );
 
         let output = mock.run("brew", &["list"]).unwrap();
         assert!(output.success);
@@ -198,7 +196,11 @@ mod tests {
     #[test]
     fn test_mock_command_runner_multiple_expectations() {
         let mock = MockCommandRunner::new()
-            .expect("brew", &["list", "--formula", "git"], CommandOutput::success("git 2.40.0"))
+            .expect(
+                "brew",
+                &["list", "--formula", "git"],
+                CommandOutput::success("git 2.40.0"),
+            )
             .expect("brew", &["install", "ripgrep"], CommandOutput::success(""));
 
         // Can call in any order
@@ -214,8 +216,8 @@ mod tests {
 
     #[test]
     fn test_mock_command_runner_was_called() {
-        let mock = MockCommandRunner::new()
-            .expect("echo", &["hello"], CommandOutput::success("hello"));
+        let mock =
+            MockCommandRunner::new().expect("echo", &["hello"], CommandOutput::success("hello"));
 
         mock.run("echo", &["hello"]).unwrap();
 
@@ -244,8 +246,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "expected commands were not called")]
     fn test_mock_command_runner_verify_panics() {
-        let mock = MockCommandRunner::new()
-            .expect("brew", &["install", "git"], CommandOutput::success(""));
+        let mock = MockCommandRunner::new().expect(
+            "brew",
+            &["install", "git"],
+            CommandOutput::success(""),
+        );
 
         // Don't call the expected command
         mock.verify();

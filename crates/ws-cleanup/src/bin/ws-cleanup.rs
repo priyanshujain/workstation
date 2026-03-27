@@ -6,10 +6,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
-    prelude::*,
-    widgets::*,
-};
+use ratatui::{prelude::*, widgets::*};
 use ws_cleanup::scan::{self, CleanupTarget};
 
 // === App State ===
@@ -196,7 +193,7 @@ fn render_select(f: &mut Frame, app: &App) {
     let area = f.area();
     let chunks = Layout::vertical([
         Constraint::Length(3), // header
-        Constraint::Min(1),   // list
+        Constraint::Min(1),    // list
         Constraint::Length(1), // status bar
     ])
     .split(area);
@@ -241,8 +238,7 @@ fn render_select(f: &mut Frame, app: &App) {
             Row::new(vec![
                 Cell::from(check).style(check_style),
                 Cell::from(target.name.as_str()).style(Style::default().fg(Color::White)),
-                Cell::from(target.description.as_str())
-                    .style(Style::default().fg(Color::DarkGray)),
+                Cell::from(target.description.as_str()).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(size_str).style(Style::default().fg(Color::Yellow)),
             ])
             .style(row_style)
@@ -400,10 +396,7 @@ fn result_line(result: &CleanResult) -> Line<'_> {
         Err(e) => Line::from(vec![
             Span::styled("  ✗ ", Style::default().fg(Color::Red)),
             Span::styled(result.name.as_str(), Style::default().fg(Color::White)),
-            Span::styled(
-                format!("  {e}"),
-                Style::default().fg(Color::Red),
-            ),
+            Span::styled(format!("  {e}"), Style::default().fg(Color::Red)),
         ]),
     }
 }

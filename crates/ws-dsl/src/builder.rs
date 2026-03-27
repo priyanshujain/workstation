@@ -1,8 +1,8 @@
 //! Builder API for workstation configuration
 
+use std::sync::Arc;
 use ws_core::{Profile, Resource, ResourceGraph, Result, Scope, ScopedResources};
 use ws_macos::{BrewCask, BrewFormula};
-use std::sync::Arc;
 
 /// A complete workstation configuration
 #[derive(Debug)]
@@ -53,7 +53,11 @@ impl WorkstationBuilder {
     }
 
     /// Add a scope using a builder closure
-    pub fn scope(mut self, name: impl Into<String>, f: impl FnOnce(ScopeBuilder) -> ScopeBuilder) -> Self {
+    pub fn scope(
+        mut self,
+        name: impl Into<String>,
+        f: impl FnOnce(ScopeBuilder) -> ScopeBuilder,
+    ) -> Self {
         let name = name.into();
         let builder = ScopeBuilder::new(&name);
         let builder = f(builder);
@@ -63,10 +67,8 @@ impl WorkstationBuilder {
 
     /// Add a profile
     pub fn profile(mut self, name: impl Into<String>, scopes: &[&str]) -> Self {
-        self.profiles.push(Profile::new(
-            name,
-            scopes.iter().map(|s| s.to_string()),
-        ));
+        self.profiles
+            .push(Profile::new(name, scopes.iter().map(|s| s.to_string())));
         self
     }
 

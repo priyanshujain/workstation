@@ -58,61 +58,95 @@ pub fn scan_categories() -> Vec<Category> {
 
     let go_cache = go_cache_dir().unwrap_or_else(|| home.join("Library/Caches/go-build"));
 
-    categories.push(build_category("Docker", vec![
-        ("Docker data", home.join("Library/Containers/com.docker.docker/Data")),
-    ]));
+    categories.push(build_category(
+        "Docker",
+        vec![(
+            "Docker data",
+            home.join("Library/Containers/com.docker.docker/Data"),
+        )],
+    ));
 
-    categories.push(build_category("Go", vec![
-        ("Source (~/go/src)", home.join("go/src")),
-        ("Packages (~/go/pkg)", home.join("go/pkg")),
-        ("Binaries (~/go/bin)", home.join("go/bin")),
-        ("Build cache", go_cache),
-    ]));
+    categories.push(build_category(
+        "Go",
+        vec![
+            ("Source (~/go/src)", home.join("go/src")),
+            ("Packages (~/go/pkg)", home.join("go/pkg")),
+            ("Binaries (~/go/bin)", home.join("go/bin")),
+            ("Build cache", go_cache),
+        ],
+    ));
 
-    categories.push(build_category("Node.js", vec![
-        ("nvm", home.join(".nvm")),
-        ("npm cache", home.join(".npm")),
-        ("pnpm", home.join("Library/pnpm")),
-        ("bun", home.join(".bun")),
-    ]));
+    categories.push(build_category(
+        "Node.js",
+        vec![
+            ("nvm", home.join(".nvm")),
+            ("npm cache", home.join(".npm")),
+            ("pnpm", home.join("Library/pnpm")),
+            ("bun", home.join(".bun")),
+        ],
+    ));
 
-    categories.push(build_category("Python", vec![
-        ("uv cache", home.join(".cache/uv")),
-        ("pyenv", home.join(".pyenv")),
-    ]));
+    categories.push(build_category(
+        "Python",
+        vec![
+            ("uv cache", home.join(".cache/uv")),
+            ("pyenv", home.join(".pyenv")),
+        ],
+    ));
 
-    categories.push(build_category("Rust", vec![
-        ("rustup", home.join(".rustup")),
-        ("cargo", home.join(".cargo")),
-    ]));
+    categories.push(build_category(
+        "Rust",
+        vec![
+            ("rustup", home.join(".rustup")),
+            ("cargo", home.join(".cargo")),
+        ],
+    ));
 
-    categories.push(build_category("Kotlin/Native", vec![
-        ("konan", home.join(".konan")),
-    ]));
+    categories.push(build_category(
+        "Kotlin/Native",
+        vec![("konan", home.join(".konan"))],
+    ));
 
-    categories.push(build_category("Gradle", vec![
-        ("gradle", home.join(".gradle")),
-    ]));
+    categories.push(build_category(
+        "Gradle",
+        vec![("gradle", home.join(".gradle"))],
+    ));
 
-    categories.push(build_category("Xcode", vec![
-        ("DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
-        ("Simulators", home.join("Library/Developer/CoreSimulator")),
-    ]));
+    categories.push(build_category(
+        "Xcode",
+        vec![
+            (
+                "DerivedData",
+                home.join("Library/Developer/Xcode/DerivedData"),
+            ),
+            ("Simulators", home.join("Library/Developer/CoreSimulator")),
+        ],
+    ));
 
-    categories.push(build_category("Homebrew", vec![
-        ("Installation", PathBuf::from("/opt/homebrew")),
-        ("Cache", home.join("Library/Caches/Homebrew")),
-    ]));
+    categories.push(build_category(
+        "Homebrew",
+        vec![
+            ("Installation", PathBuf::from("/opt/homebrew")),
+            ("Cache", home.join("Library/Caches/Homebrew")),
+        ],
+    ));
 
-    categories.push(build_category("App Caches", vec![
-        ("Chrome", home.join("Library/Caches/Google")),
-        ("Slack", home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt")),
-        ("Playwright", home.join("Library/Caches/ms-playwright")),
-    ]));
+    categories.push(build_category(
+        "App Caches",
+        vec![
+            ("Chrome", home.join("Library/Caches/Google")),
+            (
+                "Slack",
+                home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt"),
+            ),
+            ("Playwright", home.join("Library/Caches/ms-playwright")),
+        ],
+    ));
 
-    categories.push(build_category("Downloads", vec![
-        ("~/Downloads", home.join("Downloads")),
-    ]));
+    categories.push(build_category(
+        "Downloads",
+        vec![("~/Downloads", home.join("Downloads"))],
+    ));
 
     categories.sort_by(|a, b| b.total_size.cmp(&a.total_size));
     categories.retain(|c| c.total_size > 0);
@@ -168,8 +202,7 @@ impl CleanupTarget {
                             fs::remove_dir_all(&p)
                                 .map_err(|e| format!("{}: {}", p.display(), e))?;
                         } else {
-                            fs::remove_file(&p)
-                                .map_err(|e| format!("{}: {}", p.display(), e))?;
+                            fs::remove_file(&p).map_err(|e| format!("{}: {}", p.display(), e))?;
                         }
                     }
                 }
@@ -218,7 +251,10 @@ pub fn discover_cleanup_targets() -> Vec<CleanupTarget> {
         name: "Homebrew cache".into(),
         description: "Old bottles and stale downloads".into(),
         size: dir_size(&brew_cache),
-        action: CleanAction::RunCommand("brew".into(), vec!["cleanup".into(), "--prune=all".into()]),
+        action: CleanAction::RunCommand(
+            "brew".into(),
+            vec!["cleanup".into(), "--prune=all".into()],
+        ),
     });
 
     // Go build cache

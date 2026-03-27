@@ -107,11 +107,7 @@ pub struct ChangeDetail {
 
 impl ChangeDetail {
     /// Create a new change detail
-    pub fn new(
-        field: impl Into<String>,
-        from: impl Into<String>,
-        to: impl Into<String>,
-    ) -> Self {
+    pub fn new(field: impl Into<String>, from: impl Into<String>, to: impl Into<String>) -> Self {
         Self {
             field: field.into(),
             from: from.into(),

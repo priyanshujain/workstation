@@ -11,11 +11,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// Resource detection failed
     #[error("Failed to detect state of {resource}: {message}")]
-    DetectionFailed { resource: ResourceId, message: String },
+    DetectionFailed {
+        resource: ResourceId,
+        message: String,
+    },
 
     /// Resource application failed
     #[error("Failed to apply {resource}: {message}")]
-    ApplyFailed { resource: ResourceId, message: String },
+    ApplyFailed {
+        resource: ResourceId,
+        message: String,
+    },
 
     /// Missing dependency in graph
     #[error("Resource {resource} depends on {dependency}, which is not in the graph")]
@@ -30,11 +36,17 @@ pub enum Error {
 
     /// Profile not found
     #[error("Profile '{name}' not found. Available profiles: {available:?}")]
-    ProfileNotFound { name: String, available: Vec<String> },
+    ProfileNotFound {
+        name: String,
+        available: Vec<String>,
+    },
 
     /// Scope not found
     #[error("Scope '{name}' not found. Available scopes: {available:?}")]
-    ScopeNotFound { name: String, available: Vec<String> },
+    ScopeNotFound {
+        name: String,
+        available: Vec<String>,
+    },
 
     /// Command execution failed
     #[error("Command failed: {command}\n{stderr}")]

@@ -60,12 +60,13 @@ impl ResourceGraph {
         for (id, resource) in &self.resources {
             let to_idx = self.node_indices[id];
             for dep_id in resource.depends_on() {
-                let from_idx = self.node_indices.get(&dep_id).ok_or_else(|| {
-                    Error::MissingDependency {
-                        resource: id.clone(),
-                        dependency: dep_id.clone(),
-                    }
-                })?;
+                let from_idx =
+                    self.node_indices
+                        .get(&dep_id)
+                        .ok_or_else(|| Error::MissingDependency {
+                            resource: id.clone(),
+                            dependency: dep_id.clone(),
+                        })?;
                 edges_to_add.push((*from_idx, to_idx));
             }
         }
