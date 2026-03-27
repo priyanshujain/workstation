@@ -6,13 +6,21 @@ use ws_core::{Change, Context, Executor};
 use ws_dsl::Workstation;
 
 /// Run the apply command
-pub fn run(workstation: &Workstation, profile: &str, dry_run: bool, yes: bool) -> anyhow::Result<()> {
-
+pub fn run(
+    workstation: &Workstation,
+    profile: &str,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
     // Build the resource graph for the profile
     let graph = workstation.build_graph(profile)?;
 
     if graph.is_empty() {
-        println!("{} No resources defined for profile '{}'", style("!").yellow(), profile);
+        println!(
+            "{} No resources defined for profile '{}'",
+            style("!").yellow(),
+            profile
+        );
         return Ok(());
     }
 
@@ -65,10 +73,7 @@ pub fn run(workstation: &Workstation, profile: &str, dry_run: bool, yes: bool) -
 
     // Dry run: stop here
     if dry_run {
-        println!(
-            "{} Dry-run mode, no changes made.",
-            style("i").blue()
-        );
+        println!("{} Dry-run mode, no changes made.", style("i").blue());
         return Ok(());
     }
 
@@ -101,7 +106,7 @@ pub fn run(workstation: &Workstation, profile: &str, dry_run: bool, yes: bool) -
 
     // Execute each resource
     for planned in &plan.resources {
-        pb.set_message(format!("{}", planned.id.name));
+        pb.set_message(planned.id.name.clone());
 
         let result = planned.resource.apply(&planned.change, &ctx);
 

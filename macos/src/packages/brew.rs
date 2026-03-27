@@ -31,7 +31,6 @@ impl BrewFormula {
             // Output format: "formula_name version1 version2 ..."
             let version = output
                 .stdout
-                .trim()
                 .split_whitespace()
                 .nth(1)
                 .map(|s| s.to_string());
@@ -83,8 +82,7 @@ impl Resource for BrewFormula {
                     return Err(ws_core::Error::CommandFailed {
                         command: format!("brew install {}", self.name),
                         stderr: output.stderr,
-                    }
-                    .into());
+                    });
                 }
                 Ok(())
             }
@@ -99,8 +97,7 @@ impl Resource for BrewFormula {
                     return Err(ws_core::Error::CommandFailed {
                         command: format!("brew uninstall {}", self.name),
                         stderr: output.stderr,
-                    }
-                    .into());
+                    });
                 }
                 Ok(())
             }
@@ -139,7 +136,6 @@ impl BrewCask {
         if output.success {
             let version = output
                 .stdout
-                .trim()
                 .split_whitespace()
                 .nth(1)
                 .map(|s| s.to_string());
@@ -191,8 +187,7 @@ impl Resource for BrewCask {
                     return Err(ws_core::Error::CommandFailed {
                         command: format!("brew install --cask {}", self.name),
                         stderr: output.stderr,
-                    }
-                    .into());
+                    });
                 }
                 Ok(())
             }
@@ -207,8 +202,7 @@ impl Resource for BrewCask {
                     return Err(ws_core::Error::CommandFailed {
                         command: format!("brew uninstall --cask {}", self.name),
                         stderr: output.stderr,
-                    }
-                    .into());
+                    });
                 }
                 Ok(())
             }
@@ -257,13 +251,11 @@ mod tests {
 
     #[test]
     fn test_brew_formula_detect_not_installed() {
-        let mock = Arc::new(
-            MockCommandRunner::new().expect(
-                "brew",
-                &["list", "--formula", "ripgrep"],
-                CommandOutput::failure("Error: No such keg"),
-            ),
-        );
+        let mock = Arc::new(MockCommandRunner::new().expect(
+            "brew",
+            &["list", "--formula", "ripgrep"],
+            CommandOutput::failure("Error: No such keg"),
+        ));
 
         let ctx = Context::with_command_runner("test", mock.clone());
         let formula = BrewFormula::new("ripgrep");
@@ -292,13 +284,11 @@ mod tests {
 
     #[test]
     fn test_brew_formula_apply_install() {
-        let mock = Arc::new(
-            MockCommandRunner::new().expect(
-                "brew",
-                &["install", "neovim"],
-                CommandOutput::success("==> Installing neovim"),
-            ),
-        );
+        let mock = Arc::new(MockCommandRunner::new().expect(
+            "brew",
+            &["install", "neovim"],
+            CommandOutput::success("==> Installing neovim"),
+        ));
 
         let ctx = Context::with_command_runner("test", mock.clone()).with_verbose(0);
         let formula = BrewFormula::new("neovim");
@@ -337,13 +327,11 @@ mod tests {
 
     #[test]
     fn test_brew_cask_apply_install() {
-        let mock = Arc::new(
-            MockCommandRunner::new().expect(
-                "brew",
-                &["install", "--cask", "docker"],
-                CommandOutput::success("==> Installing docker"),
-            ),
-        );
+        let mock = Arc::new(MockCommandRunner::new().expect(
+            "brew",
+            &["install", "--cask", "docker"],
+            CommandOutput::success("==> Installing docker"),
+        ));
 
         let ctx = Context::with_command_runner("test", mock.clone()).with_verbose(0);
         let cask = BrewCask::new("docker");
@@ -354,13 +342,11 @@ mod tests {
 
     #[test]
     fn test_brew_formula_apply_install_failure() {
-        let mock = Arc::new(
-            MockCommandRunner::new().expect(
-                "brew",
-                &["install", "nonexistent"],
-                CommandOutput::failure("Error: No formulae found"),
-            ),
-        );
+        let mock = Arc::new(MockCommandRunner::new().expect(
+            "brew",
+            &["install", "nonexistent"],
+            CommandOutput::failure("Error: No formulae found"),
+        ));
 
         let ctx = Context::with_command_runner("test", mock.clone()).with_verbose(0);
         let formula = BrewFormula::new("nonexistent");

@@ -81,8 +81,8 @@ impl Context {
 
     /// Expand ~ in a path to the home directory
     pub fn expand_path(&self, path: &str) -> PathBuf {
-        if path.starts_with("~/") {
-            self.home_dir.join(&path[2..])
+        if let Some(stripped) = path.strip_prefix("~/") {
+            self.home_dir.join(stripped)
         } else if path == "~" {
             self.home_dir.clone()
         } else {
