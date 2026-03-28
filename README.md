@@ -129,7 +129,7 @@ GitHub Actions runs on every push and nightly:
 
 - **Unit tests** + fmt + clippy on Ubuntu
 - **Build check** on Ubuntu and macOS
-- **E2E tests** on macOS (nightly) — runs actual Homebrew commands
+- **Installation test** on macOS (nightly) — verifies Homebrew install flow works
 - **Documentation** build
 
 ## License
