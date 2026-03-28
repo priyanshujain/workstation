@@ -112,7 +112,7 @@ jobs:
         run: brew --version
 
       - name: Run E2E tests
-        run: cargo test --workspace --features e2e
+        run: cargo test --workspace
         env:
           WS_E2E_TESTS: "1"
 
