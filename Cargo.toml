@@ -33,8 +33,37 @@ dirs = "5.0"
 clap = { version = "4.5", features = ["derive"] }
 console = "0.15"
 indicatif = "0.17"
-dialoguer = "0.11"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
 
 # Internal crates
 ws-macos = { path = "macos" }
 wsctl-core = { path = "crates/wsctl-core" }
+
+[package]
+name = "wsctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Workstation controller — manage macOS setup declaratively"
+
+[[bin]]
+name = "wsctl"
+path = "src/main.rs"
+
+[dependencies]
+wsctl-core.workspace = true
+ws-macos.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+console.workspace = true
+indicatif.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
