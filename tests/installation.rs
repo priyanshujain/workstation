@@ -1,5 +1,5 @@
-use wsctl_core::{Context, Executor, Resource, ResourceGraph};
 use ws_macos::BrewFormula;
+use wsctl_core::{Context, Executor, Resource, ResourceGraph};
 
 const TEST_FORMULAE: &[&str] = &["tree", "cowsay"];
 

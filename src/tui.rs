@@ -228,8 +228,7 @@ fn render_select(f: &mut Frame, app: &App) {
             Row::new(vec![
                 Cell::from(check).style(check_style),
                 Cell::from(target.name.as_str()).style(Style::default().fg(Color::White)),
-                Cell::from(target.description.as_str())
-                    .style(Style::default().fg(Color::DarkGray)),
+                Cell::from(target.description.as_str()).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(size_str).style(Style::default().fg(Color::Yellow)),
             ])
             .style(row_style)
