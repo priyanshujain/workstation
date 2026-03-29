@@ -1,136 +1,95 @@
-# ws - Declarative Workstation Configuration
+# wsctl — Workstation Controller
 
-A Rust tool for declaratively managing your macOS workstation. Define your packages, tools, and applications in type-safe Rust code.
+A Rust CLI for declaratively managing macOS workstation setup. Define packages, tools, and applications in type-safe Rust code, then apply them with a single command.
 
-## Features
-
-- **Declarative Configuration**: Define your workstation setup in Rust with compile-time validation
-- **Scopes & Profiles**: Organize tools by purpose (personal, work) and create machine profiles
-- **Dependency-Aware**: Resources are applied in the correct order based on dependencies
-- **Dry-Run Mode**: Preview changes before applying them
-- **Disk Audit & Cleanup**: Scan disk usage by category and interactively clean caches
-- **Testable**: Full mock infrastructure — unit tests run without system changes
-
-## Quick Start
+## Usage
 
 ```bash
+# Install
+cargo install --path .
+
 # See available profiles
-cargo run -- profiles
+wsctl profiles
 
 # Preview what would change
-cargo run -- diff --profile work-macbook
+wsctl diff work-macbook
 
-# Apply configuration (dry run)
-cargo run -- apply --profile work-macbook --dry-run
+# Apply configuration
+wsctl apply work-macbook
 
-# Audit disk usage
-cargo run --bin ws-audit
+# Disk audit
+wsctl audit
 
 # Interactive disk cleanup TUI
-cargo run --bin ws-cleanup
+wsctl cleanup
 ```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `wsctl apply <PROFILE>` | Install/update packages for a profile |
+| `wsctl diff <PROFILE>` | Preview what would change |
+| `wsctl profiles` | List available profiles and scopes |
+| `wsctl audit` | Show disk usage by category |
+| `wsctl cleanup` | Interactive TUI for disk cleanup |
+
+### Flags
+
+- `--json` — Machine-readable output (on `profiles`, `diff`, `audit`)
+- `--yes` / `-y` — Skip confirmation prompt (on `apply`)
+- `--dry-run` / `-n` — Show plan without executing (on `apply`)
+- `--quiet` / `-q` — Errors only
+- `-v` / `-vv` / `-vvv` — Increasing verbosity
 
 ## Configuration
 
-Define your workstation in `examples/my-workstation/src/lib.rs`:
+Edit `src/config.rs` to define your workstation:
 
 ```rust
-use ws_dsl::prelude::*;
-
-pub fn config() -> Workstation {
-    Workstation::builder("my-workstation")
-        .scope("personal", |s| {
-            s.brew_formula("git")
-                .brew_formula("ripgrep")
-                .brew_formula("neovim")
-                .brew_formula("go")
-                .brew_formula("rustup")
-                .brew_cask("ghostty")
-                .brew_cask("visual-studio-code")
-                .brew_cask("docker")
-                .brew_cask("raycast")
-        })
-        .scope("work", |s| {
-            s.brew_cask("datagrip")
-                .brew_cask("google-cloud-sdk")
-        })
-        .profile("personal-macbook", &["personal"])
-        .profile("work-macbook", &["personal", "work"])
-        .build()
-}
+Workstation::builder("my-workstation")
+    .scope("personal", |s| {
+        s.brew_formula("git")
+            .brew_formula("ripgrep")
+            .brew_cask("ghostty")
+            .brew_cask("raycast")
+    })
+    .scope("work", |s| {
+        s.brew_cask("datagrip")
+    })
+    .profile("personal-macbook", &["personal"])
+    .profile("work-macbook", &["personal", "work"])
+    .build()
 ```
-
-## Disk Tools
-
-### `ws-audit` — Disk Usage Report
-
-Scans your machine and shows a categorized breakdown of disk usage:
-
-```
-  Disk  74%
-  ██████████████████████░░░░░░░░  339.9 GB used / 460.4 GB total / 69.8 GB free
-
-    104.1 GB  Docker
-     71.5 GB  Downloads
-     36.0 GB  Go
-      9.5 GB  Node.js
-      8.5 GB  Xcode
-      ...
-```
-
-Categories: Docker, Go, Node.js, Python, Rust, Kotlin/Native, Gradle, Xcode, Homebrew, App Caches, Downloads.
-
-### `ws-cleanup` — Interactive TUI
-
-Select cleanup targets with checkboxes, confirm, and execute:
-
-- Homebrew cache, Go/npm/pnpm caches, Playwright browsers
-- Chrome/Slack caches, Xcode DerivedData & stale simulators
-- Docker unused data, DMG installers in Downloads
 
 ## Project Structure
 
 ```
 workstation/
 ├── crates/
-│   ├── ws-core/         # Core abstractions (Resource trait, graph, executor)
-│   ├── ws-dsl/          # DSL builder API
-│   ├── ws-cli/          # CLI binary (apply, diff, profiles)
-│   └── ws-cleanup/      # Disk audit and cleanup tools
-├── macos/               # macOS resources (Homebrew)
-├── examples/
-│   └── my-workstation/  # Workstation configuration
-└── justfile             # Development recipes
+│   └── wsctl-core/       # Core abstractions + disk scanning
+├── macos/                # macOS resources (Homebrew)
+├── src/                  # wsctl binary
+│   ├── main.rs           # CLI entry point
+│   ├── builder.rs        # Workstation/ScopeBuilder
+│   ├── config.rs         # Workstation configuration
+│   ├── tui.rs            # Cleanup TUI
+│   └── commands/         # Subcommand implementations
+├── tests/
+│   └── installation.rs   # Brew install lifecycle test
+└── justfile
 ```
 
 ## Development
 
 ```bash
-# Install just (if not already)
-brew install just
-
-# Run all CI checks
-just ci
-
-# Individual checks
+just ci           # fmt + lint + test + build
 just test         # cargo test --workspace
 just lint         # cargo clippy --workspace -- -D warnings
-just fmt-check    # cargo fmt --all -- --check
-just fmt          # auto-fix formatting
-
-# Disk tools
 just audit        # scan disk usage
 just cleanup      # interactive cleanup TUI
+just install      # cargo install --path .
 ```
-
-## CI
-
-GitHub Actions runs on every push and nightly:
-
-- **Unit tests** + fmt + clippy on Ubuntu
-- **Build check** on Ubuntu and macOS
-- **Installation test** on macOS (nightly) — verifies Homebrew install flow works
-- **Documentation** build
 
 ## License
 
