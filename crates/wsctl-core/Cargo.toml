@@ -1,0 +1,17 @@
+[package]
+name = "wsctl-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Core abstractions for wsctl — declarative workstation configuration"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+petgraph.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+serde.workspace = true
+dirs.workspace = true
