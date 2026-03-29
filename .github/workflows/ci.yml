@@ -40,7 +40,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -75,7 +75,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -104,7 +104,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-install-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-install-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-install-test-
 
@@ -112,7 +112,7 @@ jobs:
         run: brew --version
 
       - name: Run installation test
-        run: cargo test --package ws-macos --test installation -- --nocapture
+        run: cargo test --package wsctl --test installation -- --nocapture
         env:
           WS_INSTALLATION_TEST: "1"
           HOMEBREW_NO_AUTO_UPDATE: "1"
