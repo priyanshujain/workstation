@@ -25,10 +25,14 @@ lint:
 # Run all CI checks (fmt, lint, test, build)
 ci: fmt-check lint test build
 
+# Install wsctl binary
+install:
+    cargo install --path .
+
 # Audit disk usage — shows space consumed by toolchains, caches, apps
 audit:
-    cargo run --bin ws-audit
+    cargo run -- audit
 
 # Interactive TUI to select and run disk cleanups
 cleanup:
-    cargo run --bin ws-cleanup
+    cargo run -- cleanup
