@@ -2,7 +2,7 @@
 //!
 //! Manages packages installed via Homebrew (brew install / brew install --cask)
 
-use ws_core::{Change, Context, Resource, ResourceId, ResourceState, Result};
+use wsctl_core::{Change, Context, Resource, ResourceId, ResourceState, Result};
 
 /// A Homebrew formula (CLI tools, libraries)
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ impl Resource for BrewFormula {
                 let output = ctx.run_command("brew", &["install", &self.name])?;
 
                 if !output.success {
-                    return Err(ws_core::Error::CommandFailed {
+                    return Err(wsctl_core::Error::CommandFailed {
                         command: format!("brew install {}", self.name),
                         stderr: output.stderr,
                     });
@@ -94,7 +94,7 @@ impl Resource for BrewFormula {
                 let output = ctx.run_command("brew", &["uninstall", &self.name])?;
 
                 if !output.success {
-                    return Err(ws_core::Error::CommandFailed {
+                    return Err(wsctl_core::Error::CommandFailed {
                         command: format!("brew uninstall {}", self.name),
                         stderr: output.stderr,
                     });
@@ -184,7 +184,7 @@ impl Resource for BrewCask {
                 let output = ctx.run_command("brew", &["install", "--cask", &self.name])?;
 
                 if !output.success {
-                    return Err(ws_core::Error::CommandFailed {
+                    return Err(wsctl_core::Error::CommandFailed {
                         command: format!("brew install --cask {}", self.name),
                         stderr: output.stderr,
                     });
@@ -199,7 +199,7 @@ impl Resource for BrewCask {
                 let output = ctx.run_command("brew", &["uninstall", "--cask", &self.name])?;
 
                 if !output.success {
-                    return Err(ws_core::Error::CommandFailed {
+                    return Err(wsctl_core::Error::CommandFailed {
                         command: format!("brew uninstall --cask {}", self.name),
                         stderr: output.stderr,
                     });
@@ -219,7 +219,7 @@ impl Resource for BrewCask {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use ws_core::{CommandOutput, MockCommandRunner};
+    use wsctl_core::{CommandOutput, MockCommandRunner};
 
     #[test]
     fn test_brew_formula_detect_installed() {

@@ -7,11 +7,8 @@ authors.workspace = true
 description = "macOS-specific resources for ws - Homebrew, defaults, launchd"
 
 [dependencies]
-ws-core = { path = "../crates/ws-core" }
+wsctl-core.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
-ws-dsl = { path = "../crates/ws-dsl" }
