@@ -155,7 +155,7 @@ pub fn scan_categories() -> Vec<Category> {
         vec![("~/Downloads", home.join("Downloads"))],
     ));
 
-    categories.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    categories.sort_by_key(|c| std::cmp::Reverse(c.total_size));
     categories.retain(|c| c.total_size > 0);
     categories
 }
