@@ -100,9 +100,12 @@ impl Target {
 }
 
 // `rm -rf` instead of fs::remove_* because BSD/macOS `rm -f` chmods read-only
-// files before unlink, whereas std::fs returns EACCES. Trees like checked-out
-// Go modules or .git packfiles often have read-only entries deep inside.
+// files before unlink, whereas std::fs returns EACCES. Go module/toolchain
+// caches go further and mark parent dirs read-only too (mode 555), so even
+// `rm -f` can't unlink children — `chmod -R u+w` restores write perms first.
 fn rm_rf(path: &std::path::Path) -> Result<(), String> {
+    let _ = Command::new("chmod").args(["-R", "u+w"]).arg(path).output();
+
     let output = Command::new("rm")
         .arg("-rf")
         .arg(path)
@@ -203,6 +206,32 @@ mod tests {
         let result = target.clean();
         assert!(result.is_ok(), "expected ok, got {result:?}");
         assert!(!dir.path().join("repo").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remove_dir_handles_go_module_cache_layout() {
+        // Go module/toolchain caches mark BOTH files (0444) AND their parent
+        // dirs (0555) read-only. Even `rm -f` can't unlink files when the
+        // parent dir lacks write perm — chmod -R u+w must restore them first.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("toolchain");
+        let bin = cache.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let go_bin = bin.join("go");
+        fs::write(&go_bin, b"#!/bin/sh\n").unwrap();
+
+        // Lock down innermost file, then its parent dir, then the cache root.
+        fs::set_permissions(&go_bin, fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let target = Target::new("test", "", 8, CleanAction::RemoveDir(cache.clone()));
+        let result = target.clean();
+        assert!(result.is_ok(), "expected ok, got {result:?}");
+        assert!(!cache.exists());
     }
 
     #[test]
