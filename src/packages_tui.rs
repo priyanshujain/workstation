@@ -56,6 +56,7 @@ struct App {
     rows: Vec<Row>,
     selected: Vec<bool>,
     cursor: usize,
+    table_state: TableState,
     mode: Mode,
     /// dep_name -> packages currently installed that list it as a dep
     dependents_of: HashMap<String, Vec<String>>,
@@ -74,11 +75,16 @@ impl App {
         dependents_of: HashMap<String, Vec<String>>,
     ) -> Self {
         let len = rows.len();
+        let mut table_state = TableState::default();
+        if len > 0 {
+            table_state.select(Some(0));
+        }
         Self {
             brewfile_path,
             rows,
             selected: vec![false; len],
             cursor: 0,
+            table_state,
             mode: Mode::Select,
             dependents_of,
             blockers: Vec::new(),
@@ -116,12 +122,14 @@ impl App {
     fn move_up(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
+            self.table_state.select(Some(self.cursor));
         }
     }
 
     fn move_down(&mut self) {
         if self.cursor + 1 < self.rows.len() {
             self.cursor += 1;
+            self.table_state.select(Some(self.cursor));
         }
     }
 }
@@ -423,7 +431,7 @@ fn perform_uninstall(
     Ok(())
 }
 
-fn render(f: &mut Frame, app: &App) {
+fn render(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Select | Mode::Confirm => render_select(f, app),
         Mode::Blocked => {
@@ -518,7 +526,7 @@ fn result_line(r: &StepResult) -> Line<'_> {
     }
 }
 
-fn render_select(f: &mut Frame, app: &App) {
+fn render_select(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::vertical([
         Constraint::Length(3),
@@ -545,7 +553,7 @@ fn render_select(f: &mut Frame, app: &App) {
         .rows
         .iter()
         .enumerate()
-        .map(|(i, row)| package_row(i, row, app))
+        .map(|(i, row)| package_row(row, app.selected[i], app.cursor == i))
         .collect();
 
     let widths = [
@@ -569,7 +577,7 @@ fn render_select(f: &mut Frame, app: &App) {
                 .borders(Borders::NONE)
                 .padding(Padding::horizontal(1)),
         );
-    f.render_widget(table, chunks[1]);
+    f.render_stateful_widget(table, chunks[1], &mut app.table_state);
 
     let status = if app.selected_count() > 0 {
         Line::from(vec![
@@ -634,9 +642,9 @@ fn render_select(f: &mut Frame, app: &App) {
     }
 }
 
-fn package_row<'a>(i: usize, row: &'a Row, app: &'a App) -> ratatui::widgets::Row<'a> {
-    let check = if app.selected[i] { " ✓" } else { "  " };
-    let check_style = if app.selected[i] {
+fn package_row(row: &Row, selected: bool, is_cursor: bool) -> ratatui::widgets::Row<'_> {
+    let check = if selected { " ✓" } else { "  " };
+    let check_style = if selected {
         Style::default().fg(Color::Green).bold()
     } else {
         Style::default().fg(Color::DarkGray)
@@ -672,7 +680,7 @@ fn package_row<'a>(i: usize, row: &'a Row, app: &'a App) -> ratatui::widgets::Ro
         .map(format_date)
         .unwrap_or_else(|| "—".to_string());
 
-    let row_style = if i == app.cursor {
+    let row_style = if is_cursor {
         Style::default().bg(Color::DarkGray)
     } else {
         Style::default()
