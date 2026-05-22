@@ -2,7 +2,6 @@ mod builder;
 mod cli;
 mod commands;
 mod config;
-mod packages_tui;
 mod tui;
 
 use clap::Parser;
@@ -46,10 +45,10 @@ fn main() -> anyhow::Result<()> {
             commands::audit::run(json)?;
         }
         Commands::Cleanup => {
-            tui::run()?;
+            tui::cleanup::run()?;
         }
         Commands::Packages => {
-            packages_tui::run()?;
+            tui::packages::run()?;
         }
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
