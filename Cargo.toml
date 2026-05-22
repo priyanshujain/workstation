@@ -4,7 +4,6 @@ resolver = "2"
 members = [
     "crates/wsctl-core",
     "crates/packages",
-    "macos",
 ]
 
 [workspace.package]
@@ -40,7 +39,6 @@ ratatui = "0.30"
 crossterm = "0.29"
 
 # Internal crates
-ws-macos = { path = "macos" }
 wsctl-core = { path = "crates/wsctl-core" }
 packages = { path = "crates/packages" }
 
@@ -57,7 +55,6 @@ path = "src/main.rs"
 
 [dependencies]
 wsctl-core.workspace = true
-ws-macos.workspace = true
 packages.workspace = true
 anyhow.workspace = true
 clap.workspace = true

@@ -2179,17 +2179,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ws-macos"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "serde",
- "thiserror 2.0.18",
- "tracing",
- "wsctl-core",
-]
-
-[[package]]
 name = "wsctl"
 version = "0.1.2"
 dependencies = [
@@ -2206,7 +2195,6 @@ dependencies = [
  "time",
  "tracing",
  "tracing-subscriber",
- "ws-macos",
  "wsctl-core",
 ]
 
