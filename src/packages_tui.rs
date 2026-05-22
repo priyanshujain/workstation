@@ -143,18 +143,15 @@ pub fn run() -> Result<()> {
 
     eprintln!("Loading {}…", path.display());
 
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let entries: Vec<BrewfileEntry> = brewfile::parse(&content)
         .into_iter()
         .filter(|e| matches!(e.kind, EntryKind::Formula | EntryKind::Cask))
         .collect();
 
     if entries.is_empty() {
-        return Err(anyhow!(
-            "{} has no brew or cask entries",
-            path.display()
-        ));
+        return Err(anyhow!("{} has no brew or cask entries", path.display()));
     }
 
     let mut installed = brew_info::fetch_installed(&runner)?;
@@ -241,7 +238,10 @@ fn external_dependents(
 /// Order selected indices so packages that depend on others come first
 /// (leaves of the in-selection dependency graph are uninstalled first).
 fn uninstall_order(rows: &[Row], indices: &[usize]) -> Vec<usize> {
-    let selection: HashSet<&str> = indices.iter().map(|&i| rows[i].entry.name.as_str()).collect();
+    let selection: HashSet<&str> = indices
+        .iter()
+        .map(|&i| rows[i].entry.name.as_str())
+        .collect();
     let mut remaining: Vec<usize> = indices.to_vec();
     let mut order: Vec<usize> = Vec::with_capacity(indices.len());
     while !remaining.is_empty() {
@@ -360,8 +360,7 @@ fn compute_blockers(app: &App) -> Vec<(String, Vec<String>)> {
         if !app.selected[i] || row.kind() != PkgKind::Formula {
             continue;
         }
-        let dependents =
-            external_dependents(&row.entry.name, &app.dependents_of, &selection);
+        let dependents = external_dependents(&row.entry.name, &app.dependents_of, &selection);
         if !dependents.is_empty() {
             blockers.push((row.entry.name.clone(), dependents));
         }
@@ -592,7 +591,13 @@ fn render_select(f: &mut Frame, app: &mut App) {
     let table = Table::new(rows, widths)
         .header(
             ratatui::widgets::Row::new(vec![
-                "", "name", "kind", "status", "size", "deps", "installed",
+                "",
+                "name",
+                "kind",
+                "status",
+                "size",
+                "deps",
+                "installed",
             ])
             .style(Style::default().fg(Color::DarkGray)),
         )

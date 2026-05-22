@@ -179,10 +179,8 @@ pub fn remove_entries(path: &Path, targets: &[RemoveTarget]) -> std::io::Result<
     let content = fs::read_to_string(path)?;
     let entries = parse(&content);
 
-    let target_set: HashSet<(EntryKind, &str)> = targets
-        .iter()
-        .map(|t| (t.kind, t.name.as_str()))
-        .collect();
+    let target_set: HashSet<(EntryKind, &str)> =
+        targets.iter().map(|t| (t.kind, t.name.as_str())).collect();
 
     let mut remove_lines: HashSet<usize> = HashSet::new();
     let mut removed: Vec<BrewfileEntry> = Vec::new();
@@ -318,10 +316,7 @@ mod tests {
             cwd: Some(dir.clone()),
             home: Some(dir.join("home")),
         };
-        assert_eq!(
-            discover_with(&env),
-            Some((cwd_file, BrewfileSource::Cwd))
-        );
+        assert_eq!(discover_with(&env), Some((cwd_file, BrewfileSource::Cwd)));
     }
 
     #[test]
@@ -356,7 +351,8 @@ mod tests {
     fn remove_entries_removes_matching_and_preserves_rest() {
         let dir = tempdir();
         let file = dir.join("Brewfile");
-        let original = "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nbrew \"fzf\"\ncask \"vlc\"\nvscode \"x.y\"\n";
+        let original =
+            "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nbrew \"fzf\"\ncask \"vlc\"\nvscode \"x.y\"\n";
         fs::write(&file, original).unwrap();
 
         let targets = vec![
@@ -375,7 +371,10 @@ mod tests {
         assert!(summary.backup.is_some());
 
         let after = fs::read_to_string(&file).unwrap();
-        assert_eq!(after, "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nvscode \"x.y\"\n");
+        assert_eq!(
+            after,
+            "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nvscode \"x.y\"\n"
+        );
 
         let backup = fs::read_to_string(summary.backup.unwrap()).unwrap();
         assert_eq!(backup, original);
