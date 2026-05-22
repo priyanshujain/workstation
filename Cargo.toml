@@ -9,8 +9,7 @@ members = [
 [workspace.package]
 version = "0.1.2"
 edition = "2021"
-license = "MIT"
-authors = ["pj"]
+authors = ["pj <ipriyanshujain@gmail.com>"]
 
 [workspace.dependencies]
 # Core
@@ -46,7 +45,6 @@ wsctl-core = { path = "crates/wsctl-core" }
 name = "wsctl"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
 description = "Workstation controller, manage macOS setup declaratively"
 

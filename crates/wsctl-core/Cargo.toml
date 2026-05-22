@@ -2,7 +2,6 @@
 name = "wsctl-core"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
 description = "Core abstractions for wsctl — declarative workstation configuration"
 

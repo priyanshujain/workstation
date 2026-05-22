@@ -2,7 +2,6 @@
 name = "ws-macos"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
 description = "macOS-specific resources for ws - Homebrew, defaults, launchd"
 
