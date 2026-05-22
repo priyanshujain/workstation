@@ -14,14 +14,18 @@ pub struct Target {
 }
 
 pub enum CleanAction {
+    /// Empty a directory's contents but keep the directory itself.
     RemoveContents(PathBuf),
+    /// Delete a directory and everything inside it.
+    RemoveDir(PathBuf),
+    /// Delete a single file.
+    RemoveFile(PathBuf),
     RunCommand(String, Vec<String>),
     RemoveByExtension(PathBuf, String),
 }
 
 impl Target {
-    #[cfg(target_os = "macos")]
-    pub(crate) fn new(
+    pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
         size: u64,
@@ -33,6 +37,10 @@ impl Target {
             size,
             action,
         }
+    }
+
+    pub fn action(&self) -> &CleanAction {
+        &self.action
     }
 
     pub fn clean(&self) -> Result<u64, String> {
@@ -49,6 +57,22 @@ impl Target {
                             fs::remove_file(&p).map_err(|e| format!("{}: {}", p.display(), e))?;
                         }
                     }
+                }
+                Ok(size)
+            }
+            CleanAction::RemoveDir(path) => {
+                let size = dir_size(path);
+                if path.exists() {
+                    fs::remove_dir_all(path)
+                        .map_err(|e| format!("{}: {}", path.display(), e))?;
+                }
+                Ok(size)
+            }
+            CleanAction::RemoveFile(path) => {
+                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                if path.exists() {
+                    fs::remove_file(path)
+                        .map_err(|e| format!("{}: {}", path.display(), e))?;
                 }
                 Ok(size)
             }
@@ -87,6 +111,43 @@ impl Target {
 /// Discover all cleanup targets and scan their sizes.
 pub fn discover_cleanup_targets() -> Vec<Target> {
     platform::cleanup_targets()
+}
+
+/// Discover the unified cleanup list: curated smart actions plus every
+/// audit-category path, sorted by size descending. Audit paths whose
+/// directory already appears as a curated `RemoveContents` target are skipped
+/// to avoid duplicate rows.
+pub fn discover_all_targets() -> Vec<Target> {
+    let mut targets = platform::cleanup_targets();
+
+    let curated_contents: std::collections::HashSet<PathBuf> = targets
+        .iter()
+        .filter_map(|t| match &t.action {
+            CleanAction::RemoveContents(p) | CleanAction::RemoveDir(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+
+    for (cat_name, paths) in platform::audit_categories() {
+        for (label, path) in paths {
+            if curated_contents.contains(&path) {
+                continue;
+            }
+            let size = dir_size(&path);
+            if size == 0 {
+                continue;
+            }
+            targets.push(Target::new(
+                format!("{cat_name} > {label}"),
+                path.display().to_string(),
+                size,
+                CleanAction::RemoveContents(path),
+            ));
+        }
+    }
+
+    targets.sort_by_key(|t| std::cmp::Reverse(t.size));
+    targets
 }
 
 #[cfg(target_os = "macos")]
