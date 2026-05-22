@@ -129,12 +129,16 @@ main() {
     say "extracting"
     tar -xzf "$_tmp/$_archive" -C "$_tmp"
 
-    if [ ! -f "$_tmp/$BIN_NAME" ]; then
+    _bin_path="$_tmp/${BIN_NAME}-${_version_no_v}-${TARGET}/$BIN_NAME"
+    if [ ! -f "$_bin_path" ]; then
+        _bin_path="$_tmp/$BIN_NAME"
+    fi
+    if [ ! -f "$_bin_path" ]; then
         err "archive did not contain expected binary: $BIN_NAME"
     fi
 
     mkdir -p "$INSTALL_DIR"
-    install -m 0755 "$_tmp/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"
+    install -m 0755 "$_bin_path" "$INSTALL_DIR/$BIN_NAME"
 
     say "installed $INSTALL_DIR/$BIN_NAME"
 
