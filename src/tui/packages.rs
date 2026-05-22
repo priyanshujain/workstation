@@ -4,17 +4,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context as _, Result};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{prelude::*, widgets::*};
 use packages::brew::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
 use packages::brew::info::{self, InstalledPackage, PkgKind};
 use packages::brew::ops;
 use disk::util::format_size;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
+
+use crate::tui::widgets::centered_rect;
 
 #[derive(Debug)]
 struct Row {
@@ -270,24 +268,7 @@ fn uninstall_order(rows: &[Row], indices: &[usize]) -> Vec<usize> {
 }
 
 fn run_tui(mut app: App) -> Result<()> {
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        original_hook(info);
-    }));
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = event_loop(&mut app, &mut terminal);
-
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    result
+    super::run(|terminal| event_loop(&mut app, terminal))
 }
 
 fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -827,13 +808,6 @@ fn autoremove_summary(stdout: &str) -> String {
         return trimmed.lines().next().unwrap_or("done").to_string();
     }
     format!("{count} orphaned dep(s) removed")
-}
-
-fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let y = area.height.saturating_sub(height) / 2;
-    let width = area.width * percent_x / 100;
-    let x = area.width.saturating_sub(width) / 2;
-    Rect::new(x, y, width, height)
 }
 
 #[cfg(test)]
