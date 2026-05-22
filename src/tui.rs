@@ -7,10 +7,11 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
-use wsctl_core::scan::{self, CleanupTarget};
+use disk::cleanup::{Target, discover_cleanup_targets};
+use disk::util::format_size;
 
 struct App {
-    targets: Vec<CleanupTarget>,
+    targets: Vec<Target>,
     selected: Vec<bool>,
     cursor: usize,
     mode: Mode,
@@ -31,7 +32,7 @@ struct CleanResult {
 }
 
 impl App {
-    fn new(targets: Vec<CleanupTarget>) -> Self {
+    fn new(targets: Vec<Target>) -> Self {
         let len = targets.len();
         Self {
             targets,
@@ -102,7 +103,7 @@ pub fn run() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let targets = scan::discover_cleanup_targets();
+    let targets = discover_cleanup_targets();
     let mut app = App::new(targets);
 
     loop {
@@ -214,7 +215,7 @@ fn render_select(f: &mut Frame, app: &App) {
             };
 
             let size_str = if target.size > 0 {
-                scan::format_size(target.size)
+                format_size(target.size)
             } else {
                 "—".to_string()
             };
@@ -257,7 +258,7 @@ fn render_select(f: &mut Frame, app: &App) {
                 format!(
                     " Selected: {} items ({}) ",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Green).bold(),
             ),
@@ -284,7 +285,7 @@ fn render_select(f: &mut Frame, app: &App) {
                 format!(
                     "Clean {} items ({})?",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Yellow).bold(),
             )),
@@ -352,7 +353,7 @@ fn render_done(f: &mut Frame, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("  Total freed: ", Style::default().bold()),
         Span::styled(
-            scan::format_size(app.total_freed()),
+            format_size(app.total_freed()),
             Style::default().fg(Color::Green).bold(),
         ),
     ]));
@@ -377,7 +378,7 @@ fn result_line(result: &CleanResult) -> Line<'_> {
             Span::styled("  ✓ ", Style::default().fg(Color::Green)),
             Span::styled(result.name.as_str(), Style::default().fg(Color::White)),
             Span::styled(
-                format!("  {}", scan::format_size(*bytes)),
+                format!("  {}", format_size(*bytes)),
                 Style::default().fg(Color::Green),
             ),
         ]),
