@@ -7,7 +7,9 @@ mod tui;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Commands, SelfCommand};
+use std::io::IsTerminal;
+
+use cli::{Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -41,12 +43,18 @@ fn main() -> anyhow::Result<()> {
         Commands::Profiles { json } => {
             commands::profiles::run(&workstation, json)?;
         }
-        Commands::Audit { json } => {
-            commands::audit::run(json)?;
-        }
-        Commands::Cleanup => {
-            tui::cleanup::run()?;
-        }
+        Commands::Disk { sub } => match sub {
+            DiskCommand::Audit { report } => {
+                if report || !std::io::stdout().is_terminal() {
+                    commands::audit::run_report()?;
+                } else {
+                    tui::explore::run()?;
+                }
+            }
+            DiskCommand::Cleanup => {
+                tui::cleanup::run()?;
+            }
+        },
         Commands::Packages => {
             tui::packages::run()?;
         }
