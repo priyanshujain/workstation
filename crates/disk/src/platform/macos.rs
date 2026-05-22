@@ -1,0 +1,210 @@
+use std::path::PathBuf;
+use std::process::Command;
+
+use crate::cleanup::{CleanAction, Target};
+use crate::util::dir_size;
+
+pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let go_cache = go_cache_dir().unwrap_or_else(|| home.join("Library/Caches/go-build"));
+
+    vec![
+        (
+            "Docker",
+            vec![(
+                "Docker data",
+                home.join("Library/Containers/com.docker.docker/Data"),
+            )],
+        ),
+        (
+            "Go",
+            vec![
+                ("Source (~/go/src)", home.join("go/src")),
+                ("Packages (~/go/pkg)", home.join("go/pkg")),
+                ("Binaries (~/go/bin)", home.join("go/bin")),
+                ("Build cache", go_cache),
+            ],
+        ),
+        (
+            "Node.js",
+            vec![
+                ("nvm", home.join(".nvm")),
+                ("npm cache", home.join(".npm")),
+                ("pnpm", home.join("Library/pnpm")),
+                ("bun", home.join(".bun")),
+            ],
+        ),
+        (
+            "Python",
+            vec![
+                ("uv cache", home.join(".cache/uv")),
+                ("pyenv", home.join(".pyenv")),
+            ],
+        ),
+        (
+            "Rust",
+            vec![
+                ("rustup", home.join(".rustup")),
+                ("cargo", home.join(".cargo")),
+            ],
+        ),
+        ("Kotlin/Native", vec![("konan", home.join(".konan"))]),
+        ("Gradle", vec![("gradle", home.join(".gradle"))]),
+        (
+            "Xcode",
+            vec![
+                (
+                    "DerivedData",
+                    home.join("Library/Developer/Xcode/DerivedData"),
+                ),
+                ("Simulators", home.join("Library/Developer/CoreSimulator")),
+            ],
+        ),
+        (
+            "Homebrew",
+            vec![
+                ("Installation", PathBuf::from("/opt/homebrew")),
+                ("Cache", home.join("Library/Caches/Homebrew")),
+            ],
+        ),
+        (
+            "App Caches",
+            vec![
+                ("Chrome", home.join("Library/Caches/Google")),
+                (
+                    "Slack",
+                    home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt"),
+                ),
+                ("Playwright", home.join("Library/Caches/ms-playwright")),
+            ],
+        ),
+        ("Downloads", vec![("~/Downloads", home.join("Downloads"))]),
+    ]
+}
+
+pub fn cleanup_targets() -> Vec<Target> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+
+    let brew_cache = home.join("Library/Caches/Homebrew");
+    targets.push(Target::new(
+        "Homebrew cache",
+        "Old bottles and stale downloads",
+        dir_size(&brew_cache),
+        CleanAction::RunCommand("brew".into(), vec!["cleanup".into(), "--prune=all".into()]),
+    ));
+
+    let go_cache = go_cache_dir().unwrap_or_else(|| home.join("Library/Caches/go-build"));
+    targets.push(Target::new(
+        "Go build cache",
+        "Compiled build artifacts",
+        dir_size(&go_cache),
+        CleanAction::RunCommand("go".into(), vec!["clean".into(), "-cache".into()]),
+    ));
+
+    let npm_cache = home.join(".npm/_cacache");
+    targets.push(Target::new(
+        "npm cache",
+        "Package download cache",
+        dir_size(&npm_cache),
+        CleanAction::RunCommand(
+            "npm".into(),
+            vec!["cache".into(), "clean".into(), "--force".into()],
+        ),
+    ));
+
+    targets.push(Target::new(
+        "pnpm store (unreferenced)",
+        "Unreferenced packages in pnpm store",
+        0,
+        CleanAction::RunCommand("pnpm".into(), vec!["store".into(), "prune".into()]),
+    ));
+
+    let playwright = home.join("Library/Caches/ms-playwright");
+    targets.push(Target::new(
+        "Playwright browsers",
+        "Cached browser binaries for testing",
+        dir_size(&playwright),
+        CleanAction::RemoveContents(playwright),
+    ));
+
+    let chrome_cache = home.join("Library/Caches/Google");
+    targets.push(Target::new(
+        "Chrome cache",
+        "Google Chrome browser cache",
+        dir_size(&chrome_cache),
+        CleanAction::RemoveContents(chrome_cache),
+    ));
+
+    let slack_cache = home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt");
+    targets.push(Target::new(
+        "Slack update cache",
+        "Slack auto-update downloads",
+        dir_size(&slack_cache),
+        CleanAction::RemoveContents(slack_cache),
+    ));
+
+    let derived_data = home.join("Library/Developer/Xcode/DerivedData");
+    targets.push(Target::new(
+        "Xcode DerivedData",
+        "Build artifacts from Xcode projects",
+        dir_size(&derived_data),
+        CleanAction::RemoveContents(derived_data),
+    ));
+
+    if command_exists("xcrun") {
+        targets.push(Target::new(
+            "Xcode stale simulators",
+            "Unavailable simulator runtimes",
+            0,
+            CleanAction::RunCommand(
+                "xcrun".into(),
+                vec!["simctl".into(), "delete".into(), "unavailable".into()],
+            ),
+        ));
+    }
+
+    if command_exists("docker") {
+        targets.push(Target::new(
+            "Docker unused data",
+            "Dangling images, stopped containers, unused networks",
+            0,
+            CleanAction::RunCommand(
+                "docker".into(),
+                vec!["system".into(), "prune".into(), "-f".into()],
+            ),
+        ));
+    }
+
+    let downloads = home.join("Downloads");
+    targets.push(Target::new(
+        "DMG installers",
+        "Downloaded .dmg files in ~/Downloads",
+        crate::cleanup::files_by_extension_size(&downloads, "dmg"),
+        CleanAction::RemoveByExtension(downloads, "dmg".into()),
+    ));
+
+    targets
+}
+
+fn go_cache_dir() -> Option<PathBuf> {
+    let output = Command::new("go").args(["env", "GOCACHE"]).output().ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
+fn command_exists(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}

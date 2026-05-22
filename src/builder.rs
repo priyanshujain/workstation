@@ -1,5 +1,5 @@
+use packages::brew::{Cask, Formula};
 use std::sync::Arc;
-use ws_macos::{BrewCask, BrewFormula};
 use wsctl_core::{Profile, Resource, ResourceGraph, Result, Scope, ScopedResources};
 
 pub struct Workstation {
@@ -89,25 +89,25 @@ impl ScopeBuilder {
     }
 
     pub fn brew_formula(mut self, name: impl Into<String>) -> Self {
-        self.scope.add(BrewFormula::new(name));
+        self.scope.add(Formula::new(name));
         self
     }
 
     pub fn brew_formulae(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         for name in names {
-            self.scope.add(BrewFormula::new(name));
+            self.scope.add(Formula::new(name));
         }
         self
     }
 
     pub fn brew_cask(mut self, name: impl Into<String>) -> Self {
-        self.scope.add(BrewCask::new(name));
+        self.scope.add(Cask::new(name));
         self
     }
 
     pub fn brew_casks(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         for name in names {
-            self.scope.add(BrewCask::new(name));
+            self.scope.add(Cask::new(name));
         }
         self
     }

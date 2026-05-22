@@ -1,7 +1,7 @@
 //! Homebrew uninstall operations: removal, autoremove, verification, dependents.
 
-use crate::brew_info::PkgKind;
-use crate::{CommandRunner, Error, Result};
+use crate::brew::info::PkgKind;
+use wsctl_core::{CommandRunner, Error, Result};
 
 /// `brew uninstall <name>`. Fails if other installed packages depend on it.
 pub fn uninstall_formula(runner: &dyn CommandRunner, name: &str) -> Result<()> {
@@ -83,9 +83,9 @@ pub fn dependents(runner: &dyn CommandRunner, name: &str) -> Result<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::MockCommandRunner;
-    use crate::CommandOutput;
     use std::sync::Arc;
+    use wsctl_core::CommandOutput;
+    use wsctl_core::testing::MockCommandRunner;
 
     #[test]
     fn uninstall_formula_invokes_brew() {

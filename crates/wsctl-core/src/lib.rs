@@ -1,13 +1,9 @@
-pub mod brew_info;
-pub mod brew_ops;
-pub mod brewfile;
 pub mod command;
 pub mod context;
 pub mod error;
 pub mod executor;
 pub mod graph;
 pub mod resource;
-pub mod scan;
 pub mod scope;
 pub mod testing;
 

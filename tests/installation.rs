@@ -1,4 +1,4 @@
-use ws_macos::BrewFormula;
+use packages::brew::Formula;
 use wsctl_core::{Context, Executor, Resource, ResourceGraph};
 
 const TEST_FORMULAE: &[&str] = &["tree", "cowsay"];
@@ -25,7 +25,7 @@ fn brew_formula_install_lifecycle() {
 
     let mut graph = ResourceGraph::new();
     for name in TEST_FORMULAE {
-        graph.add(BrewFormula::new(*name));
+        graph.add(Formula::new(*name));
     }
     graph.build_edges().unwrap();
 
@@ -43,7 +43,7 @@ fn brew_formula_install_lifecycle() {
 
     // verify: all should be present
     for name in TEST_FORMULAE {
-        let formula = BrewFormula::new(*name);
+        let formula = Formula::new(*name);
         let state = formula.detect(&ctx).expect("detect failed");
         assert!(
             state.is_present(),
@@ -60,7 +60,7 @@ fn brew_formula_install_lifecycle() {
 
     // verify cleanup
     for name in TEST_FORMULAE {
-        let formula = BrewFormula::new(*name);
+        let formula = Formula::new(*name);
         let state = formula.detect(&ctx).expect("detect failed after cleanup");
         assert!(
             state.is_absent(),

@@ -1,9 +1,9 @@
 [package]
-name = "ws-macos"
+name = "packages"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "macOS-specific resources for ws - Homebrew, defaults, launchd"
+description = "Package manager resources for wsctl (Homebrew)"
 
 [dependencies]
 wsctl-core.workspace = true
@@ -11,3 +11,5 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true

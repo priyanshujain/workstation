@@ -1,96 +1,13 @@
 mod builder;
+mod cli;
 mod commands;
 mod config;
-mod packages_tui;
 mod tui;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Parser)]
-#[command(name = "wsctl")]
-#[command(about = "Workstation controller — manage macOS setup declaratively")]
-#[command(version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-
-    /// Increase verbosity (-v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
-    verbose: u8,
-
-    /// Suppress non-error output
-    #[arg(short, long, global = true)]
-    quiet: bool,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Install/update packages for a profile
-    Apply {
-        /// Profile to apply
-        profile: String,
-
-        /// Dry-run mode (show what would change without making changes)
-        #[arg(short = 'n', long)]
-        dry_run: bool,
-
-        /// Don't ask for confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    /// Preview what would change
-    Diff {
-        /// Profile to diff
-        profile: String,
-
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// List available profiles and scopes
-    Profiles {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Show disk usage by category
-    Audit {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Interactive TUI for disk cleanup
-    Cleanup,
-
-    /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
-    Packages,
-
-    /// Manage the wsctl binary itself (update, uninstall)
-    #[command(name = "self", subcommand)]
-    SelfCmd(SelfCommand),
-}
-
-#[derive(Subcommand)]
-enum SelfCommand {
-    /// Update wsctl to the latest release
-    Update {
-        /// Don't ask for confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    /// Uninstall the wsctl binary
-    Uninstall {
-        /// Don't ask for confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-}
+use cli::{Cli, Commands, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -128,10 +45,10 @@ fn main() -> anyhow::Result<()> {
             commands::audit::run(json)?;
         }
         Commands::Cleanup => {
-            tui::run()?;
+            tui::cleanup::run()?;
         }
         Commands::Packages => {
-            packages_tui::run()?;
+            tui::packages::run()?;
         }
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,

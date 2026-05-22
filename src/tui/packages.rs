@@ -3,18 +3,16 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _, Result};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use anyhow::{Context as _, Result, anyhow};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use disk::util::format_size;
+use packages::brew::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
+use packages::brew::info::{self, InstalledPackage, PkgKind};
+use packages::brew::ops;
 use ratatui::{prelude::*, widgets::*};
-use wsctl_core::brew_info::{self, InstalledPackage, PkgKind};
-use wsctl_core::brew_ops;
-use wsctl_core::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
-use wsctl_core::scan;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
+
+use crate::tui::widgets::centered_rect;
 
 #[derive(Debug)]
 struct Row {
@@ -154,9 +152,9 @@ pub fn run() -> Result<()> {
         return Err(anyhow!("{} has no brew or cask entries", path.display()));
     }
 
-    let mut installed = brew_info::fetch_installed(&runner)?;
-    let prefix = brew_info::brew_prefix(&runner)?;
-    brew_info::attach_sizes(&prefix, &mut installed);
+    let mut installed = info::fetch_installed(&runner)?;
+    let prefix = info::brew_prefix(&runner)?;
+    info::attach_sizes(&prefix, &mut installed);
 
     let mut rows: Vec<Row> = entries
         .into_iter()
@@ -198,7 +196,7 @@ fn resolve_or_dump_brewfile(runner: &dyn CommandRunner) -> Result<(PathBuf, Brew
         "No Brewfile found. Generating one from currently installed packages → {}",
         target.display()
     );
-    brew_ops::bundle_dump(runner, &target)
+    ops::bundle_dump(runner, &target)
         .with_context(|| format!("brew bundle dump --file={}", target.display()))?;
     brewfile::discover().ok_or_else(|| {
         anyhow!(
@@ -270,24 +268,7 @@ fn uninstall_order(rows: &[Row], indices: &[usize]) -> Vec<usize> {
 }
 
 fn run_tui(mut app: App) -> Result<()> {
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        original_hook(info);
-    }));
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = event_loop(&mut app, &mut terminal);
-
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    result
+    super::run(|terminal| event_loop(&mut app, terminal))
 }
 
 fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -407,7 +388,7 @@ fn run_uninstalls(
     }
 
     terminal.draw(|f| render(f, app))?;
-    match brew_ops::autoremove(runner) {
+    match ops::autoremove(runner) {
         Ok(out) => app.autoremove_summary = Some(out),
         Err(e) => app.autoremove_summary = Some(format!("autoremove failed: {e}")),
     }
@@ -439,11 +420,11 @@ fn perform_uninstall(
     kind: PkgKind,
 ) -> std::result::Result<(), String> {
     let res = match kind {
-        PkgKind::Formula => brew_ops::uninstall_formula(runner, name),
-        PkgKind::Cask => brew_ops::uninstall_cask_zap(runner, name),
+        PkgKind::Formula => ops::uninstall_formula(runner, name),
+        PkgKind::Cask => ops::uninstall_cask_zap(runner, name),
     };
     res.map_err(|e| e.to_string())?;
-    if brew_ops::is_installed(runner, name, kind).unwrap_or(true) {
+    if ops::is_installed(runner, name, kind).unwrap_or(true) {
         return Err("still present after uninstall".into());
     }
     Ok(())
@@ -532,7 +513,7 @@ fn result_line(r: &StepResult) -> Line<'_> {
             Span::styled(r.name.as_str(), Style::default().fg(Color::White)),
             Span::styled(format!("  {kind}"), Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("  -{}", scan::format_size(r.size_bytes)),
+                format!("  -{}", format_size(r.size_bytes)),
                 Style::default().fg(Color::Green),
             ),
         ]),
@@ -614,7 +595,7 @@ fn render_select(f: &mut Frame, app: &mut App) {
                 format!(
                     " Selected: {} pkgs ({}) ",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Green).bold(),
             ),
@@ -640,7 +621,7 @@ fn render_select(f: &mut Frame, app: &mut App) {
                 format!(
                     "Uninstall {} packages ({})?",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Yellow).bold(),
             )),
@@ -691,7 +672,7 @@ fn package_row(row: &Row, selected: bool, is_cursor: bool) -> ratatui::widgets::
     };
 
     let size_str = if row.size() > 0 {
-        scan::format_size(row.size())
+        format_size(row.size())
     } else {
         "—".to_string()
     };
@@ -728,45 +709,11 @@ fn package_row(row: &Row, selected: bool, is_cursor: bool) -> ratatui::widgets::
 }
 
 fn format_date(unix_secs: u64) -> String {
-    let secs = unix_secs as i64;
-    let days = secs / 86_400;
-    let (mut y, mut m, mut d) = (1970i64, 1u32, 1u32);
-    let mut remaining = days;
-    loop {
-        let year_days: i64 = if is_leap(y) { 366 } else { 365 };
-        if remaining < year_days {
-            break;
-        }
-        remaining -= year_days;
-        y += 1;
-    }
-    let months_lengths: [i64; 12] = [
-        31,
-        if is_leap(y) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    for (mi, &len) in months_lengths.iter().enumerate() {
-        if remaining < len {
-            m = mi as u32 + 1;
-            d = remaining as u32 + 1;
-            break;
-        }
-        remaining -= len;
-    }
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    let format = time::macros::format_description!("[year]-[month]-[day]");
+    time::OffsetDateTime::from_unix_timestamp(unix_secs as i64)
+        .ok()
+        .and_then(|dt| dt.format(&format).ok())
+        .unwrap_or_else(|| "—".to_string())
 }
 
 fn render_done(f: &mut Frame, app: &App) {
@@ -799,10 +746,7 @@ fn render_done(f: &mut Frame, app: &App) {
             Style::default().fg(Color::White),
         ),
         Span::styled("    Freed: ", Style::default().bold()),
-        Span::styled(
-            scan::format_size(freed),
-            Style::default().fg(Color::Green).bold(),
-        ),
+        Span::styled(format_size(freed), Style::default().fg(Color::Green).bold()),
     ]));
     if let Some(out) = &app.autoremove_summary {
         let summary = autoremove_summary(out);
@@ -863,13 +807,6 @@ fn autoremove_summary(stdout: &str) -> String {
     format!("{count} orphaned dep(s) removed")
 }
 
-fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let y = area.height.saturating_sub(height) / 2;
-    let width = area.width * percent_x / 100;
-    let x = area.width.saturating_sub(width) / 2;
-    Rect::new(x, y, width, height)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,6 +819,12 @@ mod tests {
         assert_eq!(format_date(1577836800), "2020-01-01");
         // 0 = epoch
         assert_eq!(format_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn format_date_handles_leap_year() {
+        // 951782400 = 2000-02-29 00:00:00 UTC
+        assert_eq!(format_date(951782400), "2000-02-29");
     }
 
     fn row(name: &str, kind: EntryKind, deps: Vec<&str>) -> Row {
