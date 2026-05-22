@@ -20,6 +20,7 @@ struct App {
     cache: HashMap<PathBuf, ScanResult>,
     mode: Mode,
     results: Vec<CleanResult>,
+    done_scroll: u16,
 }
 
 struct MarkedPath {
@@ -67,6 +68,7 @@ impl App {
             cache: HashMap::new(),
             mode: Mode::Browse,
             results: Vec::new(),
+            done_scroll: 0,
         }
     }
 
@@ -289,7 +291,25 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
                     }
                 },
                 Mode::Done => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => return Ok(()),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.done_scroll = app.done_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.done_scroll = app.done_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown | KeyCode::Char(' ') => {
+                        app.done_scroll = app.done_scroll.saturating_add(10);
+                    }
+                    KeyCode::PageUp | KeyCode::Char('b') => {
+                        app.done_scroll = app.done_scroll.saturating_sub(10);
+                    }
+                    KeyCode::Char('g') => {
+                        app.done_scroll = 0;
+                    }
+                    KeyCode::Char('G') => {
+                        app.done_scroll = u16::MAX;
+                    }
                     _ => {}
                 },
                 Mode::Running => {}
@@ -648,38 +668,53 @@ fn render_progress(f: &mut Frame, app: &App) {
 
 fn render_done(f: &mut Frame, app: &App) {
     let area = f.area();
-    let mut lines = vec![
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" Results ")
+        .border_style(Style::default().fg(Color::Green));
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(3),
+    ])
+    .split(inner);
+
+    let header = Paragraph::new(vec![
         Line::from(""),
         Line::from(Span::styled(
             "  Cleanup Complete",
             Style::default().fg(Color::Green).bold(),
         )),
-        Line::from(""),
-    ];
-    for r in &app.results {
-        lines.extend(result_lines(r));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  Total freed: ", Style::default().bold()),
-        Span::styled(
-            format_size(app.total_freed()),
-            Style::default().fg(Color::Green).bold(),
-        ),
-    ]));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Press q to exit",
-        Style::default().fg(Color::DarkGray),
-    )));
+    ]);
+    f.render_widget(header, chunks[0]);
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Results ")
-            .border_style(Style::default().fg(Color::Green)),
-    );
-    f.render_widget(paragraph, area);
+    let mut result_body: Vec<Line<'_>> = Vec::new();
+    for r in &app.results {
+        result_body.extend(result_lines(r));
+    }
+    let results = Paragraph::new(result_body)
+        .wrap(Wrap { trim: false })
+        .scroll((app.done_scroll, 0));
+    f.render_widget(results, chunks[1]);
+
+    let footer = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Total freed: ", Style::default().bold()),
+            Span::styled(
+                format_size(app.total_freed()),
+                Style::default().fg(Color::Green).bold(),
+            ),
+            Span::styled(
+                "    [j/k] Scroll  [g/G] Top/Bottom  [q] Quit",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ]);
+    f.render_widget(footer, chunks[2]);
 }
 
 fn render_scanning(f: &mut Frame, path: &Path) {
