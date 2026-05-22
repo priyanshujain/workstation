@@ -8,7 +8,6 @@ use crossterm::{
 use ratatui::{Terminal, prelude::CrosstermBackend};
 
 pub mod cleanup;
-pub mod explore;
 pub mod packages;
 pub mod widgets;
 
