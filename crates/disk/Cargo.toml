@@ -9,6 +9,7 @@ description = "Disk overview, audit, and cleanup helpers for wsctl"
 anyhow.workspace = true
 dirs.workspace = true
 tracing.workspace = true
+walkdir = "2.5"
 
 [dev-dependencies]
 tempfile = "3"
