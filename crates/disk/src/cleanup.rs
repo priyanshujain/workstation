@@ -49,13 +49,7 @@ impl Target {
                 let size = dir_size(path);
                 if path.exists() {
                     for entry in fs::read_dir(path).map_err(|e| e.to_string())?.flatten() {
-                        let p = entry.path();
-                        if p.is_dir() {
-                            fs::remove_dir_all(&p)
-                                .map_err(|e| format!("{}: {}", p.display(), e))?;
-                        } else {
-                            fs::remove_file(&p).map_err(|e| format!("{}: {}", p.display(), e))?;
-                        }
+                        rm_rf(&entry.path())?;
                     }
                 }
                 Ok(size)
@@ -63,16 +57,14 @@ impl Target {
             CleanAction::RemoveDir(path) => {
                 let size = dir_size(path);
                 if path.exists() {
-                    fs::remove_dir_all(path)
-                        .map_err(|e| format!("{}: {}", path.display(), e))?;
+                    rm_rf(path)?;
                 }
                 Ok(size)
             }
             CleanAction::RemoveFile(path) => {
                 let size = path.metadata().map(|m| m.len()).unwrap_or(0);
                 if path.exists() {
-                    fs::remove_file(path)
-                        .map_err(|e| format!("{}: {}", path.display(), e))?;
+                    rm_rf(path)?;
                 }
                 Ok(size)
             }
@@ -97,8 +89,7 @@ impl Target {
                             && let Ok(meta) = path.metadata()
                         {
                             freed += meta.len();
-                            fs::remove_file(&path)
-                                .map_err(|e| format!("{}: {}", path.display(), e))?;
+                            rm_rf(&path)?;
                         }
                     }
                 }
@@ -106,6 +97,22 @@ impl Target {
             }
         }
     }
+}
+
+// `rm -rf` instead of fs::remove_* because BSD/macOS `rm -f` chmods read-only
+// files before unlink, whereas std::fs returns EACCES. Trees like checked-out
+// Go modules or .git packfiles often have read-only entries deep inside.
+fn rm_rf(path: &std::path::Path) -> Result<(), String> {
+    let output = Command::new("rm")
+        .arg("-rf")
+        .arg(path)
+        .output()
+        .map_err(|e| format!("rm: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("rm -rf {}: {}", path.display(), stderr.trim()));
+    }
+    Ok(())
 }
 
 /// Discover all cleanup targets and scan their sizes.
@@ -164,4 +171,53 @@ pub(crate) fn files_by_extension_size(dir: &std::path::Path, ext: &str) -> u64 {
         }
     }
     size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    #[cfg(unix)]
+    fn remove_dir_handles_read_only_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("repo").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        let locked = nested.join("locked.txt");
+        fs::write(&locked, b"contents").unwrap();
+
+        // Make the file read-only — fs::remove_dir_all would EACCES here.
+        let mut perms = fs::metadata(&locked).unwrap().permissions();
+        perms.set_mode(0o400);
+        fs::set_permissions(&locked, perms).unwrap();
+
+        let target = Target::new(
+            "test",
+            "",
+            8,
+            CleanAction::RemoveDir(dir.path().join("repo")),
+        );
+        let result = target.clean();
+        assert!(result.is_ok(), "expected ok, got {result:?}");
+        assert!(!dir.path().join("repo").exists());
+    }
+
+    #[test]
+    fn remove_contents_keeps_parent_dir() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("a.bin"), b"x").unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub/b.bin"), b"y").unwrap();
+
+        let target = Target::new("test", "", 0, CleanAction::RemoveContents(root.clone()));
+        target.clean().unwrap();
+
+        assert!(root.exists(), "parent dir must remain");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    }
 }
