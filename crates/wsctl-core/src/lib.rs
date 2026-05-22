@@ -1,3 +1,4 @@
+pub mod brew_info;
 pub mod brewfile;
 pub mod command;
 pub mod context;
