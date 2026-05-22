@@ -66,15 +66,12 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum DiskCommand {
-    /// Explore disk usage interactively (use --report for a non-interactive summary)
-    Audit {
-        /// Print the pretty-printed summary instead of opening the TUI
+    /// Interactive disk cleanup: audit + drill-down + delete in one TUI
+    Cleanup {
+        /// Print the non-interactive audit summary instead of opening the TUI
         #[arg(long)]
         report: bool,
     },
-
-    /// Interactive TUI for disk cleanup
-    Cleanup,
 }
 
 #[derive(Subcommand)]

@@ -44,15 +44,12 @@ fn main() -> anyhow::Result<()> {
             commands::profiles::run(&workstation, json)?;
         }
         Commands::Disk { sub } => match sub {
-            DiskCommand::Audit { report } => {
+            DiskCommand::Cleanup { report } => {
                 if report || !std::io::stdout().is_terminal() {
                     commands::audit::run_report()?;
                 } else {
-                    tui::explore::run()?;
+                    tui::cleanup::run()?;
                 }
-            }
-            DiskCommand::Cleanup => {
-                tui::cleanup::run()?;
             }
         },
         Commands::Packages => {
