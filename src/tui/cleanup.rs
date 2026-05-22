@@ -612,12 +612,15 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     let popup_area = centered_rect(70, height, area);
     f.render_widget(Clear, popup_area);
 
-    let popup = Paragraph::new(lines).alignment(Alignment::Left).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Confirm ")
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
+    let popup = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm ")
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
     f.render_widget(popup, popup_area);
 }
 
@@ -632,9 +635,9 @@ fn render_progress(f: &mut Frame, app: &App) {
         Line::from(""),
     ];
     for r in &app.results {
-        lines.push(result_line(r));
+        lines.extend(result_lines(r));
     }
-    let paragraph = Paragraph::new(lines).block(
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Progress ")
@@ -654,7 +657,7 @@ fn render_done(f: &mut Frame, app: &App) {
         Line::from(""),
     ];
     for r in &app.results {
-        lines.push(result_line(r));
+        lines.extend(result_lines(r));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
@@ -670,7 +673,7 @@ fn render_done(f: &mut Frame, app: &App) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines).block(
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Results ")
@@ -694,20 +697,25 @@ fn render_scanning(f: &mut Frame, path: &Path) {
     f.render_widget(header, chunks[0]);
 }
 
-fn result_line(r: &CleanResult) -> Line<'_> {
+fn result_lines(r: &CleanResult) -> Vec<Line<'_>> {
     match &r.outcome {
-        Ok(bytes) => Line::from(vec![
+        Ok(bytes) => vec![Line::from(vec![
             Span::styled("  ✓ ", Style::default().fg(Color::Green)),
             Span::styled(r.label.as_str(), Style::default().fg(Color::White)),
             Span::styled(
                 format!("  {}", format_size(*bytes)),
                 Style::default().fg(Color::Green),
             ),
-        ]),
-        Err(e) => Line::from(vec![
-            Span::styled("  ✗ ", Style::default().fg(Color::Red)),
-            Span::styled(r.label.as_str(), Style::default().fg(Color::White)),
-            Span::styled(format!("  {e}"), Style::default().fg(Color::Red)),
-        ]),
+        ])],
+        Err(e) => vec![
+            Line::from(vec![
+                Span::styled("  ✗ ", Style::default().fg(Color::Red)),
+                Span::styled(r.label.as_str(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::raw("      "),
+                Span::styled(e.as_str(), Style::default().fg(Color::Red)),
+            ]),
+        ],
     }
 }
