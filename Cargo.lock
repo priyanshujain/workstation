@@ -1359,6 +1359,7 @@ dependencies = [
  "dirs",
  "petgraph",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
