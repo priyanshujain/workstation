@@ -1,6 +1,7 @@
 mod builder;
 mod commands;
 mod config;
+mod packages_tui;
 mod tui;
 
 use clap::{Parser, Subcommand};
