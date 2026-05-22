@@ -58,6 +58,7 @@ path = "src/main.rs"
 [dependencies]
 wsctl-core.workspace = true
 ws-macos.workspace = true
+packages.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 console.workspace = true

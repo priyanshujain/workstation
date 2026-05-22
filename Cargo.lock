@@ -2199,6 +2199,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "indicatif",
+ "packages",
  "ratatui",
  "serde",
  "serde_json",

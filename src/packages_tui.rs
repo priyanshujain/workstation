@@ -10,9 +10,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
-use wsctl_core::brew_info::{self, InstalledPackage, PkgKind};
-use wsctl_core::brew_ops;
-use wsctl_core::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
+use packages::brew::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
+use packages::brew::info::{self, InstalledPackage, PkgKind};
+use packages::brew::ops;
 use wsctl_core::scan;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
 
@@ -154,9 +154,9 @@ pub fn run() -> Result<()> {
         return Err(anyhow!("{} has no brew or cask entries", path.display()));
     }
 
-    let mut installed = brew_info::fetch_installed(&runner)?;
-    let prefix = brew_info::brew_prefix(&runner)?;
-    brew_info::attach_sizes(&prefix, &mut installed);
+    let mut installed = info::fetch_installed(&runner)?;
+    let prefix = info::brew_prefix(&runner)?;
+    info::attach_sizes(&prefix, &mut installed);
 
     let mut rows: Vec<Row> = entries
         .into_iter()
@@ -198,7 +198,7 @@ fn resolve_or_dump_brewfile(runner: &dyn CommandRunner) -> Result<(PathBuf, Brew
         "No Brewfile found. Generating one from currently installed packages → {}",
         target.display()
     );
-    brew_ops::bundle_dump(runner, &target)
+    ops::bundle_dump(runner, &target)
         .with_context(|| format!("brew bundle dump --file={}", target.display()))?;
     brewfile::discover().ok_or_else(|| {
         anyhow!(
@@ -407,7 +407,7 @@ fn run_uninstalls(
     }
 
     terminal.draw(|f| render(f, app))?;
-    match brew_ops::autoremove(runner) {
+    match ops::autoremove(runner) {
         Ok(out) => app.autoremove_summary = Some(out),
         Err(e) => app.autoremove_summary = Some(format!("autoremove failed: {e}")),
     }
@@ -439,11 +439,11 @@ fn perform_uninstall(
     kind: PkgKind,
 ) -> std::result::Result<(), String> {
     let res = match kind {
-        PkgKind::Formula => brew_ops::uninstall_formula(runner, name),
-        PkgKind::Cask => brew_ops::uninstall_cask_zap(runner, name),
+        PkgKind::Formula => ops::uninstall_formula(runner, name),
+        PkgKind::Cask => ops::uninstall_cask_zap(runner, name),
     };
     res.map_err(|e| e.to_string())?;
-    if brew_ops::is_installed(runner, name, kind).unwrap_or(true) {
+    if ops::is_installed(runner, name, kind).unwrap_or(true) {
         return Err("still present after uninstall".into());
     }
     Ok(())
