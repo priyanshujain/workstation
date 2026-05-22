@@ -67,6 +67,9 @@ enum Commands {
     /// Interactive TUI for disk cleanup
     Cleanup,
 
+    /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
+    Packages,
+
     /// Manage the wsctl binary itself (update, uninstall)
     #[command(name = "self", subcommand)]
     SelfCmd(SelfCommand),
@@ -126,6 +129,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Cleanup => {
             tui::run()?;
+        }
+        Commands::Packages => {
+            packages_tui::run()?;
         }
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,

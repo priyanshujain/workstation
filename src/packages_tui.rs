@@ -235,7 +235,7 @@ fn uninstall_order(rows: &[Row], indices: &[usize]) -> Vec<usize> {
             Some(pos) => order.push(remaining.remove(pos)),
             None => {
                 // Dependency cycle (shouldn't happen in brew). Append the rest as-is.
-                order.extend(remaining.drain(..));
+                order.append(&mut remaining);
             }
         }
     }
