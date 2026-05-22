@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/wsctl-core",
     "crates/packages",
+    "crates/disk",
 ]
 
 [workspace.package]
@@ -41,6 +42,7 @@ crossterm = "0.29"
 # Internal crates
 wsctl-core = { path = "crates/wsctl-core" }
 packages = { path = "crates/packages" }
+disk = { path = "crates/disk" }
 
 [package]
 name = "wsctl"
