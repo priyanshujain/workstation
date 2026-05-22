@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,9 +11,10 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use wsctl_core::brew_info::{self, InstalledPackage, PkgKind};
-use wsctl_core::brewfile::{self, BrewfileEntry, EntryKind};
+use wsctl_core::brew_ops;
+use wsctl_core::brewfile::{self, BrewfileEntry, EntryKind, RemoveTarget};
 use wsctl_core::scan;
-use wsctl_core::SystemCommandRunner;
+use wsctl_core::{CommandRunner, SystemCommandRunner};
 
 #[derive(Debug)]
 struct Row {
@@ -37,7 +39,16 @@ impl Row {
 enum Mode {
     Select,
     Confirm,
+    Blocked,
+    Running,
     Done,
+}
+
+struct StepResult {
+    name: String,
+    kind: PkgKind,
+    size_bytes: u64,
+    outcome: std::result::Result<(), String>,
 }
 
 struct App {
@@ -46,10 +57,22 @@ struct App {
     selected: Vec<bool>,
     cursor: usize,
     mode: Mode,
+    /// dep_name -> packages currently installed that list it as a dep
+    dependents_of: HashMap<String, Vec<String>>,
+    /// (package, dependents-outside-selection) — populated when blocked
+    blockers: Vec<(String, Vec<String>)>,
+    results: Vec<StepResult>,
+    autoremove_summary: Option<String>,
+    brewfile_backup: Option<PathBuf>,
+    brewfile_updated_count: usize,
 }
 
 impl App {
-    fn new(brewfile_path: PathBuf, rows: Vec<Row>) -> Self {
+    fn new(
+        brewfile_path: PathBuf,
+        rows: Vec<Row>,
+        dependents_of: HashMap<String, Vec<String>>,
+    ) -> Self {
         let len = rows.len();
         Self {
             brewfile_path,
@@ -57,6 +80,12 @@ impl App {
             selected: vec![false; len],
             cursor: 0,
             mode: Mode::Select,
+            dependents_of,
+            blockers: Vec::new(),
+            results: Vec::new(),
+            autoremove_summary: None,
+            brewfile_backup: None,
+            brewfile_updated_count: 0,
         }
     }
 
@@ -150,8 +179,67 @@ pub fn run() -> Result<()> {
             .then(a.entry.name.cmp(&b.entry.name))
     });
 
-    let app = App::new(path, rows);
+    let dependents_of = build_dependents_map(&installed);
+    let app = App::new(path, rows, dependents_of);
     run_tui(app)
+}
+
+fn build_dependents_map(installed: &[InstalledPackage]) -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for pkg in installed {
+        for dep in &pkg.deps {
+            map.entry(dep.clone()).or_default().push(pkg.name.clone());
+        }
+    }
+    map
+}
+
+/// External dependents = packages that depend on `name` but are NOT in `selection`.
+fn external_dependents(
+    name: &str,
+    dependents_of: &HashMap<String, Vec<String>>,
+    selection: &HashSet<&str>,
+) -> Vec<String> {
+    dependents_of
+        .get(name)
+        .map(|deps| {
+            deps.iter()
+                .filter(|d| !selection.contains(d.as_str()))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Order selected indices so packages that depend on others come first
+/// (leaves of the in-selection dependency graph are uninstalled first).
+fn uninstall_order(rows: &[Row], indices: &[usize]) -> Vec<usize> {
+    let selection: HashSet<&str> = indices.iter().map(|&i| rows[i].entry.name.as_str()).collect();
+    let mut remaining: Vec<usize> = indices.to_vec();
+    let mut order: Vec<usize> = Vec::with_capacity(indices.len());
+    while !remaining.is_empty() {
+        let pick = remaining.iter().position(|&i| {
+            let name = rows[i].entry.name.as_str();
+            !remaining.iter().any(|&j| {
+                if j == i {
+                    return false;
+                }
+                rows[j]
+                    .installed
+                    .as_ref()
+                    .map(|p| p.deps.iter().any(|d| d == name))
+                    .unwrap_or(false)
+            }) && selection.contains(name) // keep using selection to satisfy borrow
+        });
+        match pick {
+            Some(pos) => order.push(remaining.remove(pos)),
+            None => {
+                // Dependency cycle (shouldn't happen in brew). Append the rest as-is.
+                order.extend(remaining.drain(..));
+            }
+        }
+    }
+    order
 }
 
 fn run_tui(mut app: App) -> Result<()> {
@@ -202,23 +290,231 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
             },
             Mode::Confirm => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
-                    // Uninstall flow is wired in the next step.
-                    app.mode = Mode::Done;
+                    let runner = SystemCommandRunner::new();
+                    app.blockers = compute_blockers(app);
+                    if !app.blockers.is_empty() {
+                        app.mode = Mode::Blocked;
+                    } else {
+                        app.mode = Mode::Running;
+                        run_uninstalls(app, terminal, &runner)?;
+                        app.mode = Mode::Done;
+                    }
                 }
                 _ => app.mode = Mode::Select,
+            },
+            Mode::Blocked => match key.code {
+                KeyCode::Char('d') => {
+                    deselect_blockers(app);
+                    app.blockers.clear();
+                    app.mode = Mode::Select;
+                }
+                KeyCode::Char('q') | KeyCode::Esc => app.mode = Mode::Select,
+                _ => {}
             },
             Mode::Done => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => return Ok(()),
                 _ => {}
             },
+            Mode::Running => {}
         }
     }
+}
+
+fn compute_blockers(app: &App) -> Vec<(String, Vec<String>)> {
+    let selection: HashSet<&str> = app
+        .selected
+        .iter()
+        .enumerate()
+        .filter(|(_, &s)| s)
+        .map(|(i, _)| app.rows[i].entry.name.as_str())
+        .collect();
+    let mut blockers = Vec::new();
+    for (i, row) in app.rows.iter().enumerate() {
+        if !app.selected[i] || row.kind() != PkgKind::Formula {
+            continue;
+        }
+        let dependents =
+            external_dependents(&row.entry.name, &app.dependents_of, &selection);
+        if !dependents.is_empty() {
+            blockers.push((row.entry.name.clone(), dependents));
+        }
+    }
+    blockers
+}
+
+fn deselect_blockers(app: &mut App) {
+    let blocked: HashSet<&str> = app.blockers.iter().map(|(n, _)| n.as_str()).collect();
+    for (i, row) in app.rows.iter().enumerate() {
+        if blocked.contains(row.entry.name.as_str()) {
+            app.selected[i] = false;
+        }
+    }
+}
+
+fn run_uninstalls(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    runner: &dyn CommandRunner,
+) -> Result<()> {
+    let selected: Vec<usize> = app
+        .selected
+        .iter()
+        .enumerate()
+        .filter(|(_, &s)| s)
+        .map(|(i, _)| i)
+        .collect();
+    let order = uninstall_order(&app.rows, &selected);
+
+    for idx in order {
+        terminal.draw(|f| render(f, app))?;
+        let row = &app.rows[idx];
+        let name = row.entry.name.clone();
+        let kind = row.kind();
+        let size = row.size();
+        let outcome = perform_uninstall(runner, &name, kind);
+        app.results.push(StepResult {
+            name,
+            kind,
+            size_bytes: size,
+            outcome,
+        });
+    }
+
+    terminal.draw(|f| render(f, app))?;
+    match brew_ops::autoremove(runner) {
+        Ok(out) => app.autoremove_summary = Some(out),
+        Err(e) => app.autoremove_summary = Some(format!("autoremove failed: {e}")),
+    }
+
+    let targets: Vec<RemoveTarget> = app
+        .results
+        .iter()
+        .filter(|r| r.outcome.is_ok())
+        .map(|r| RemoveTarget {
+            kind: match r.kind {
+                PkgKind::Formula => EntryKind::Formula,
+                PkgKind::Cask => EntryKind::Cask,
+            },
+            name: r.name.clone(),
+        })
+        .collect();
+    if !targets.is_empty() {
+        if let Ok(summary) = brewfile::remove_entries(&app.brewfile_path, &targets) {
+            app.brewfile_backup = summary.backup;
+            app.brewfile_updated_count = summary.removed.len();
+        }
+    }
+    Ok(())
+}
+
+fn perform_uninstall(
+    runner: &dyn CommandRunner,
+    name: &str,
+    kind: PkgKind,
+) -> std::result::Result<(), String> {
+    let res = match kind {
+        PkgKind::Formula => brew_ops::uninstall_formula(runner, name),
+        PkgKind::Cask => brew_ops::uninstall_cask_zap(runner, name),
+    };
+    res.map_err(|e| e.to_string())?;
+    if brew_ops::is_installed(runner, name, kind).unwrap_or(true) {
+        return Err("still present after uninstall".into());
+    }
+    Ok(())
 }
 
 fn render(f: &mut Frame, app: &App) {
     match app.mode {
         Mode::Select | Mode::Confirm => render_select(f, app),
+        Mode::Blocked => {
+            render_select(f, app);
+            render_blocked_popup(f, app);
+        }
+        Mode::Running => render_progress(f, app),
         Mode::Done => render_done(f, app),
+    }
+}
+
+fn render_blocked_popup(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let height = (5 + app.blockers.len() as u16 * 2).min(area.height.saturating_sub(4));
+    let popup = centered_rect(70, height, area);
+    f.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            " Blocked: some selected packages are dependencies of others.",
+            Style::default().fg(Color::Red).bold(),
+        )),
+        Line::from(""),
+    ];
+    for (pkg, deps) in &app.blockers {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {pkg}"), Style::default().fg(Color::Yellow)),
+            Span::styled("  used by: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(deps.join(", "), Style::default().fg(Color::White)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" d ", Style::default().fg(Color::Green).bold()),
+        Span::raw("Deselect blocked + retry   "),
+        Span::styled(" q ", Style::default().fg(Color::Red).bold()),
+        Span::raw("Cancel"),
+    ]));
+
+    let body = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Cannot proceed ")
+            .border_style(Style::default().fg(Color::Red)),
+    );
+    f.render_widget(body, popup);
+}
+
+fn render_progress(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Uninstalling…",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from(""),
+    ];
+    for r in &app.results {
+        lines.push(result_line(r));
+    }
+    let body = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Progress ")
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(body, area);
+}
+
+fn result_line(r: &StepResult) -> Line<'_> {
+    let kind = match r.kind {
+        PkgKind::Formula => "formula",
+        PkgKind::Cask => "cask",
+    };
+    match &r.outcome {
+        Ok(()) => Line::from(vec![
+            Span::styled("  ✓ ", Style::default().fg(Color::Green)),
+            Span::styled(r.name.as_str(), Style::default().fg(Color::White)),
+            Span::styled(format!("  {kind}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("  -{}", scan::format_size(r.size_bytes)),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
+        Err(e) => Line::from(vec![
+            Span::styled("  ✗ ", Style::default().fg(Color::Red)),
+            Span::styled(r.name.as_str(), Style::default().fg(Color::White)),
+            Span::styled(format!("  {e}"), Style::default().fg(Color::Red)),
+        ]),
     }
 }
 
@@ -436,27 +732,98 @@ fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
-fn render_done(f: &mut Frame, _app: &App) {
+fn render_done(f: &mut Frame, app: &App) {
     let area = f.area();
-    let body = Paragraph::new(vec![
+    let freed: u64 = app
+        .results
+        .iter()
+        .filter(|r| r.outcome.is_ok())
+        .map(|r| r.size_bytes)
+        .sum();
+    let ok = app.results.iter().filter(|r| r.outcome.is_ok()).count();
+    let failed = app.results.len() - ok;
+
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "  Uninstall flow not wired yet (placeholder).",
-            Style::default().fg(Color::Yellow),
+            "  Done",
+            Style::default().fg(Color::Green).bold(),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  Press q to exit",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .block(
+    ];
+    for r in &app.results {
+        lines.push(result_line(r));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Removed: ", Style::default().bold()),
+        Span::styled(
+            format!("{ok} ok, {failed} failed"),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled("    Freed: ", Style::default().bold()),
+        Span::styled(
+            scan::format_size(freed),
+            Style::default().fg(Color::Green).bold(),
+        ),
+    ]));
+    if let Some(out) = &app.autoremove_summary {
+        let summary = autoremove_summary(out);
+        lines.push(Line::from(vec![
+            Span::styled("  Autoremove: ", Style::default().bold()),
+            Span::styled(summary, Style::default().fg(Color::White)),
+        ]));
+    }
+    if app.brewfile_updated_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  Brewfile: ", Style::default().bold()),
+            Span::styled(
+                format!(
+                    "{} line(s) removed from {}",
+                    app.brewfile_updated_count,
+                    app.brewfile_path.display()
+                ),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+        if let Some(bak) = &app.brewfile_backup {
+            lines.push(Line::from(vec![
+                Span::styled("  Backup:   ", Style::default().bold()),
+                Span::styled(
+                    bak.display().to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press q to exit",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let body = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Done ")
+            .title(" Results ")
             .border_style(Style::default().fg(Color::Green)),
     );
     f.render_widget(body, area);
+}
+
+fn autoremove_summary(stdout: &str) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return "nothing to remove".into();
+    }
+    let count = trimmed
+        .lines()
+        .filter(|l| l.starts_with("Uninstalling "))
+        .count();
+    if count == 0 {
+        return trimmed.lines().next().unwrap_or("done").to_string();
+    }
+    format!("{count} orphaned dep(s) removed")
 }
 
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
@@ -478,5 +845,97 @@ mod tests {
         assert_eq!(format_date(1577836800), "2020-01-01");
         // 0 = epoch
         assert_eq!(format_date(0), "1970-01-01");
+    }
+
+    fn row(name: &str, kind: EntryKind, deps: Vec<&str>) -> Row {
+        let entry = BrewfileEntry {
+            kind,
+            name: name.to_string(),
+            full_name: name.to_string(),
+            raw: format!("brew \"{name}\""),
+            line_number: 1,
+        };
+        let kind_pkg = match kind {
+            EntryKind::Cask => PkgKind::Cask,
+            _ => PkgKind::Formula,
+        };
+        let installed = Some(InstalledPackage {
+            name: name.to_string(),
+            kind: kind_pkg,
+            version: Some("1".into()),
+            size_bytes: 0,
+            deps: deps.into_iter().map(|s| s.to_string()).collect(),
+            installed_at: None,
+        });
+        Row { entry, installed }
+    }
+
+    #[test]
+    fn build_dependents_map_inverts_dep_lists() {
+        let installed = vec![
+            InstalledPackage {
+                name: "ripgrep".into(),
+                kind: PkgKind::Formula,
+                version: None,
+                size_bytes: 0,
+                deps: vec!["pcre2".into()],
+                installed_at: None,
+            },
+            InstalledPackage {
+                name: "bat".into(),
+                kind: PkgKind::Formula,
+                version: None,
+                size_bytes: 0,
+                deps: vec!["pcre2".into()],
+                installed_at: None,
+            },
+        ];
+        let map = build_dependents_map(&installed);
+        let mut got = map.get("pcre2").cloned().unwrap_or_default();
+        got.sort();
+        assert_eq!(got, vec!["bat", "ripgrep"]);
+    }
+
+    #[test]
+    fn external_dependents_filters_selection() {
+        let mut map = HashMap::new();
+        map.insert("pcre2".to_string(), vec!["ripgrep".into(), "bat".into()]);
+        let selection: HashSet<&str> = ["ripgrep"].into_iter().collect();
+        let got = external_dependents("pcre2", &map, &selection);
+        assert_eq!(got, vec!["bat"]);
+    }
+
+    #[test]
+    fn uninstall_order_puts_dependents_before_their_deps() {
+        // ripgrep depends on pcre2. Order should be [ripgrep, pcre2].
+        let rows = vec![
+            row("pcre2", EntryKind::Formula, vec![]),
+            row("ripgrep", EntryKind::Formula, vec!["pcre2"]),
+        ];
+        let order = uninstall_order(&rows, &[0, 1]);
+        assert_eq!(order, vec![1, 0]);
+    }
+
+    #[test]
+    fn uninstall_order_handles_unrelated_packages() {
+        let rows = vec![
+            row("fzf", EntryKind::Formula, vec![]),
+            row("zoxide", EntryKind::Formula, vec![]),
+        ];
+        let order = uninstall_order(&rows, &[0, 1]);
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&0) && order.contains(&1));
+    }
+
+    #[test]
+    fn autoremove_summary_counts_uninstall_lines() {
+        let out = "Uninstalling pcre2\nUninstalling libssh\n";
+        assert_eq!(autoremove_summary(out), "2 orphaned dep(s) removed");
+    }
+
+    #[test]
+    fn autoremove_summary_handles_no_op() {
+        assert_eq!(autoremove_summary(""), "nothing to remove");
+        assert_eq!(autoremove_summary("\n  \n"), "nothing to remove");
     }
 }
