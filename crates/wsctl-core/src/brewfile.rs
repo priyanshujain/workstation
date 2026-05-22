@@ -1,6 +1,8 @@
 //! Brewfile parsing, discovery, and editing.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntryKind {
@@ -140,6 +142,82 @@ pub fn discover_with(env: &Env) -> Option<PathBuf> {
     None
 }
 
+/// A package to remove from a Brewfile, matched by (kind, unqualified name).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RemoveTarget {
+    pub kind: EntryKind,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveSummary {
+    /// Path to the backup file, or `None` if nothing matched and no write occurred.
+    pub backup: Option<PathBuf>,
+    /// The entries that were removed.
+    pub removed: Vec<BrewfileEntry>,
+}
+
+/// Remove matching entries from a Brewfile in place, writing a `.bak` backup first.
+///
+/// Matching is by `(kind, unqualified name)`, so `brew "tap/repo/maestro"` matches
+/// `RemoveTarget { kind: Formula, name: "maestro" }`. Comments, blank lines, and
+/// unsupported DSL forms (`vscode`, `go`, `cargo`, `npm`, `krew`, `mas`) are preserved.
+pub fn remove_entries(path: &Path, targets: &[RemoveTarget]) -> std::io::Result<RemoveSummary> {
+    let content = fs::read_to_string(path)?;
+    let entries = parse(&content);
+
+    let target_set: HashSet<(EntryKind, &str)> = targets
+        .iter()
+        .map(|t| (t.kind, t.name.as_str()))
+        .collect();
+
+    let mut remove_lines: HashSet<usize> = HashSet::new();
+    let mut removed: Vec<BrewfileEntry> = Vec::new();
+    for entry in &entries {
+        if target_set.contains(&(entry.kind, entry.name.as_str())) {
+            remove_lines.insert(entry.line_number);
+            removed.push(entry.clone());
+        }
+    }
+
+    if remove_lines.is_empty() {
+        return Ok(RemoveSummary {
+            backup: None,
+            removed: Vec::new(),
+        });
+    }
+
+    let backup = backup_path(path);
+    fs::copy(path, &backup)?;
+
+    let mut out = String::with_capacity(content.len());
+    for (i, line) in content.lines().enumerate() {
+        if remove_lines.contains(&(i + 1)) {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !content.ends_with('\n') {
+        out.pop();
+    }
+    fs::write(path, out)?;
+
+    Ok(RemoveSummary {
+        backup: Some(backup),
+        removed,
+    })
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| std::ffi::OsString::from("Brewfile"));
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +320,103 @@ mod tests {
             home: Some(dir.join("home")),
         };
         assert!(discover_with(&env).is_none());
+    }
+
+    #[test]
+    fn remove_entries_removes_matching_and_preserves_rest() {
+        let dir = tempdir();
+        let file = dir.join("Brewfile");
+        let original = "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nbrew \"fzf\"\ncask \"vlc\"\nvscode \"x.y\"\n";
+        fs::write(&file, original).unwrap();
+
+        let targets = vec![
+            RemoveTarget {
+                kind: EntryKind::Formula,
+                name: "fzf".into(),
+            },
+            RemoveTarget {
+                kind: EntryKind::Cask,
+                name: "vlc".into(),
+            },
+        ];
+        let summary = remove_entries(&file, &targets).unwrap();
+
+        assert_eq!(summary.removed.len(), 2);
+        assert!(summary.backup.is_some());
+
+        let after = fs::read_to_string(&file).unwrap();
+        assert_eq!(after, "tap \"a/b\"\n# header\nbrew \"ripgrep\"\nvscode \"x.y\"\n");
+
+        let backup = fs::read_to_string(summary.backup.unwrap()).unwrap();
+        assert_eq!(backup, original);
+    }
+
+    #[test]
+    fn remove_entries_matches_tap_prefixed_packages() {
+        let dir = tempdir();
+        let file = dir.join("Brewfile");
+        fs::write(&file, "brew \"mobile-dev-inc/tap/maestro\"\nbrew \"fzf\"\n").unwrap();
+        let summary = remove_entries(
+            &file,
+            &[RemoveTarget {
+                kind: EntryKind::Formula,
+                name: "maestro".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(summary.removed.len(), 1);
+        let after = fs::read_to_string(&file).unwrap();
+        assert_eq!(after, "brew \"fzf\"\n");
+    }
+
+    #[test]
+    fn remove_entries_noop_when_no_matches() {
+        let dir = tempdir();
+        let file = dir.join("Brewfile");
+        fs::write(&file, "brew \"ripgrep\"\n").unwrap();
+        let summary = remove_entries(
+            &file,
+            &[RemoveTarget {
+                kind: EntryKind::Formula,
+                name: "fzf".into(),
+            }],
+        )
+        .unwrap();
+        assert!(summary.backup.is_none());
+        assert!(summary.removed.is_empty());
+        assert!(!file.with_file_name("Brewfile.bak").exists());
+    }
+
+    #[test]
+    fn remove_entries_preserves_no_trailing_newline() {
+        let dir = tempdir();
+        let file = dir.join("Brewfile");
+        fs::write(&file, "brew \"a\"\nbrew \"b\"").unwrap();
+        remove_entries(
+            &file,
+            &[RemoveTarget {
+                kind: EntryKind::Formula,
+                name: "a".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "brew \"b\"");
+    }
+
+    #[test]
+    fn remove_entries_does_not_match_across_kinds() {
+        let dir = tempdir();
+        let file = dir.join("Brewfile");
+        fs::write(&file, "brew \"foo\"\ncask \"foo\"\n").unwrap();
+        remove_entries(
+            &file,
+            &[RemoveTarget {
+                kind: EntryKind::Cask,
+                name: "foo".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "brew \"foo\"\n");
     }
 
     fn tempdir() -> PathBuf {
