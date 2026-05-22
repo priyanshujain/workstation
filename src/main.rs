@@ -65,6 +65,27 @@ enum Commands {
 
     /// Interactive TUI for disk cleanup
     Cleanup,
+
+    /// Manage the wsctl binary itself (update, uninstall)
+    #[command(name = "self", subcommand)]
+    SelfCmd(SelfCommand),
+}
+
+#[derive(Subcommand)]
+enum SelfCommand {
+    /// Update wsctl to the latest release
+    Update {
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Uninstall the wsctl binary
+    Uninstall {
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -105,6 +126,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Cleanup => {
             tui::run()?;
         }
+        Commands::SelfCmd(sub) => match sub {
+            SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
+            SelfCommand::Uninstall { yes } => commands::self_cmd::uninstall(yes)?,
+        },
     }
 
     Ok(())
