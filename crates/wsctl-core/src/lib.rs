@@ -1,5 +1,3 @@
-pub mod brew_info;
-pub mod brew_ops;
 pub mod brewfile;
 pub mod command;
 pub mod context;

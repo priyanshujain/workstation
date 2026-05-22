@@ -8,7 +8,7 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-use crate::{CommandRunner, Error, Result};
+use wsctl_core::{CommandRunner, Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PkgKind {
@@ -189,8 +189,8 @@ struct CaskDeps {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::MockCommandRunner;
-    use crate::CommandOutput;
+    use wsctl_core::testing::MockCommandRunner;
+    use wsctl_core::CommandOutput;
     use std::sync::Arc;
 
     const SAMPLE_JSON: &str = r#"{
