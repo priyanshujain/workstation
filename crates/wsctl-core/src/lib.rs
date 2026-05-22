@@ -4,7 +4,6 @@ pub mod error;
 pub mod executor;
 pub mod graph;
 pub mod resource;
-pub mod scan;
 pub mod scope;
 pub mod testing;
 
