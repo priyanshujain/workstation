@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::platform;
@@ -20,6 +20,7 @@ pub enum CleanAction {
 }
 
 impl Target {
+    #[cfg(target_os = "macos")]
     pub(crate) fn new(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -88,7 +89,8 @@ pub fn discover_cleanup_targets() -> Vec<Target> {
     platform::cleanup_targets()
 }
 
-pub(crate) fn files_by_extension_size(dir: &Path, ext: &str) -> u64 {
+#[cfg(target_os = "macos")]
+pub(crate) fn files_by_extension_size(dir: &std::path::Path, ext: &str) -> u64 {
     let mut size = 0u64;
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
