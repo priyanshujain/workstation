@@ -75,14 +75,27 @@ fn extract_quoted(s: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
+/// Which step of the search order produced the Brewfile path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrewfileSource {
+    /// `$HOMEBREW_BUNDLE_FILE` env var.
+    Env,
+    /// `./Brewfile` in the current working directory.
+    Cwd,
+    /// `~/.Brewfile` or `~/Brewfile`.
+    Home,
+    /// `$XDG_CONFIG_HOME/homebrew/Brewfile`.
+    Xdg,
+}
+
 /// Discover a Brewfile following `brew bundle`'s search order.
 ///
-/// 1. `$HOMEBREW_BUNDLE_FILE`
-/// 2. `./Brewfile`
-/// 3. `~/.Brewfile`
-/// 4. `~/Brewfile`
-/// 5. `$XDG_CONFIG_HOME/homebrew/Brewfile` (default `~/.config/homebrew/Brewfile`)
-pub fn discover() -> Option<PathBuf> {
+/// 1. `$HOMEBREW_BUNDLE_FILE`            (`Env`)
+/// 2. `./Brewfile`                       (`Cwd`)
+/// 3. `~/.Brewfile`                      (`Home`)
+/// 4. `~/Brewfile`                       (`Home`)
+/// 5. `$XDG_CONFIG_HOME/homebrew/Brewfile` (`Xdg`, default `~/.config/homebrew/Brewfile`)
+pub fn discover() -> Option<(PathBuf, BrewfileSource)> {
     discover_with(&Env::system())
 }
 
@@ -105,27 +118,27 @@ impl Env {
     }
 }
 
-pub fn discover_with(env: &Env) -> Option<PathBuf> {
+pub fn discover_with(env: &Env) -> Option<(PathBuf, BrewfileSource)> {
     if let Some(p) = env.bundle_file.as_deref() {
         let path = PathBuf::from(p);
         if path.is_file() {
-            return Some(path);
+            return Some((path, BrewfileSource::Env));
         }
     }
     if let Some(cwd) = &env.cwd {
         let p = cwd.join("Brewfile");
         if p.is_file() {
-            return Some(p);
+            return Some((p, BrewfileSource::Cwd));
         }
     }
     if let Some(home) = &env.home {
         let dot = home.join(".Brewfile");
         if dot.is_file() {
-            return Some(dot);
+            return Some((dot, BrewfileSource::Home));
         }
         let plain = home.join("Brewfile");
         if plain.is_file() {
-            return Some(plain);
+            return Some((plain, BrewfileSource::Home));
         }
     }
     let xdg = env
@@ -136,7 +149,7 @@ pub fn discover_with(env: &Env) -> Option<PathBuf> {
     if let Some(xdg) = xdg {
         let p = xdg.join("homebrew/Brewfile");
         if p.is_file() {
-            return Some(p);
+            return Some((p, BrewfileSource::Xdg));
         }
     }
     None
@@ -291,7 +304,24 @@ mod tests {
             cwd: None,
             home: None,
         };
-        assert_eq!(discover_with(&env), Some(file));
+        assert_eq!(discover_with(&env), Some((file, BrewfileSource::Env)));
+    }
+
+    #[test]
+    fn discover_returns_cwd_source_when_cwd_brewfile_present() {
+        let dir = tempdir();
+        let cwd_file = dir.join("Brewfile");
+        std::fs::write(&cwd_file, "").unwrap();
+        let env = Env {
+            bundle_file: None,
+            xdg_config_home: None,
+            cwd: Some(dir.clone()),
+            home: Some(dir.join("home")),
+        };
+        assert_eq!(
+            discover_with(&env),
+            Some((cwd_file, BrewfileSource::Cwd))
+        );
     }
 
     #[test]
@@ -307,7 +337,7 @@ mod tests {
             cwd: Some(dir.join("nowhere")),
             home: Some(home),
         };
-        assert_eq!(discover_with(&env), Some(xdg_path));
+        assert_eq!(discover_with(&env), Some((xdg_path, BrewfileSource::Xdg)));
     }
 
     #[test]

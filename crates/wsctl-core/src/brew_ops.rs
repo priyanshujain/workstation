@@ -27,6 +27,20 @@ pub fn uninstall_cask_zap(runner: &dyn CommandRunner, name: &str) -> Result<()> 
     Ok(())
 }
 
+/// `brew bundle dump --file=<path>` — write current state to a new Brewfile.
+pub fn bundle_dump(runner: &dyn CommandRunner, path: &std::path::Path) -> Result<()> {
+    let path_str = path.to_string_lossy();
+    let file_arg = format!("--file={path_str}");
+    let out = runner.run("brew", &["bundle", "dump", &file_arg])?;
+    if !out.success {
+        return Err(Error::CommandFailed {
+            command: format!("brew bundle dump {file_arg}"),
+            stderr: out.stderr,
+        });
+    }
+    Ok(())
+}
+
 /// `brew autoremove` — removes orphaned dependencies (no-op if none).
 pub fn autoremove(runner: &dyn CommandRunner) -> Result<String> {
     let out = runner.run("brew", &["autoremove"])?;
@@ -105,6 +119,17 @@ mod tests {
             CommandOutput::success(""),
         ));
         uninstall_cask_zap(mock.as_ref(), "ghostty").unwrap();
+        mock.verify();
+    }
+
+    #[test]
+    fn bundle_dump_passes_file_flag() {
+        let mock = Arc::new(MockCommandRunner::new().expect(
+            "brew",
+            &["bundle", "dump", "--file=/tmp/Brewfile"],
+            CommandOutput::success(""),
+        ));
+        bundle_dump(mock.as_ref(), std::path::Path::new("/tmp/Brewfile")).unwrap();
         mock.verify();
     }
 

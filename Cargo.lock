@@ -1340,6 +1340,7 @@ dependencies = [
  "clap",
  "console",
  "crossterm",
+ "dirs",
  "indicatif",
  "ratatui",
  "serde",

@@ -12,7 +12,7 @@ use crossterm::{
 use ratatui::{prelude::*, widgets::*};
 use wsctl_core::brew_info::{self, InstalledPackage, PkgKind};
 use wsctl_core::brew_ops;
-use wsctl_core::brewfile::{self, BrewfileEntry, EntryKind, RemoveTarget};
+use wsctl_core::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
 use wsctl_core::scan;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
 
@@ -53,6 +53,7 @@ struct StepResult {
 
 struct App {
     brewfile_path: PathBuf,
+    brewfile_source: BrewfileSource,
     rows: Vec<Row>,
     selected: Vec<bool>,
     cursor: usize,
@@ -71,6 +72,7 @@ struct App {
 impl App {
     fn new(
         brewfile_path: PathBuf,
+        brewfile_source: BrewfileSource,
         rows: Vec<Row>,
         dependents_of: HashMap<String, Vec<String>>,
     ) -> Self {
@@ -81,6 +83,7 @@ impl App {
         }
         Self {
             brewfile_path,
+            brewfile_source,
             rows,
             selected: vec![false; len],
             cursor: 0,
@@ -135,12 +138,8 @@ impl App {
 }
 
 pub fn run() -> Result<()> {
-    let path = brewfile::discover().ok_or_else(|| {
-        anyhow!(
-            "No Brewfile found. Searched: $HOMEBREW_BUNDLE_FILE, ./Brewfile, \
-             ~/.Brewfile, ~/Brewfile, $XDG_CONFIG_HOME/homebrew/Brewfile"
-        )
-    })?;
+    let runner = SystemCommandRunner::new();
+    let (path, source) = resolve_or_dump_brewfile(&runner)?;
 
     eprintln!("Loading {}…", path.display());
 
@@ -158,7 +157,6 @@ pub fn run() -> Result<()> {
         ));
     }
 
-    let runner = SystemCommandRunner::new();
     let mut installed = brew_info::fetch_installed(&runner)?;
     let prefix = brew_info::brew_prefix(&runner)?;
     brew_info::attach_sizes(&prefix, &mut installed);
@@ -188,8 +186,29 @@ pub fn run() -> Result<()> {
     });
 
     let dependents_of = build_dependents_map(&installed);
-    let app = App::new(path, rows, dependents_of);
+    let app = App::new(path, source, rows, dependents_of);
     run_tui(app)
+}
+
+fn resolve_or_dump_brewfile(runner: &dyn CommandRunner) -> Result<(PathBuf, BrewfileSource)> {
+    if let Some(found) = brewfile::discover() {
+        return Ok(found);
+    }
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("cannot determine home directory to write Brewfile"))?;
+    let target = home.join("Brewfile");
+    eprintln!(
+        "No Brewfile found. Generating one from currently installed packages → {}",
+        target.display()
+    );
+    brew_ops::bundle_dump(runner, &target)
+        .with_context(|| format!("brew bundle dump --file={}", target.display()))?;
+    brewfile::discover().ok_or_else(|| {
+        anyhow!(
+            "brew bundle dump completed but no Brewfile was discovered at {}",
+            target.display()
+        )
+    })
 }
 
 fn build_dependents_map(installed: &[InstalledPackage]) -> HashMap<String, Vec<String>> {
@@ -535,12 +554,17 @@ fn render_select(f: &mut Frame, app: &mut App) {
     ])
     .split(area);
 
+    let warn = app.brewfile_source == BrewfileSource::Cwd;
+    let path_prefix = if warn { "  ⚠ project-local: " } else { "  " };
+    let path_style = if warn {
+        Style::default().fg(Color::Yellow).bold()
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
     let header = Paragraph::new(Line::from(vec![
         Span::styled("  wsctl packages", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(
-            format!("  {}", app.brewfile_path.display()),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(path_prefix, path_style),
+        Span::styled(app.brewfile_path.display().to_string(), path_style),
     ]))
     .block(
         Block::default()
