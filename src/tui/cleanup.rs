@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::{prelude::*, widgets::*};
 use disk::cleanup::{Target, discover_cleanup_targets};
 use disk::util::format_size;
+use ratatui::{prelude::*, widgets::*};
 
 use crate::tui::widgets::centered_rect;
 
@@ -375,4 +375,3 @@ fn result_line(result: &CleanResult) -> Line<'_> {
         ]),
     }
 }
-

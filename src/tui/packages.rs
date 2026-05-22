@@ -3,13 +3,13 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::{prelude::*, widgets::*};
+use disk::util::format_size;
 use packages::brew::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
 use packages::brew::info::{self, InstalledPackage, PkgKind};
 use packages::brew::ops;
-use disk::util::format_size;
+use ratatui::{prelude::*, widgets::*};
 use wsctl_core::{CommandRunner, SystemCommandRunner};
 
 use crate::tui::widgets::centered_rect;
@@ -746,10 +746,7 @@ fn render_done(f: &mut Frame, app: &App) {
             Style::default().fg(Color::White),
         ),
         Span::styled("    Freed: ", Style::default().bold()),
-        Span::styled(
-            format_size(freed),
-            Style::default().fg(Color::Green).bold(),
-        ),
+        Span::styled(format_size(freed), Style::default().fg(Color::Green).bold()),
     ]));
     if let Some(out) = &app.autoremove_summary {
         let summary = autoremove_summary(out);

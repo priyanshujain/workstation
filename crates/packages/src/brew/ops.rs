@@ -83,9 +83,9 @@ pub fn dependents(runner: &dyn CommandRunner, name: &str) -> Result<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wsctl_core::testing::MockCommandRunner;
-    use wsctl_core::CommandOutput;
     use std::sync::Arc;
+    use wsctl_core::CommandOutput;
+    use wsctl_core::testing::MockCommandRunner;
 
     #[test]
     fn uninstall_formula_invokes_brew() {

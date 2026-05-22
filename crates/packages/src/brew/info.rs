@@ -189,9 +189,9 @@ struct CaskDeps {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wsctl_core::testing::MockCommandRunner;
-    use wsctl_core::CommandOutput;
     use std::sync::Arc;
+    use wsctl_core::CommandOutput;
+    use wsctl_core::testing::MockCommandRunner;
 
     const SAMPLE_JSON: &str = r#"{
         "formulae": [

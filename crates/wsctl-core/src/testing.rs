@@ -2,8 +2,8 @@
 //!
 //! This module provides mock implementations and test helpers.
 
-use crate::command::{CommandOutput, CommandRunner};
 use crate::Result;
+use crate::command::{CommandOutput, CommandRunner};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 

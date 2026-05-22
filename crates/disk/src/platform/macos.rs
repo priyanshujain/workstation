@@ -80,10 +80,7 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
                 ("Playwright", home.join("Library/Caches/ms-playwright")),
             ],
         ),
-        (
-            "Downloads",
-            vec![("~/Downloads", home.join("Downloads"))],
-        ),
+        ("Downloads", vec![("~/Downloads", home.join("Downloads"))]),
     ]
 }
 

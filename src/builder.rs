@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use packages::brew::{Cask, Formula};
+use std::sync::Arc;
 use wsctl_core::{Profile, Resource, ResourceGraph, Result, Scope, ScopedResources};
 
 pub struct Workstation {
