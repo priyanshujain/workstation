@@ -964,6 +964,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "packages"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "wsctl-core",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

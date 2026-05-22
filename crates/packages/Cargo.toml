@@ -1,0 +1,14 @@
+[package]
+name = "packages"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Package manager resources for wsctl (Homebrew)"
+
+[dependencies]
+wsctl-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+dirs.workspace = true
