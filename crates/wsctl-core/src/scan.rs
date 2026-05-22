@@ -232,12 +232,12 @@ impl CleanupTarget {
                 if let Ok(entries) = fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.extension().is_some_and(|e| e == ext.as_str()) {
-                            if let Ok(meta) = path.metadata() {
-                                freed += meta.len();
-                                fs::remove_file(&path)
-                                    .map_err(|e| format!("{}: {}", path.display(), e))?;
-                            }
+                        if path.extension().is_some_and(|e| e == ext.as_str())
+                            && let Ok(meta) = path.metadata()
+                        {
+                            freed += meta.len();
+                            fs::remove_file(&path)
+                                .map_err(|e| format!("{}: {}", path.display(), e))?;
                         }
                     }
                 }
@@ -417,10 +417,10 @@ fn files_by_extension_size(dir: &Path, ext: &str) -> u64 {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == ext) {
-                if let Ok(meta) = path.metadata() {
-                    size += meta.len();
-                }
+            if path.extension().is_some_and(|e| e == ext)
+                && let Ok(meta) = path.metadata()
+            {
+                size += meta.len();
             }
         }
     }

@@ -106,7 +106,7 @@ impl App {
         self.rows
             .iter()
             .zip(self.selected.iter())
-            .filter(|(_, &s)| s)
+            .filter(|&(_, &s)| s)
             .map(|(r, _)| r.size())
             .sum()
     }
@@ -352,7 +352,7 @@ fn compute_blockers(app: &App) -> Vec<(String, Vec<String>)> {
         .selected
         .iter()
         .enumerate()
-        .filter(|(_, &s)| s)
+        .filter(|&(_, &s)| s)
         .map(|(i, _)| app.rows[i].entry.name.as_str())
         .collect();
     let mut blockers = Vec::new();
@@ -386,7 +386,7 @@ fn run_uninstalls(
         .selected
         .iter()
         .enumerate()
-        .filter(|(_, &s)| s)
+        .filter(|&(_, &s)| s)
         .map(|(i, _)| i)
         .collect();
     let order = uninstall_order(&app.rows, &selected);
@@ -424,11 +424,11 @@ fn run_uninstalls(
             name: r.name.clone(),
         })
         .collect();
-    if !targets.is_empty() {
-        if let Ok(summary) = brewfile::remove_entries(&app.brewfile_path, &targets) {
-            app.brewfile_backup = summary.backup;
-            app.brewfile_updated_count = summary.removed.len();
-        }
+    if !targets.is_empty()
+        && let Ok(summary) = brewfile::remove_entries(&app.brewfile_path, &targets)
+    {
+        app.brewfile_backup = summary.backup;
+        app.brewfile_updated_count = summary.removed.len();
     }
     Ok(())
 }

@@ -50,7 +50,7 @@ impl App {
         self.targets
             .iter()
             .zip(self.selected.iter())
-            .filter(|(_, &s)| s)
+            .filter(|&(_, &s)| s)
             .map(|(t, _)| t.size)
             .sum()
     }
@@ -108,39 +108,39 @@ pub fn run() -> io::Result<()> {
     loop {
         terminal.draw(|f| render(f, &app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match app.mode {
-                    Mode::Select => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                        KeyCode::Char(' ') => app.toggle_current(),
-                        KeyCode::Char('a') => app.toggle_all(),
-                        KeyCode::Enter if app.selected_count() > 0 => {
-                            app.mode = Mode::Confirm;
-                        }
-                        _ => {}
-                    },
-                    Mode::Confirm => match key.code {
-                        KeyCode::Char('y') | KeyCode::Enter => {
-                            app.mode = Mode::Running;
-                            run_cleanups(&mut app, &mut terminal)?;
-                            app.mode = Mode::Done;
-                        }
-                        _ => {
-                            app.mode = Mode::Select;
-                        }
-                    },
-                    Mode::Done => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => break,
-                        _ => {}
-                    },
-                    Mode::Running => {}
-                }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match app.mode {
+                Mode::Select => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                    KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                    KeyCode::Char(' ') => app.toggle_current(),
+                    KeyCode::Char('a') => app.toggle_all(),
+                    KeyCode::Enter if app.selected_count() > 0 => {
+                        app.mode = Mode::Confirm;
+                    }
+                    _ => {}
+                },
+                Mode::Confirm => match key.code {
+                    KeyCode::Char('y') | KeyCode::Enter => {
+                        app.mode = Mode::Running;
+                        run_cleanups(&mut app, &mut terminal)?;
+                        app.mode = Mode::Done;
+                    }
+                    _ => {
+                        app.mode = Mode::Select;
+                    }
+                },
+                Mode::Done => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => break,
+                    _ => {}
+                },
+                Mode::Running => {}
             }
         }
     }
@@ -158,7 +158,7 @@ fn run_cleanups(
         .selected
         .iter()
         .enumerate()
-        .filter(|(_, &s)| s)
+        .filter(|&(_, &s)| s)
         .map(|(i, _)| i)
         .collect();
 
