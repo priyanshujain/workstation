@@ -1,14 +1,13 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{prelude::*, widgets::*};
 use disk::cleanup::{Target, discover_cleanup_targets};
 use disk::util::format_size;
+
+use crate::tui::widgets::centered_rect;
 
 struct App {
     targets: Vec<Target>,
@@ -89,25 +88,16 @@ impl App {
     }
 }
 
-pub fn run() -> io::Result<()> {
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        original_hook(info);
-    }));
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
+pub fn run() -> Result<()> {
     let targets = discover_cleanup_targets();
     let mut app = App::new(targets);
 
+    super::run(|terminal| event_loop(&mut app, terminal))
+}
+
+fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     loop {
-        terminal.draw(|f| render(f, &app))?;
+        terminal.draw(|f| render(f, app))?;
 
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
@@ -117,7 +107,7 @@ pub fn run() -> io::Result<()> {
             }
             match app.mode {
                 Mode::Select => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Up | KeyCode::Char('k') => app.move_up(),
                     KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                     KeyCode::Char(' ') => app.toggle_current(),
@@ -130,7 +120,7 @@ pub fn run() -> io::Result<()> {
                 Mode::Confirm => match key.code {
                     KeyCode::Char('y') | KeyCode::Enter => {
                         app.mode = Mode::Running;
-                        run_cleanups(&mut app, &mut terminal)?;
+                        run_cleanups(app, terminal)?;
                         app.mode = Mode::Done;
                     }
                     _ => {
@@ -138,23 +128,19 @@ pub fn run() -> io::Result<()> {
                     }
                 },
                 Mode::Done => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => break,
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => return Ok(()),
                     _ => {}
                 },
                 Mode::Running => {}
             }
         }
     }
-
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    Ok(())
 }
 
 fn run_cleanups(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> io::Result<()> {
+) -> Result<()> {
     let indices: Vec<usize> = app
         .selected
         .iter()
@@ -390,9 +376,3 @@ fn result_line(result: &CleanResult) -> Line<'_> {
     }
 }
 
-fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let y = area.height.saturating_sub(height) / 2;
-    let width = area.width * percent_x / 100;
-    let x = (area.width.saturating_sub(width)) / 2;
-    Rect::new(x, y, width, height)
-}
