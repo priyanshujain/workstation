@@ -13,7 +13,7 @@ use ratatui::{prelude::*, widgets::*};
 use packages::brew::brewfile::{self, BrewfileEntry, BrewfileSource, EntryKind, RemoveTarget};
 use packages::brew::info::{self, InstalledPackage, PkgKind};
 use packages::brew::ops;
-use wsctl_core::scan;
+use disk::util::format_size;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
 
 #[derive(Debug)]
@@ -532,7 +532,7 @@ fn result_line(r: &StepResult) -> Line<'_> {
             Span::styled(r.name.as_str(), Style::default().fg(Color::White)),
             Span::styled(format!("  {kind}"), Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("  -{}", scan::format_size(r.size_bytes)),
+                format!("  -{}", format_size(r.size_bytes)),
                 Style::default().fg(Color::Green),
             ),
         ]),
@@ -614,7 +614,7 @@ fn render_select(f: &mut Frame, app: &mut App) {
                 format!(
                     " Selected: {} pkgs ({}) ",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Green).bold(),
             ),
@@ -640,7 +640,7 @@ fn render_select(f: &mut Frame, app: &mut App) {
                 format!(
                     "Uninstall {} packages ({})?",
                     app.selected_count(),
-                    scan::format_size(app.selected_size())
+                    format_size(app.selected_size())
                 ),
                 Style::default().fg(Color::Yellow).bold(),
             )),
@@ -691,7 +691,7 @@ fn package_row(row: &Row, selected: bool, is_cursor: bool) -> ratatui::widgets::
     };
 
     let size_str = if row.size() > 0 {
-        scan::format_size(row.size())
+        format_size(row.size())
     } else {
         "—".to_string()
     };
@@ -766,7 +766,7 @@ fn render_done(f: &mut Frame, app: &App) {
         ),
         Span::styled("    Freed: ", Style::default().bold()),
         Span::styled(
-            scan::format_size(freed),
+            format_size(freed),
             Style::default().fg(Color::Green).bold(),
         ),
     ]));
