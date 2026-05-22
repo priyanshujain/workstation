@@ -1,6 +1,8 @@
 use console::style;
+use disk::audit::scan_categories;
+use disk::overview::disk_overview;
+use disk::util::format_size;
 use serde::Serialize;
-use wsctl_core::scan;
 
 #[derive(Serialize)]
 struct AuditOutput {
@@ -41,7 +43,7 @@ pub fn run(json: bool) -> anyhow::Result<()> {
     );
     println!();
 
-    if let Some(overview) = scan::disk_overview() {
+    if let Some(overview) = disk_overview() {
         let pct = overview.usage_percent();
         let pct_style = if pct > 90.0 {
             style(format!("{pct:.0}%")).red().bold()
@@ -60,9 +62,9 @@ pub fn run(json: bool) -> anyhow::Result<()> {
         println!(
             "  {}  {} used / {} total / {} free",
             style(bar).dim(),
-            style(scan::format_size(overview.used)).white(),
-            style(scan::format_size(overview.total)).dim(),
-            style(scan::format_size(overview.free)).green(),
+            style(format_size(overview.used)).white(),
+            style(format_size(overview.total)).dim(),
+            style(format_size(overview.free)).green(),
         );
         println!();
     }
@@ -73,7 +75,7 @@ pub fn run(json: bool) -> anyhow::Result<()> {
     println!();
     println!("  Scanning...");
 
-    let categories = scan::scan_categories();
+    let categories = scan_categories();
 
     // Clear "Scanning..." line
     print!("\x1b[1A\x1b[2K");
@@ -85,14 +87,14 @@ pub fn run(json: bool) -> anyhow::Result<()> {
 
         println!(
             "  {:>10}  {}",
-            style(scan::format_size(cat.total_size)).yellow().bold(),
+            style(format_size(cat.total_size)).yellow().bold(),
             style(&cat.name).white().bold(),
         );
 
         for p in &cat.paths {
             println!(
                 "  {:>10}    {}",
-                style(scan::format_size(p.size)).dim(),
+                style(format_size(p.size)).dim(),
                 style(&p.label).dim(),
             );
         }
@@ -102,7 +104,7 @@ pub fn run(json: bool) -> anyhow::Result<()> {
     println!("  {}", style("─".repeat(50)).dim());
     println!(
         "  {:>10}  {}",
-        style(scan::format_size(total_accounted)).green().bold(),
+        style(format_size(total_accounted)).green().bold(),
         style("total tracked").bold(),
     );
     println!();
@@ -111,13 +113,13 @@ pub fn run(json: bool) -> anyhow::Result<()> {
 }
 
 fn run_json() -> anyhow::Result<()> {
-    let disk = scan::disk_overview().map(|o| DiskInfo {
+    let disk = disk_overview().map(|o| DiskInfo {
         total: o.total,
         used: o.used,
         free: o.free,
     });
 
-    let categories = scan::scan_categories()
+    let categories = scan_categories()
         .into_iter()
         .map(|c| CategoryInfo {
             name: c.name,
