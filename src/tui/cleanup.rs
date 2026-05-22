@@ -238,7 +238,9 @@ fn clone_action(action: &CleanAction) -> CleanAction {
         CleanAction::RemoveDir(p) => CleanAction::RemoveDir(p.clone()),
         CleanAction::RemoveFile(p) => CleanAction::RemoveFile(p.clone()),
         CleanAction::RunCommand(c, a) => CleanAction::RunCommand(c.clone(), a.clone()),
-        CleanAction::RemoveByExtension(d, e) => CleanAction::RemoveByExtension(d.clone(), e.clone()),
+        CleanAction::RemoveByExtension(d, e) => {
+            CleanAction::RemoveByExtension(d.clone(), e.clone())
+        }
     }
 }
 
@@ -268,9 +270,7 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
                     KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                         drill_in(app, terminal)?;
                     }
-                    KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')
-                        if app.pop_or_quit() =>
-                    {
+                    KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') if app.pop_or_quit() => {
                         return Ok(());
                     }
                     KeyCode::Char('x') | KeyCode::Char('D') if app.marked_count() > 0 => {
@@ -298,10 +298,7 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
     }
 }
 
-fn drill_in(
-    app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<()> {
+fn drill_in(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let (next_path, next_crumb) = match app.current() {
         View::Top { cursor } => {
             let Some(t) = app.targets.get(*cursor) else {
@@ -346,10 +343,7 @@ fn drill_in(
     Ok(())
 }
 
-fn run_ops(
-    app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<()> {
+fn run_ops(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let ops = app.pending_ops();
     for op in ops {
         terminal.draw(|f| render(f, app))?;
@@ -397,9 +391,7 @@ fn render_browse(f: &mut Frame, app: &App) {
 
     match app.current() {
         View::Top { cursor } => render_top(f, chunks[1], app, *cursor),
-        View::Directory { path, cursor, .. } => {
-            render_directory(f, chunks[1], app, path, *cursor)
-        }
+        View::Directory { path, cursor, .. } => render_directory(f, chunks[1], app, path, *cursor),
     }
 
     render_footer(f, chunks[2], app);
@@ -470,17 +462,15 @@ fn render_top(f: &mut Frame, body: Rect, app: &App, cursor: usize) {
     f.render_widget(table, body);
 }
 
-fn render_directory(
-    f: &mut Frame,
-    body: Rect,
-    app: &App,
-    path: &Path,
-    cursor: usize,
-) {
+fn render_directory(f: &mut Frame, body: Rect, app: &App, path: &Path, cursor: usize) {
     let Some(scan) = app.cache.get(path) else {
         let p = Paragraph::new("  Scanning...")
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::NONE).padding(Padding::horizontal(1)));
+            .block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .padding(Padding::horizontal(1)),
+            );
         f.render_widget(p, body);
         return;
     };
@@ -488,7 +478,11 @@ fn render_directory(
     if scan.children.is_empty() {
         let p = Paragraph::new("  (empty)")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::NONE).padding(Padding::horizontal(1)));
+            .block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .padding(Padding::horizontal(1)),
+            );
         f.render_widget(p, body);
         return;
     }
@@ -573,11 +567,7 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            format!(
-                "  Clean {} items ({})?",
-                ops.len(),
-                format_size(total)
-            ),
+            format!("  Clean {} items ({})?", ops.len(), format_size(total)),
             Style::default().fg(Color::Yellow).bold(),
         )),
         Line::from(""),

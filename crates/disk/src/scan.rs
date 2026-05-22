@@ -174,7 +174,10 @@ mod tests {
 
         // Symlink should be skipped entirely
         let names: Vec<&str> = result.children.iter().map(|c| c.name.as_str()).collect();
-        assert!(!names.contains(&"link"), "symlink should not appear: {names:?}");
+        assert!(
+            !names.contains(&"link"),
+            "symlink should not appear: {names:?}"
+        );
         assert!(names.contains(&"real.txt"));
 
         // Total must not include the 10,000-byte symlink target
