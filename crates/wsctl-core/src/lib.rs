@@ -1,4 +1,3 @@
-pub mod brewfile;
 pub mod command;
 pub mod context;
 pub mod error;
