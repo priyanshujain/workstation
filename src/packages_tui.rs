@@ -728,45 +728,11 @@ fn package_row(row: &Row, selected: bool, is_cursor: bool) -> ratatui::widgets::
 }
 
 fn format_date(unix_secs: u64) -> String {
-    let secs = unix_secs as i64;
-    let days = secs / 86_400;
-    let (mut y, mut m, mut d) = (1970i64, 1u32, 1u32);
-    let mut remaining = days;
-    loop {
-        let year_days: i64 = if is_leap(y) { 366 } else { 365 };
-        if remaining < year_days {
-            break;
-        }
-        remaining -= year_days;
-        y += 1;
-    }
-    let months_lengths: [i64; 12] = [
-        31,
-        if is_leap(y) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    for (mi, &len) in months_lengths.iter().enumerate() {
-        if remaining < len {
-            m = mi as u32 + 1;
-            d = remaining as u32 + 1;
-            break;
-        }
-        remaining -= len;
-    }
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    let format = time::macros::format_description!("[year]-[month]-[day]");
+    time::OffsetDateTime::from_unix_timestamp(unix_secs as i64)
+        .ok()
+        .and_then(|dt| dt.format(&format).ok())
+        .unwrap_or_else(|| "—".to_string())
 }
 
 fn render_done(f: &mut Frame, app: &App) {

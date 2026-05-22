@@ -67,3 +67,4 @@ serde_json.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
+time.workspace = true
