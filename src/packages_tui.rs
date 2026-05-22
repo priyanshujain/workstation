@@ -850,6 +850,12 @@ mod tests {
         assert_eq!(format_date(0), "1970-01-01");
     }
 
+    #[test]
+    fn format_date_handles_leap_year() {
+        // 951782400 = 2000-02-29 00:00:00 UTC
+        assert_eq!(format_date(951782400), "2000-02-29");
+    }
+
     fn row(name: &str, kind: EntryKind, deps: Vec<&str>) -> Row {
         let entry = BrewfileEntry {
             kind,
