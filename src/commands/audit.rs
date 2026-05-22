@@ -2,40 +2,8 @@ use console::style;
 use disk::audit::scan_categories;
 use disk::overview::disk_overview;
 use disk::util::format_size;
-use serde::Serialize;
 
-#[derive(Serialize)]
-struct AuditOutput {
-    disk: Option<DiskInfo>,
-    categories: Vec<CategoryInfo>,
-}
-
-#[derive(Serialize)]
-struct DiskInfo {
-    total: u64,
-    used: u64,
-    free: u64,
-}
-
-#[derive(Serialize)]
-struct CategoryInfo {
-    name: String,
-    size: u64,
-    paths: Vec<PathInfo>,
-}
-
-#[derive(Serialize)]
-struct PathInfo {
-    label: String,
-    path: String,
-    size: u64,
-}
-
-pub fn run(json: bool) -> anyhow::Result<()> {
-    if json {
-        return run_json();
-    }
-
+pub fn run_report() -> anyhow::Result<()> {
     println!();
     println!(
         "  {}",
@@ -108,36 +76,6 @@ pub fn run(json: bool) -> anyhow::Result<()> {
         style("total tracked").bold(),
     );
     println!();
-
-    Ok(())
-}
-
-fn run_json() -> anyhow::Result<()> {
-    let disk = disk_overview().map(|o| DiskInfo {
-        total: o.total,
-        used: o.used,
-        free: o.free,
-    });
-
-    let categories = scan_categories()
-        .into_iter()
-        .map(|c| CategoryInfo {
-            name: c.name,
-            size: c.total_size,
-            paths: c
-                .paths
-                .into_iter()
-                .map(|p| PathInfo {
-                    label: p.label,
-                    path: p.path.display().to_string(),
-                    size: p.size,
-                })
-                .collect(),
-        })
-        .collect();
-
-    let output = AuditOutput { disk, categories };
-    println!("{}", serde_json::to_string_pretty(&output)?);
 
     Ok(())
 }

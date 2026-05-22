@@ -50,15 +50,11 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Show disk usage by category
-    Audit {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
+    /// Inspect and clean up disk usage
+    Disk {
+        #[command(subcommand)]
+        sub: DiskCommand,
     },
-
-    /// Interactive TUI for disk cleanup
-    Cleanup,
 
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
     Packages,
@@ -66,6 +62,15 @@ pub enum Commands {
     /// Manage the wsctl binary itself (update, uninstall)
     #[command(name = "self", subcommand)]
     SelfCmd(SelfCommand),
+}
+
+#[derive(Subcommand)]
+pub enum DiskCommand {
+    /// Show disk usage by category (read-only summary)
+    Audit,
+
+    /// Interactive disk cleanup: audit + drill-down + delete in one TUI
+    Cleanup,
 }
 
 #[derive(Subcommand)]
