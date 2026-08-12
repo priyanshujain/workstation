@@ -56,12 +56,43 @@ pub enum Commands {
         sub: DiskCommand,
     },
 
+    /// Remove an application and the support files it leaves behind
+    App {
+        #[command(subcommand)]
+        sub: AppCommand,
+    },
+
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
     Packages,
 
     /// Manage the wsctl binary itself (update, uninstall)
     #[command(name = "self", subcommand)]
     SelfCmd(SelfCommand),
+}
+
+#[derive(Subcommand)]
+pub enum AppCommand {
+    /// Delete an app plus its data, launchd jobs, symlinks and installer receipt
+    Remove {
+        /// App name as it appears in /Applications, or an absolute .app path
+        name: String,
+
+        /// Show what would go without removing anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Erase instead of moving to the Trash
+        #[arg(long)]
+        purge: bool,
+
+        /// Also remove folders named for the app or its vendor
+        #[arg(long)]
+        include_likely: bool,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

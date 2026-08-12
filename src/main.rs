@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{Cli, Commands, DiskCommand, SelfCommand};
+use cli::{AppCommand, Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -54,6 +54,15 @@ fn main() -> anyhow::Result<()> {
                     commands::audit::run_report()?;
                 }
             }
+        },
+        Commands::App { sub } => match sub {
+            AppCommand::Remove {
+                name,
+                dry_run,
+                purge,
+                include_likely,
+                yes,
+            } => commands::app::remove(name, dry_run, purge, include_likely, yes)?,
         },
         Commands::Packages => {
             tui::packages::run()?;
