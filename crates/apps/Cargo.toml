@@ -1,0 +1,19 @@
+[package]
+name = "apps"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Remove a macOS application and the support files it leaves behind"
+
+[dependencies]
+anyhow.workspace = true
+disk.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+trash = "5"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
