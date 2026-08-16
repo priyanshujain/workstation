@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "wsctl")]
-#[command(about = "Workstation controller — manage macOS setup declaratively")]
+#[command(about = "Workstation controller, manage macOS setup declaratively")]
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
@@ -62,6 +62,12 @@ pub enum Commands {
         sub: AppCommand,
     },
 
+    /// Manage the virtual audio devices and the echo-cancelling bridge
+    Audio {
+        #[command(subcommand)]
+        sub: AudioCommand,
+    },
+
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
     Packages,
 
@@ -92,6 +98,63 @@ pub enum AppCommand {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AudioCommand {
+    /// Install the virtual audio devices (asks for sudo, restarts coreaudiod)
+    Install,
+
+    /// Remove the virtual audio devices (asks for sudo, restarts coreaudiod)
+    Uninstall,
+
+    /// Show whether the devices are installed and loaded
+    Status,
+
+    /// List the real devices the bridge can use, by UID
+    Devices,
+
+    /// Run the echo-cancelling bridge until interrupted
+    Bridge {
+        /// UID of the real microphone
+        #[arg(short, long)]
+        input: String,
+
+        /// UID of the real speaker
+        #[arg(short, long)]
+        output: String,
+
+        /// Stop after this many seconds instead of running until interrupted
+        #[arg(long)]
+        seconds: Option<u64>,
+
+        /// Suppress background noise on the microphone with RNNoise
+        #[arg(long)]
+        denoise: bool,
+
+        /// Fade the microphone out below this voice probability, 0 to 1
+        #[arg(long, default_value_t = 0.0)]
+        voice_threshold: f32,
+    },
+
+    /// Measure the real round trip between a speaker and a microphone, out loud
+    Calibrate {
+        /// UID of the real microphone
+        #[arg(short, long)]
+        input: String,
+
+        /// UID of the real speaker
+        #[arg(short, long)]
+        output: String,
+
+        /// How many times to play the probe
+        #[arg(long)]
+        probes: Option<usize>,
+
+        /// Measure and report without saving the correction
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 }
 
