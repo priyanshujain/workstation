@@ -1,0 +1,12 @@
+The bridge links nnnoiseless, a Rust port of Xiph's RNNoise, which is
+BSD-3-Clause:
+
+  Copyright (c) 2020, Joe Neeman
+  Copyright (c) 2017, Mozilla
+  Copyright (c) 2007-2017, Jean-Marc Valin
+  Copyright (c) 2005-2017, Xiph.Org Foundation
+  Copyright (c) 2003-2004, Mark Borgerding
+
+The full text is in the crate's COPYING file. The licence asks only that the
+notice above travels with anything built from it, which is what this file is
+for. It puts no conditions on the rest of this crate.
