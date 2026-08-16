@@ -231,6 +231,8 @@ fn backup_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     #[test]
@@ -448,14 +450,18 @@ mod tests {
         assert_eq!(fs::read_to_string(&file).unwrap(), "brew \"foo\"\n");
     }
 
+    /// A directory of this test's own. The counter is what makes that true:
+    /// the clock alone is not unique enough, since macOS hands out the same
+    /// reading to two threads that ask within the same microsecond, and two
+    /// tests that agreed on a directory then wrote each other's Brewfile. It
+    /// only failed when the suite ran in parallel, which is every time except
+    /// the one where you go looking for it.
     fn tempdir() -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let base = std::env::temp_dir().join(format!(
             "wsctl-brewfile-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&base).unwrap();
         base
