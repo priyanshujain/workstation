@@ -1,0 +1,8 @@
+Project:  BlackHole
+Source:   https://github.com/ExistentialAudio/BlackHole
+Revision: ffcb74433fbcf8c8ca5c736677c1a4864384dc09
+Describe: v0.7.1-4-gffcb744
+License:  GPL-3.0-or-later (see LICENSE)
+
+Vendored unmodified. All customisation is done through -D flags in ../build.sh,
+which the source already guards with #ifndef, so this file needs no patching.
