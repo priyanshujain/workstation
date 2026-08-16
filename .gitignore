@@ -19,3 +19,8 @@ secrets.decrypted.*
 
 .claude/*
 CLAUDE.md
+
+# Personal hardware notes, not for publication yet
+/docs/
+# Built HAL plug-in bundles
+/audio/driver/build/
