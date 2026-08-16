@@ -3,6 +3,7 @@ name = "disk"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Disk overview, audit, and cleanup helpers for wsctl"
 
 [dependencies]

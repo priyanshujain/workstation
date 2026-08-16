@@ -3,6 +3,7 @@ name = "packages"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Package manager resources for wsctl (Homebrew)"
 
 [dependencies]

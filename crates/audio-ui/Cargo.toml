@@ -3,6 +3,7 @@ name = "audio-ui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Menu bar app for picking the bridge endpoints and switching it on"
 
 [[bin]]
