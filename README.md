@@ -7,3 +7,7 @@ A Rust CLI for declaratively managing macOS workstation setup. Define packages, 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/priyanshujain/workstation/main/install.sh | sh
 ```
+
+## Licence
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
