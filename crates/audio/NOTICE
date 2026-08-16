@@ -10,3 +10,5 @@ BSD-3-Clause:
 The full text is in the crate's COPYING file. The licence asks only that the
 notice above travels with anything built from it, which is what this file is
 for. It puts no conditions on the rest of this crate.
+
+This crate itself is GPL-3.0-or-later, like the rest of the repository.
