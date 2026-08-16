@@ -1,0 +1,24 @@
+[package]
+name = "audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Virtual audio devices and the echo-cancelling bridge between them"
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# Pinned: the pipeline API is still moving between patch releases.
+aec3 = "=0.3.2"
+# RNNoise. Default features drag in clap, hound and anyhow for the crate's own
+# command line tool, none of which this wants.
+nnnoiseless = { version = "0.5.2", default-features = false }
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
