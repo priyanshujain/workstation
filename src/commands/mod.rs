@@ -1,5 +1,6 @@
 pub mod app;
 pub mod apply;
+pub mod audio;
 pub mod audit;
 pub mod diff;
 pub mod profiles;

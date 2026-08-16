@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AppCommand, Cli, Commands, DiskCommand, SelfCommand};
+use cli::{AppCommand, AudioCommand, Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -63,6 +63,25 @@ fn main() -> anyhow::Result<()> {
                 include_likely,
                 yes,
             } => commands::app::remove(name, dry_run, purge, include_likely, yes)?,
+        },
+        Commands::Audio { sub } => match sub {
+            AudioCommand::Install => commands::audio::install()?,
+            AudioCommand::Uninstall => commands::audio::uninstall()?,
+            AudioCommand::Status => commands::audio::status()?,
+            AudioCommand::Devices => commands::audio::devices()?,
+            AudioCommand::Bridge {
+                input,
+                output,
+                seconds,
+                denoise,
+                voice_threshold,
+            } => commands::audio::bridge(&input, &output, seconds, denoise, voice_threshold)?,
+            AudioCommand::Calibrate {
+                input,
+                output,
+                probes,
+                dry_run,
+            } => commands::audio::calibrate(&input, &output, probes, dry_run)?,
         },
         Commands::Packages => {
             tui::packages::run()?;
