@@ -1,0 +1,9 @@
+This directory is licensed under the GNU General Public License v3.0.
+
+It vendors and builds BlackHole (c) 2019-2026 Existential Audio Inc., which is
+GPL-3.0-or-later. See vendor/LICENSE for the full text and vendor/UPSTREAM for
+the exact revision.
+
+The rest of this repository is not covered by the GPL. The Rust bridge in
+crates/ runs as a separate process and communicates with these drivers through
+public Core Audio device APIs, so it is not a derivative work.
