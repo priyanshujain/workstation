@@ -3,6 +3,7 @@ name = "audio"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Virtual audio devices and the echo-cancelling bridge between them"
 
 [dependencies]

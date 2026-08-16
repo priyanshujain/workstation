@@ -3,6 +3,7 @@ name = "apps"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Remove a macOS application and the support files it leaves behind"
 
 [dependencies]

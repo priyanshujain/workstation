@@ -14,6 +14,7 @@ members = [
 version = "0.1.2"
 edition = "2024"
 authors = ["pj <ipriyanshujain@gmail.com>"]
+license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 # Core
@@ -54,6 +55,7 @@ name = "wsctl"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Workstation controller, manage macOS setup declaratively"
 
 [[bin]]
