@@ -9,6 +9,7 @@ use ratatui::{Terminal, prelude::CrosstermBackend};
 
 pub mod analyze;
 pub mod cleanup;
+pub mod live;
 pub mod packages;
 pub mod widgets;
 
