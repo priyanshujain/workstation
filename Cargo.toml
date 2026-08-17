@@ -6,6 +6,7 @@ members = [
     "crates/packages",
     "crates/disk",
     "crates/display",
+    "crates/android",
     "crates/apps",
     "crates/audio",
     "crates/audio-ui",
@@ -49,6 +50,7 @@ wsctl-core = { path = "crates/wsctl-core" }
 packages = { path = "crates/packages" }
 disk = { path = "crates/disk" }
 display = { path = "crates/display" }
+android = { path = "crates/android" }
 apps = { path = "crates/apps" }
 audio = { path = "crates/audio" }
 
@@ -66,6 +68,7 @@ path = "src/main.rs"
 
 [dependencies]
 wsctl-core.workspace = true
+android.workspace = true
 apps.workspace = true
 audio.workspace = true
 packages.workspace = true
