@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
+use crate::util::dir_size;
 
 pub struct ScanResult {
     pub path: PathBuf,
@@ -53,7 +53,7 @@ pub fn scan_dir(dir: &Path) -> ScanResult {
         }
 
         let is_dir = file_type.is_dir();
-        let size = subtree_size(&child_path);
+        let size = dir_size(&child_path);
         children.push(ChildEntry {
             name,
             path: child_path,
@@ -70,17 +70,6 @@ pub fn scan_dir(dir: &Path) -> ScanResult {
         total_size,
         children,
     }
-}
-
-fn subtree_size(path: &Path) -> u64 {
-    WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum()
 }
 
 #[cfg(test)]
@@ -138,9 +127,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
 
-        fs::write(root.join("small.bin"), vec![0u8; 100]).unwrap();
-        fs::write(root.join("big.bin"), vec![0u8; 5000]).unwrap();
-        fs::write(root.join("medium.bin"), vec![0u8; 1000]).unwrap();
+        // Sizes a block apart, so the ordering survives block rounding.
+        fs::write(root.join("small.bin"), vec![0u8; 8 * 1024]).unwrap();
+        fs::write(root.join("big.bin"), vec![0u8; 512 * 1024]).unwrap();
+        fs::write(root.join("medium.bin"), vec![0u8; 64 * 1024]).unwrap();
 
         let result = scan_dir(root);
 
