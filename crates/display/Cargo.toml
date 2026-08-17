@@ -1,0 +1,18 @@
+[package]
+name = "display"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pin the macOS main display to a chosen panel across reconnects"
+
+[dependencies]
+wsctl-core.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

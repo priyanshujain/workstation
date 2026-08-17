@@ -5,6 +5,7 @@ members = [
     "crates/wsctl-core",
     "crates/packages",
     "crates/disk",
+    "crates/display",
     "crates/apps",
     "crates/audio",
     "crates/audio-ui",
@@ -47,6 +48,7 @@ crossterm = "0.29"
 wsctl-core = { path = "crates/wsctl-core" }
 packages = { path = "crates/packages" }
 disk = { path = "crates/disk" }
+display = { path = "crates/display" }
 apps = { path = "crates/apps" }
 audio = { path = "crates/audio" }
 
@@ -68,6 +70,7 @@ apps.workspace = true
 audio.workspace = true
 packages.workspace = true
 disk.workspace = true
+display.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 console.workspace = true
