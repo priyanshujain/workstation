@@ -22,6 +22,46 @@ pub enum CleanAction {
     RemoveFile(PathBuf),
     RunCommand(String, Vec<String>),
     RemoveByExtension(PathBuf, String),
+    /// Delete only those immediate children of `dir` that nothing has touched
+    /// in `idle_days` and that no running process is using.
+    ///
+    /// Session scratch areas need this: the directory as a whole is never
+    /// disposable, because some of its children belong to work still running.
+    RemoveIdleChildren {
+        dir: PathBuf,
+        idle_days: u64,
+    },
+}
+
+/// Children of `dir` that are old enough and that nothing is using.
+/// Shared by size estimation and by the delete itself so the number shown
+/// and the set removed cannot drift apart.
+pub fn idle_children(dir: &std::path::Path, idle_days: u64) -> Vec<(PathBuf, u64)> {
+    let live = crate::liveness::Liveness::snapshot();
+    idle_children_with(dir, idle_days, &live)
+}
+
+pub fn idle_children_with(
+    dir: &std::path::Path,
+    idle_days: u64,
+    live: &crate::liveness::Liveness,
+) -> Vec<(PathBuf, u64)> {
+    let now = std::time::SystemTime::now();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| !p.is_symlink())
+        .filter(|p| crate::util::idle_days(p, now).is_some_and(|d| d >= idle_days))
+        .filter(|p| !live.is_busy(p))
+        .map(|p| {
+            let size = dir_size(&p);
+            (p, size)
+        })
+        .collect()
 }
 
 impl Target {
@@ -79,6 +119,16 @@ impl Target {
                     return Err(format!("{cmd} failed: {stderr}"));
                 }
                 Ok(size_before)
+            }
+            CleanAction::RemoveIdleChildren { dir, idle_days } => {
+                // Recomputed here rather than reusing the discovery-time list:
+                // a child that went busy since the scan must survive.
+                let mut freed = 0u64;
+                for (path, size) in idle_children(dir, *idle_days) {
+                    rm_rf(&path)?;
+                    freed += size;
+                }
+                Ok(freed)
             }
             CleanAction::RemoveByExtension(dir, ext) => {
                 let mut freed = 0u64;
@@ -232,6 +282,98 @@ mod tests {
         let result = target.clean();
         assert!(result.is_ok(), "expected ok, got {result:?}");
         assert!(!cache.exists());
+    }
+
+    fn age(path: &std::path::Path, days: u64) {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        let ft = filetime::FileTime::from_system_time(when);
+        for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
+            let _ = filetime::set_file_mtime(entry.path(), ft);
+        }
+    }
+
+    #[test]
+    fn idle_children_picks_only_the_old_ones() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        let stale = root.join("session-stale");
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("blob.bin"), vec![0u8; 4096]).unwrap();
+        age(&stale, 30);
+
+        let fresh = root.join("session-fresh");
+        fs::create_dir(&fresh).unwrap();
+        fs::write(fresh.join("blob.bin"), vec![0u8; 4096]).unwrap();
+
+        let picked = idle_children_with(root, 7, &crate::liveness::Liveness::empty());
+        let names: Vec<String> = picked
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(names, vec!["session-stale"], "got {names:?}");
+    }
+
+    #[test]
+    fn idle_children_never_returns_a_busy_child() {
+        // The exact failure this action exists to prevent: an old-looking
+        // scratch dir that a live process is still working in.
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+
+        let stale = root.join("session-stale");
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("blob.bin"), vec![0u8; 4096]).unwrap();
+        age(&stale, 30);
+
+        // Nothing running: it is a candidate.
+        let free = idle_children_with(&root, 7, &crate::liveness::Liveness::empty());
+        assert_eq!(free.len(), 1, "expected the stale dir to be picked");
+
+        // Same dir, but a process is sitting in it.
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30; true")
+            .current_dir(&stale)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let pid = child.id() as i32;
+        let mut live = crate::liveness::Liveness::snapshot();
+        for _ in 0..40 {
+            if live.is_busy(&stale) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            live = crate::liveness::Liveness::snapshot();
+        }
+
+        let picked = idle_children_with(&root, 7, &live);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(
+            picked.is_empty(),
+            "stale-but-busy dir was offered for deletion (pid {pid}): {picked:?}"
+        );
+    }
+
+    #[test]
+    fn idle_children_ignores_symlinks() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("big.bin"), vec![0u8; 8192]).unwrap();
+        age(outside.path(), 60);
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
+
+        let picked = idle_children_with(root, 7, &crate::liveness::Liveness::empty());
+        assert!(picked.is_empty(), "symlink was followed: {picked:?}");
     }
 
     #[test]

@@ -243,6 +243,10 @@ fn clone_action(action: &CleanAction) -> CleanAction {
         CleanAction::RemoveByExtension(d, e) => {
             CleanAction::RemoveByExtension(d.clone(), e.clone())
         }
+        CleanAction::RemoveIdleChildren { dir, idle_days } => CleanAction::RemoveIdleChildren {
+            dir: dir.clone(),
+            idle_days: *idle_days,
+        },
     }
 }
 
@@ -600,6 +604,7 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
             CleanAction::RemoveFile(_) => "delete file",
             CleanAction::RunCommand(_, _) => "run",
             CleanAction::RemoveByExtension(_, _) => "delete by ext",
+            CleanAction::RemoveIdleChildren { .. } => "delete idle",
         };
         lines.push(Line::from(vec![
             Span::styled(
