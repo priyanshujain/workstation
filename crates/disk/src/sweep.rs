@@ -43,7 +43,9 @@ pub enum Denial {
 }
 
 impl Denial {
-    fn of(error: &std::io::Error) -> Self {
+    /// The one place errno is read. Duplicating this is how the two kinds of
+    /// refusal drift apart and start attracting advice that cannot work.
+    pub fn of(error: &std::io::Error) -> Self {
         match error.raw_os_error() {
             Some(1) => Denial::Protected,
             _ => Denial::Forbidden,
