@@ -30,6 +30,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "android"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "tracing",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,6 +569,9 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "dirs",
+ "filetime",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "walkdir",
@@ -574,6 +585,19 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.11.1",
  "objc2",
+]
+
+[[package]]
+name = "display"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "wsctl-core",
 ]
 
 [[package]]
@@ -660,6 +684,16 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -2901,6 +2935,7 @@ dependencies = [
 name = "wsctl"
 version = "0.1.2"
 dependencies = [
+ "android",
  "anyhow",
  "apps",
  "audio",
@@ -2909,6 +2944,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "disk",
+ "display",
  "indicatif",
  "packages",
  "ratatui",
