@@ -59,6 +59,35 @@ pub struct Unreadable {
     pub denial: Denial,
 }
 
+/// The application Full Disk Access has to be granted to, named the way its
+/// entry in System Settings is.
+///
+/// macOS attaches the grant to the responsible process, which is the terminal
+/// application owning the session and never the `wsctl` binary, so advice that
+/// names anything else is advice that cannot work.
+pub fn full_disk_access_app() -> String {
+    app_name(std::env::var("TERM_PROGRAM").ok().as_deref())
+}
+
+fn app_name(term_program: Option<&str>) -> String {
+    let Some(name) = term_program.map(str::trim).filter(|n| !n.is_empty()) else {
+        return "your terminal app".to_string();
+    };
+    let name = name.strip_suffix(".app").unwrap_or(name);
+    match name {
+        "Apple_Terminal" => "Terminal".to_string(),
+        "vscode" => "VS Code".to_string(),
+        _ if name.chars().any(char::is_uppercase) => name.to_string(),
+        _ => {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => name.to_string(),
+            }
+        }
+    }
+}
+
 /// Exact counts, kept separately from the sample in [`RootUsage::unreadable`]
 /// because that sample is capped. Counting the sample instead would report a
 /// split of the twenty paths that happened to be retained, under a headline
@@ -112,7 +141,15 @@ pub enum Progress {
     /// count of what refused to open: a root that finished at zero bytes with
     /// refusals is unknown, not empty, and a UI has to be able to say so
     /// while the rest of the walk is still running.
-    RootDone { root: usize, denials: Denials },
+    RootDone {
+        root: usize,
+        denials: Denials,
+        /// The root's total, loose files included. Carried here because jobs are
+        /// per subdirectory, so a root that has none never gets a `Scanned`
+        /// event and a live consumer would otherwise have no number for it until
+        /// the whole sweep ended.
+        bytes: u64,
+    },
     /// Nothing new. Emitted every `TICK` so a UI can poll for keys.
     Tick,
 }
@@ -153,6 +190,13 @@ pub struct RootUsage {
     /// already measures these to reach the root total, so keeping them turns
     /// the first level of drill-down into a lookup instead of a second walk.
     pub children: Vec<(PathBuf, u64)>,
+    /// The immediate children whose own directory would not open. Their size is
+    /// neither zero nor merely understated, it is unknown: nothing ever looked
+    /// inside them. `children` cannot say so, because a refused job still
+    /// reports the zero bytes it managed to count, and `unreadable` below is a
+    /// capped sample of refusals at any depth. Immediate children are few, so
+    /// this one is exact and uncapped.
+    pub refused_children: Vec<Unreadable>,
     pub unattributed_total: u64,
     /// Largest immediate children holding unattributed bytes, biggest first.
     pub unattributed: Vec<(PathBuf, u64)>,
@@ -361,6 +405,7 @@ pub fn sweep_streaming(
             && on_progress(Progress::RootDone {
                 root: index,
                 denials: root_denials[index],
+                bytes: root_bytes[index],
             }) == Flow::Cancel
         {
             return None;
@@ -398,6 +443,7 @@ pub fn sweep_streaming(
                     };
                     let total = walker.walk(&job.path, job.rule);
                     let attributed: u64 = walker.rule_sizes.iter().sum();
+                    let refused = walker.refusal_at(&job.path);
                     // A closed receiver means the caller cancelled and went
                     // away; there is nothing useful left to do.
                     if tx
@@ -405,6 +451,7 @@ pub fn sweep_streaming(
                             root: job.root,
                             path: job.path,
                             total,
+                            refused,
                             unattributed: total.saturating_sub(attributed),
                             rule_sizes: walker.rule_sizes,
                             unreadable: walker.unreadable,
@@ -442,6 +489,7 @@ pub fn sweep_streaming(
                         Flow::Continue if finished => on_progress(Progress::RootDone {
                             root,
                             denials: root_denials[root],
+                            bytes: root_bytes[root],
                         }),
                         flow => flow,
                     }
@@ -470,6 +518,9 @@ struct JobResult {
     root: usize,
     path: PathBuf,
     total: u64,
+    /// Set when this child's own directory would not open, as opposed to
+    /// something deeper inside it refusing.
+    refused: Option<Denial>,
     unattributed: u64,
     rule_sizes: Vec<u64>,
     unreadable: Vec<Unreadable>,
@@ -503,18 +554,23 @@ fn plan(
             unreadable: Vec::new(),
         };
 
-        let Ok(meta) = std::fs::metadata(&root.path) else {
-            seeds.push(seed);
-            continue;
+        let meta = match std::fs::metadata(&root.path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                // This returns before the read_dir below, which is the only
+                // other place a refusal gets recorded, so a root nobody is
+                // allowed to stat would otherwise arrive with no bytes AND no
+                // denials: exactly how an empty directory arrives.
+                seed.unreadable.extend(refusal(&root.path, &e));
+                seeds.push(seed);
+                continue;
+            }
         };
         let dev = meta.dev();
         let inherited = by_path.get(root.path.as_path()).copied();
 
         match std::fs::read_dir(&root.path) {
-            Err(e) => seed.unreadable.push(Unreadable {
-                path: root.path.clone(),
-                denial: Denial::of(&e),
-            }),
+            Err(e) => seed.unreadable.extend(refusal(&root.path, &e)),
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -571,6 +627,7 @@ fn collect(
                 path: root.path.clone(),
                 total: seed.loose_bytes,
                 children: Vec::new(),
+                refused_children: Vec::new(),
                 unattributed_total: seed
                     .loose_bytes
                     .saturating_sub(seed.rule_sizes.iter().sum::<u64>()),
@@ -585,6 +642,12 @@ fn collect(
         let Some(root) = usage.get_mut(result.root) else {
             continue;
         };
+        if let Some(denial) = result.refused {
+            root.refused_children.push(Unreadable {
+                path: result.path.clone(),
+                denial,
+            });
+        }
         root.total += result.total;
         root.children.push((result.path.clone(), result.total));
         root.unattributed_total += result.unattributed;
@@ -612,6 +675,18 @@ fn collect(
         roots: usage,
         rule_sizes,
     }
+}
+
+/// Only a refusal is a refusal. `metadata` and `read_dir` fail the same way for
+/// a path that is gone (ENOENT) and for one that is not a directory (ENOTDIR),
+/// and calling either of those a permission problem sends the user off to try
+/// sudo on something sudo cannot fix. A root that is not there holds nothing;
+/// a root that will not open holds an unknown amount.
+fn refusal(path: &Path, error: &std::io::Error) -> Option<Unreadable> {
+    (error.kind() == std::io::ErrorKind::PermissionDenied).then(|| Unreadable {
+        path: path.to_path_buf(),
+        denial: Denial::of(error),
+    })
 }
 
 fn count_denials(entries: &[Unreadable]) -> Denials {
@@ -677,6 +752,19 @@ impl Walker<'_> {
             }
         }
         total
+    }
+
+    /// Why `dir` itself would not open, if it would not.
+    ///
+    /// Only the outermost [`Walker::walk`] can record a refusal at its own
+    /// starting directory; every deeper one records a strict descendant. That is
+    /// what tells "this child is unknown" apart from "this child is measured,
+    /// and understated by something inside it".
+    fn refusal_at(&self, dir: &Path) -> Option<Denial> {
+        self.unreadable
+            .iter()
+            .find(|entry| entry.path == dir)
+            .map(|entry| entry.denial)
     }
 
     fn charge_to(&mut self, meta: &Metadata, rule: Option<usize>) -> u64 {
@@ -894,6 +982,92 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_immediate_child_is_named_as_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // The zero in `children` is the whole bug: a job whose directory would
+        // not open still reports the bytes it could count, which is none of
+        // them, and nothing else in the root said why.
+        let dir = tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        let open = dir.path().join("open");
+        fs::create_dir(&locked).unwrap();
+        fs::create_dir(&open).unwrap();
+        fs::write(locked.join("secret.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::write(open.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let sweep = sweep(&[root("test", dir.path())], &[]);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+
+        let usage = &sweep.roots[0];
+        assert_eq!(usage.refused_children.len(), 1);
+        assert_eq!(usage.refused_children[0].path, locked);
+        assert_eq!(usage.refused_children[0].denial, Denial::Forbidden);
+
+        let sized = usage
+            .children
+            .iter()
+            .find(|(path, _)| *path == locked)
+            .expect("a refused child is still a child");
+        assert!(
+            sized.1 < 64 * 1024,
+            "children reports what the walk could count, which is why it cannot \
+             be the only thing a reader consults: {}",
+            sized.1
+        );
+    }
+
+    #[test]
+    fn a_refusal_deeper_down_leaves_the_child_measured() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // The child opened, so its number is real and merely understated.
+        // Calling it unknown would throw away a measurement.
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("child");
+        let locked = child.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::write(child.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::write(locked.join("secret.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let sweep = sweep(&[root("test", dir.path())], &[]);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+
+        let usage = &sweep.roots[0];
+        assert!(
+            usage.refused_children.is_empty(),
+            "the refusal is a grandchild: {:?}",
+            usage.refused_children
+        );
+        assert_eq!(usage.children.len(), 1);
+        assert!(usage.children[0].1 >= 64 * 1024);
+        assert_eq!(sweep.denials().forbidden, 1, "still reported as a refusal");
+    }
+
+    #[test]
+    fn the_terminal_named_in_the_advice_is_the_one_running_the_scan() {
+        // Full Disk Access attaches to the terminal application owning the
+        // session, so naming anything else is advice that cannot work.
+        assert_eq!(app_name(Some("ghostty")), "Ghostty");
+        assert_eq!(app_name(Some("Apple_Terminal")), "Terminal");
+        assert_eq!(app_name(Some("iTerm.app")), "iTerm");
+        assert_eq!(app_name(Some("vscode")), "VS Code");
+        assert_eq!(app_name(Some("WezTerm")), "WezTerm");
+    }
+
+    #[test]
+    fn advice_stays_generic_when_the_terminal_is_unknown() {
+        assert_eq!(app_name(None), "your terminal app");
+        assert_eq!(app_name(Some("   ")), "your terminal app");
+        assert!(
+            !full_disk_access_app().is_empty(),
+            "the advice always names something"
+        );
+    }
+
+    #[test]
     fn denial_counts_survive_the_sample_cap() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -969,17 +1143,92 @@ mod tests {
         fs::write(dir.path().join("only.bin"), vec![0u8; 64 * 1024]).unwrap();
 
         let mut events = Vec::new();
-        sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+        let swept = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
             events.push(p);
             Flow::Continue
         })
         .unwrap();
 
+        let Some(Progress::RootDone { root: 0, bytes, .. }) = events.get(1) else {
+            panic!(
+                "a root with only loose files never gets a job, so nothing else \
+                 would ever mark it done: {events:?}"
+            );
+        };
+        // Jobs are per subdirectory, so this root emits no Scanned event at all.
+        // Without the bytes on this event a live consumer has nothing to draw
+        // until the whole sweep ends, and had to read the directory again to
+        // find out.
+        assert!(*bytes >= 64 * 1024, "loose files went missing: {bytes}");
+        assert_eq!(*bytes, swept.total());
         assert!(
-            matches!(events.get(1), Some(Progress::RootDone { root: 0, .. })),
-            "a root with only loose files never gets a job, so nothing else \
-             would ever mark it done: {events:?}"
+            !events.iter().any(|e| matches!(e, Progress::Scanned { .. })),
+            "nothing was ever scanned, which is the point: {events:?}"
         );
+    }
+
+    #[test]
+    fn a_root_reports_the_same_bytes_when_it_finishes_as_the_sweep_does() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("loose.bin"), vec![0u8; 32 * 1024]).unwrap();
+        for name in ["a", "b"] {
+            let sub = dir.path().join(name);
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("f.bin"), vec![0u8; 128 * 1024]).unwrap();
+        }
+
+        let mut done = Vec::new();
+        let swept = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+            if let Progress::RootDone { bytes, .. } = p {
+                done.push(bytes);
+            }
+            Flow::Continue
+        })
+        .unwrap();
+
+        assert_eq!(done, vec![swept.roots[0].total]);
+        assert!(done[0] >= 32 * 1024 + 256 * 1024, "{done:?}");
+    }
+
+    #[test]
+    fn a_root_that_cannot_be_stated_is_unknown_rather_than_empty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Stat is refused when a parent directory cannot be traversed, and it is
+        // the first thing the planner does, so this refusal used to be dropped
+        // before the code that records one ever ran. Zero bytes and zero denials
+        // is exactly how an empty directory arrives.
+        let dir = tempdir().unwrap();
+        let closed = dir.path().join("closed");
+        let inside = closed.join("inside");
+        fs::create_dir_all(&inside).unwrap();
+        fs::write(inside.join("f.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut done = Vec::new();
+        let swept = sweep_streaming(&[root("inside", &inside)], &[], &mut |p| {
+            if let Progress::RootDone { denials, bytes, .. } = p {
+                done.push((denials, bytes));
+            }
+            Flow::Continue
+        });
+        let _ = fs::set_permissions(&closed, fs::Permissions::from_mode(0o755));
+
+        let swept = swept.expect("not cancelled");
+        assert_eq!(swept.roots[0].total, 0);
+        assert_eq!(swept.denials().total(), 1, "the refusal must be recorded");
+        assert_eq!(done, vec![(swept.roots[0].denials, 0)]);
+    }
+
+    #[test]
+    fn a_root_that_is_not_there_is_not_a_refusal() {
+        // Nothing to measure and nothing to grant: advice about sudo or Full
+        // Disk Access here would be advice about a path that does not exist.
+        let dir = tempdir().unwrap();
+        let swept = sweep(&[root("gone", &dir.path().join("gone"))], &[]);
+
+        assert_eq!(swept.total(), 0);
+        assert_eq!(swept.denials().total(), 0);
     }
 
     #[test]

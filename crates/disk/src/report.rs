@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{Audit, Category, CategoryPath};
 use crate::projects::{Artifact, Project, ProjectKind};
-use crate::sweep::{RootUsage, Unreadable};
+use crate::sweep::{Denial, Denials, RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 4;
+pub const SCHEMA: u32 = 5;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -37,6 +37,10 @@ pub struct RootSnap {
     pub unattributed_total: u64,
     pub unattributed: Vec<(PathBuf, u64)>,
     pub unreadable: Vec<UnreadableSnap>,
+    /// The immediate children that would not open. Kept apart from the sample
+    /// above because a drill-down has to tell a child of unknown size from one
+    /// measured at zero, and `children` records the second for both.
+    pub refused_children: Vec<UnreadableSnap>,
     /// Exact counts, which the capped sample above cannot supply.
     pub protected_count: usize,
     pub forbidden_count: usize,
@@ -119,21 +123,11 @@ impl Report {
                 path: r.path.clone(),
                 total: r.total,
                 children: r.children.clone(),
+                refused_children: refusals(&r.refused_children),
                 unattributed_total: r.unattributed_total,
                 unattributed: r.unattributed.clone(),
-                unreadable: r
-                    .unreadable
-                    .iter()
-                    .map(|u| Unreadable {
-                        path: u.path.clone(),
-                        denial: if u.protected {
-                            crate::sweep::Denial::Protected
-                        } else {
-                            crate::sweep::Denial::Forbidden
-                        },
-                    })
-                    .collect(),
-                denials: crate::sweep::Denials {
+                unreadable: refusals(&r.unreadable),
+                denials: Denials {
                     protected: r.protected_count,
                     forbidden: r.forbidden_count,
                 },
@@ -180,6 +174,30 @@ impl Report {
     }
 }
 
+fn refusals(entries: &[UnreadableSnap]) -> Vec<Unreadable> {
+    entries
+        .iter()
+        .map(|u| Unreadable {
+            path: u.path.clone(),
+            denial: if u.protected {
+                Denial::Protected
+            } else {
+                Denial::Forbidden
+            },
+        })
+        .collect()
+}
+
+fn snapshot(entries: Vec<Unreadable>) -> Vec<UnreadableSnap> {
+    entries
+        .into_iter()
+        .map(|u| UnreadableSnap {
+            protected: u.denial == Denial::Protected,
+            path: u.path,
+        })
+        .collect()
+}
+
 fn changed_since(path: &Path, cutoff: SystemTime) -> bool {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
@@ -198,13 +216,13 @@ pub fn load(now: SystemTime) -> Option<Report> {
     let path = cache_path()?;
     let bytes = std::fs::read(&path).ok()?;
     let report: Report = serde_json::from_slice(&bytes).ok()?;
-    if report.schema != SCHEMA {
-        return None;
-    }
-    if report.age(now) > MAX_AGE {
-        return None;
-    }
-    Some(report)
+    usable(&report, now).then_some(report)
+}
+
+/// A cache written by any other version of the shape is discarded rather than
+/// migrated, so a field added below can be trusted to be there.
+fn usable(report: &Report, now: SystemTime) -> bool {
+    report.schema == SCHEMA && report.age(now) <= MAX_AGE
 }
 
 pub fn save(report: &Report) -> std::io::Result<()> {
@@ -227,7 +245,18 @@ pub fn save(report: &Report) -> std::io::Result<()> {
 /// Walk the disk and build a fresh report. This is the slow path, tens of
 /// seconds, and is what the scheduled refresh runs.
 pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report {
-    let audit = crate::audit::scan();
+    from_audit(crate::audit::scan(), project_roots, max_depth, now)
+}
+
+/// The same report from a measurement that has already been taken, so a caller
+/// that walked the volume itself can write the cache back instead of walking it
+/// a second time.
+pub fn from_audit(
+    audit: Audit,
+    project_roots: &[PathBuf],
+    max_depth: usize,
+    now: SystemTime,
+) -> Report {
     let roots = audit
         .roots
         .into_iter()
@@ -236,16 +265,10 @@ pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) ->
             path: r.path,
             total: r.total,
             children: r.children,
+            refused_children: snapshot(r.refused_children),
             unattributed_total: r.unattributed_total,
             unattributed: r.unattributed,
-            unreadable: r
-                .unreadable
-                .into_iter()
-                .map(|u| UnreadableSnap {
-                    protected: u.denial == crate::sweep::Denial::Protected,
-                    path: u.path,
-                })
-                .collect(),
+            unreadable: snapshot(r.unreadable),
             protected_count: r.denials.protected,
             forbidden_count: r.denials.forbidden,
         })
@@ -442,6 +465,61 @@ mod tests {
         let json = serde_json::to_vec(&report).unwrap();
         let parsed: Report = serde_json::from_slice(&json).unwrap();
         assert_ne!(parsed.schema, SCHEMA, "guard must reject this");
+        assert!(!usable(&parsed, SystemTime::now()));
+    }
+
+    #[test]
+    fn a_cache_at_the_previous_schema_is_rejected() {
+        // The refused children were added at schema 5. A cache written before
+        // them has no way to say that a child is unknown rather than zero, so it
+        // is discarded rather than read with the field defaulted away.
+        let mut report = report_at(60);
+        report.schema = SCHEMA - 1;
+        assert!(!usable(&report, SystemTime::now()));
+    }
+
+    #[test]
+    fn a_report_at_the_new_schema_round_trips_its_refused_children() {
+        let mut report = report_at(60);
+        report.roots = vec![RootSnap {
+            name: "Home".into(),
+            path: PathBuf::from("/Users/x"),
+            total: 8192,
+            children: vec![(PathBuf::from("/Users/x/.Trash"), 0)],
+            refused_children: vec![UnreadableSnap {
+                path: PathBuf::from("/Users/x/.Trash"),
+                protected: true,
+            }],
+            unattributed_total: 0,
+            unattributed: Vec::new(),
+            unreadable: vec![UnreadableSnap {
+                path: PathBuf::from("/Users/x/deep/locked"),
+                protected: false,
+            }],
+            protected_count: 1,
+            forbidden_count: 1,
+        }];
+
+        let json = serde_json::to_vec(&report).unwrap();
+        let back: Report = serde_json::from_slice(&json).unwrap();
+        assert!(usable(&back, SystemTime::now()));
+
+        let root = &back.to_roots()[0];
+        assert_eq!(root.refused_children.len(), 1);
+        assert_eq!(root.refused_children[0].denial, Denial::Protected);
+        assert_eq!(root.unreadable[0].denial, Denial::Forbidden);
+        assert_eq!(
+            root.denials,
+            Denials {
+                protected: 1,
+                forbidden: 1
+            }
+        );
+        assert_eq!(
+            root.children,
+            vec![(PathBuf::from("/Users/x/.Trash"), 0)],
+            "the zero stays where it was; the refusal is what reads it right"
+        );
     }
 
     #[test]
