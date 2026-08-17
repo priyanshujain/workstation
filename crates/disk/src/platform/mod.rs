@@ -16,6 +16,16 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
 }
 
 #[cfg(target_os = "macos")]
+pub fn cleanable_paths() -> Vec<(&'static str, &'static str, PathBuf)> {
+    macos::cleanable_paths()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn cleanable_paths() -> Vec<(&'static str, &'static str, PathBuf)> {
+    Vec::new()
+}
+
+#[cfg(target_os = "macos")]
 pub fn cleanup_targets() -> Vec<Target> {
     macos::cleanup_targets()
 }
