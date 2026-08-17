@@ -1,9 +1,21 @@
 use crate::builder::Workstation;
+use display::DisplayKey;
+
+/// The HDMI-fed P2419H, EDID serial 36574c42. The panel table in docs/displays.md maps
+/// this to the physical monitor.
+const MAIN_MONITOR: DisplayKey = DisplayKey {
+    vendor: 4268,
+    model: 53466,
+    serial: 911690818,
+};
 
 pub fn config() -> Workstation {
     Workstation::builder("pj-workstation")
         .scope("personal", |s| {
             s
+                // --- Displays ---
+                .main_display(MAIN_MONITOR)
+                .separate_display_spaces()
                 // --- CLI Tools ---
                 .brew_formula("git")
                 .brew_formula("ripgrep")
@@ -95,6 +107,28 @@ mod tests {
     }
 
     #[test]
+    fn test_main_display_is_declared() {
+        let workstation = config();
+        let graph = workstation.build_graph("personal-macbook").unwrap();
+        assert!(
+            graph
+                .resource_ids()
+                .any(|id| id.kind == "display::main" && id.name == MAIN_MONITOR.to_string()),
+            "the pinned monitor should be part of the applied profile"
+        );
+    }
+
+    #[test]
+    fn test_separate_spaces_is_declared() {
+        let workstation = config();
+        let graph = workstation.build_graph("personal-macbook").unwrap();
+        assert!(
+            graph.resource_ids().any(|id| id.kind == "display::spaces"),
+            "a swipe must move one screen, so this cannot be left to System Settings"
+        );
+    }
+
+    #[test]
     fn test_scopes_exist() {
         let workstation = config();
         let scopes = workstation.scope_names();
@@ -106,13 +140,13 @@ mod tests {
     fn test_build_graph_personal() {
         let workstation = config();
         let graph = workstation.build_graph("personal-macbook").unwrap();
-        assert_eq!(graph.len(), 50);
+        assert_eq!(graph.len(), 52);
     }
 
     #[test]
     fn test_build_graph_work() {
         let workstation = config();
         let graph = workstation.build_graph("work-macbook").unwrap();
-        assert_eq!(graph.len(), 52);
+        assert_eq!(graph.len(), 54);
     }
 }

@@ -1,3 +1,4 @@
+use display::{DisplayKey, MainDisplay, SeparateSpaces};
 use packages::brew::{Cask, Formula};
 use std::sync::Arc;
 use wsctl_core::{Profile, Resource, ResourceGraph, Result, Scope, ScopedResources};
@@ -109,6 +110,18 @@ impl ScopeBuilder {
         for name in names {
             self.scope.add(Cask::new(name));
         }
+        self
+    }
+
+    /// Pin the panel that keeps the menu bar, and run a watcher to hold it there.
+    pub fn main_display(mut self, key: DisplayKey) -> Self {
+        self.scope.add(MainDisplay::new(key));
+        self
+    }
+
+    /// Keep every panel on its own Spaces, so a swipe moves one screen and not both.
+    pub fn separate_display_spaces(mut self) -> Self {
+        self.scope.add(SeparateSpaces);
         self
     }
 
