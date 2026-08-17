@@ -106,8 +106,11 @@ pub enum Progress {
         root_bytes: u64,
         remaining: usize,
     },
-    /// Every job for this root is in. Its number is final.
-    RootDone { root: usize },
+    /// Every job for this root is in. Its number is final, and so is the
+    /// count of what refused to open: a root that finished at zero bytes with
+    /// refusals is unknown, not empty, and a UI has to be able to say so
+    /// while the rest of the walk is still running.
+    RootDone { root: usize, denials: Denials },
     /// Nothing new. Emitted every `TICK` so a UI can poll for keys.
     Tick,
 }
@@ -144,6 +147,10 @@ pub struct RootUsage {
     pub name: String,
     pub path: PathBuf,
     pub total: u64,
+    /// Every immediate child with its subtree size, biggest first. The walk
+    /// already measures these to reach the root total, so keeping them turns
+    /// the first level of drill-down into a lookup instead of a second walk.
+    pub children: Vec<(PathBuf, u64)>,
     pub unattributed_total: u64,
     /// Largest immediate children holding unattributed bytes, biggest first.
     pub unattributed: Vec<(PathBuf, u64)>,
@@ -222,7 +229,27 @@ pub fn discover_roots() -> Vec<Root> {
     if roots.is_empty() {
         roots = user_roots();
     }
+    roots.sort_by_key(|r| (display_rank(&r.name), r.name.clone()));
     roots
+}
+
+/// Discovery order is the volume's own, which puts `cores`, `mnt` and `pkg`
+/// above the home directory. Anything reading top to bottom wants the
+/// opposite, so rank the ones worth looking at first and let the rest fall in
+/// alphabetically behind them.
+fn display_rank(name: &str) -> u8 {
+    match name {
+        "Home" => 0,
+        "User Library" => 1,
+        "Applications" => 2,
+        "System Library" => 3,
+        "opt" => 4,
+        "System data" => 5,
+        "System runtime" => 6,
+        "usr" => 7,
+        "Other users" => 8,
+        _ => 9,
+    }
 }
 
 /// Home split from `~/Library`: they are the two biggest things on a
@@ -310,6 +337,11 @@ pub fn sweep_streaming(
     // Loose files are already measured, so a root with nothing but files is
     // final before a single worker starts.
     let mut root_bytes: Vec<u64> = units.roots.iter().map(|s| s.loose_bytes).collect();
+    let mut root_denials: Vec<Denials> = units
+        .roots
+        .iter()
+        .map(|s| count_denials(&s.unreadable))
+        .collect();
     let mut root_pending = vec![0usize; roots.len()];
     for job in &units.jobs {
         root_pending[job.root] += 1;
@@ -323,7 +355,12 @@ pub fn sweep_streaming(
         return None;
     }
     for (index, pending) in root_pending.iter().enumerate() {
-        if *pending == 0 && on_progress(Progress::RootDone { root: index }) == Flow::Cancel {
+        if *pending == 0
+            && on_progress(Progress::RootDone {
+                root: index,
+                denials: root_denials[index],
+            }) == Flow::Cancel
+        {
             return None;
         }
     }
@@ -387,6 +424,7 @@ pub fn sweep_streaming(
                 Ok(result) => {
                     remaining -= 1;
                     root_bytes[result.root] += result.total;
+                    root_denials[result.root].merge(count_denials(&result.unreadable));
                     root_pending[result.root] -= 1;
                     let finished = root_pending[result.root] == 0;
                     let progress = Progress::Scanned {
@@ -399,7 +437,10 @@ pub fn sweep_streaming(
                     results.push(result);
                     match on_progress(progress) {
                         Flow::Cancel => Flow::Cancel,
-                        Flow::Continue if finished => on_progress(Progress::RootDone { root }),
+                        Flow::Continue if finished => on_progress(Progress::RootDone {
+                            root,
+                            denials: root_denials[root],
+                        }),
                         flow => flow,
                     }
                 }
@@ -527,6 +568,7 @@ fn collect(
                 name: root.name.clone(),
                 path: root.path.clone(),
                 total: seed.loose_bytes,
+                children: Vec::new(),
                 unattributed_total: seed
                     .loose_bytes
                     .saturating_sub(seed.rule_sizes.iter().sum::<u64>()),
@@ -542,6 +584,7 @@ fn collect(
             continue;
         };
         root.total += result.total;
+        root.children.push((result.path.clone(), result.total));
         root.unattributed_total += result.unattributed;
         if result.unattributed > 0 {
             root.unattributed.push((result.path, result.unattributed));
@@ -558,6 +601,8 @@ fn collect(
     }
 
     for root in usage.iter_mut() {
+        root.children
+            .sort_by_key(|(_, size)| std::cmp::Reverse(*size));
         root.unattributed
             .sort_by_key(|(_, size)| std::cmp::Reverse(*size));
     }
@@ -696,6 +741,30 @@ mod tests {
             sweep.unattributed() >= 256 * 1024,
             "unattributed {}",
             sweep.unattributed()
+        );
+    }
+
+    #[test]
+    fn every_immediate_child_is_kept_with_its_size() {
+        // Drilling one level should not need a second walk: the sweep already
+        // measured each child to arrive at the root total.
+        let dir = tempdir().unwrap();
+        for (name, size) in [("big", 512 * 1024), ("small", 16 * 1024)] {
+            let sub = dir.path().join(name);
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("f.bin"), vec![0u8; size]).unwrap();
+        }
+
+        let sweep = sweep(&[root("test", dir.path())], &[]);
+        let children = &sweep.roots[0].children;
+
+        assert_eq!(children.len(), 2);
+        assert!(children[0].0.ends_with("big"), "not biggest first");
+        assert!(children[0].1 >= 512 * 1024);
+        assert_eq!(
+            children.iter().map(|(_, s)| s).sum::<u64>(),
+            sweep.roots[0].total,
+            "the children must account for the root"
         );
     }
 
@@ -905,7 +974,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            matches!(events.get(1), Some(Progress::RootDone { root: 0 })),
+            matches!(events.get(1), Some(Progress::RootDone { root: 0, .. })),
             "a root with only loose files never gets a job, so nothing else \
              would ever mark it done: {events:?}"
         );
@@ -990,5 +1059,21 @@ mod tests {
         let roots = discover_roots();
         assert!(roots.iter().any(|r| r.name == "Home"));
         assert!(roots.iter().any(|r| r.name == "User Library"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_roots_worth_reading_come_first() {
+        // The volume lists cores, mnt and pkg before Users. Anything reading
+        // top to bottom wants the home directory first.
+        let names: Vec<String> = discover_roots().into_iter().map(|r| r.name).collect();
+        assert_eq!(names[0], "Home");
+        assert_eq!(names[1], "User Library");
+        let home = names.iter().position(|n| n == "Home").unwrap();
+        for trivial in ["cores", "mnt", "pkg"] {
+            if let Some(at) = names.iter().position(|n| n == trivial) {
+                assert!(at > home, "{trivial} ranked above Home");
+            }
+        }
     }
 }

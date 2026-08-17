@@ -9,7 +9,7 @@ use crate::sweep::{RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -33,6 +33,7 @@ pub struct RootSnap {
     pub name: String,
     pub path: PathBuf,
     pub total: u64,
+    pub children: Vec<(PathBuf, u64)>,
     pub unattributed_total: u64,
     pub unattributed: Vec<(PathBuf, u64)>,
     pub unreadable: Vec<UnreadableSnap>,
@@ -117,6 +118,7 @@ impl Report {
                 name: r.name.clone(),
                 path: r.path.clone(),
                 total: r.total,
+                children: r.children.clone(),
                 unattributed_total: r.unattributed_total,
                 unattributed: r.unattributed.clone(),
                 unreadable: r
@@ -233,6 +235,7 @@ pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) ->
             name: r.name,
             path: r.path,
             total: r.total,
+            children: r.children,
             unattributed_total: r.unattributed_total,
             unattributed: r.unattributed,
             unreadable: r

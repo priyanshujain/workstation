@@ -16,7 +16,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use disk::audit::attribution_rules;
 use disk::overview::disk_overview;
 use disk::scan::{ScanResult, scan_dir};
-use disk::sweep::{self, Denial, Flow, Progress, Sweep};
+use disk::sweep::{self, Flow, Progress, Sweep};
 use disk::util::format_size;
 use ratatui::{prelude::*, widgets::*};
 
@@ -218,9 +218,11 @@ impl App {
                 }
                 self.jobs_left = remaining;
             }
-            Progress::RootDone { root } => {
+            Progress::RootDone { root, denials } => {
                 if let Some(row) = self.rows.get_mut(root) {
                     row.done = true;
+                    row.protected = denials.protected;
+                    row.forbidden = denials.forbidden;
                 }
             }
             Progress::Tick => {}
@@ -236,10 +238,14 @@ impl App {
                 path: usage.path.clone(),
                 bytes: usage.total,
                 done: true,
-                protected: denied(usage, Denial::Protected),
-                forbidden: denied(usage, Denial::Forbidden),
+                protected: usage.denials.protected,
+                forbidden: usage.denials.forbidden,
             })
             .collect();
+        // A root that finished at zero with nothing refused really is empty,
+        // and an empty row is not somewhere to explore.
+        self.rows
+            .retain(|r| r.bytes > 0 || r.protected + r.forbidden > 0);
         self.rows.sort_by_key(|r| std::cmp::Reverse(r.bytes));
         self.stop();
     }
@@ -268,14 +274,6 @@ impl App {
             trail.join(" > ")
         }
     }
-}
-
-fn denied(usage: &sweep::RootUsage, denial: Denial) -> usize {
-    usage
-        .unreadable
-        .iter()
-        .filter(|u| u.denial == denial)
-        .count()
 }
 
 fn bar_width(value: u64, max: u64, width: usize) -> usize {
@@ -600,7 +598,7 @@ fn render_measuring(f: &mut Frame, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use disk::sweep::{Denials, Root, RootUsage, Unreadable};
+    use disk::sweep::{Denial, Denials, Root, RootUsage, Unreadable};
     use ratatui::backend::TestBackend;
     use std::path::Path;
 
@@ -652,7 +650,10 @@ mod tests {
             root_bytes: bytes,
             remaining: 0,
         });
-        app.apply(Progress::RootDone { root: index });
+        app.apply(Progress::RootDone {
+            root: index,
+            denials: Denials::default(),
+        });
     }
 
     #[test]
@@ -755,14 +756,21 @@ mod tests {
     }
 
     #[test]
-    fn a_readable_empty_root_is_still_zero() {
-        let mut app = started(&["Empty"]);
+    fn a_readable_empty_root_is_dropped_rather_than_shown_as_zero() {
+        // Nothing to explore and nothing to reclaim, so the row is noise.
+        // The refused-and-zero case above must survive this same filter,
+        // because there the zero is an absence of knowledge.
+        let mut app = started(&["Empty", "Real"]);
         app.finish(Sweep {
-            roots: vec![usage("Empty", 0, Vec::new())],
+            roots: vec![
+                usage("Empty", 0, Vec::new()),
+                usage("Real", 4096, Vec::new()),
+            ],
             rule_sizes: Vec::new(),
         });
 
-        assert_eq!(app.entries()[0].measure.label(), format_size(0));
+        let names: Vec<&str> = app.entries().iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["Real"]);
     }
 
     #[test]

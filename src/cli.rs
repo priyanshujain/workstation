@@ -237,6 +237,9 @@ pub enum DiskCommand {
         no_cache: bool,
     },
 
+    /// Browse disk usage in a TUI that fills in live as it measures
+    Analyze,
+
     /// Interactive disk cleanup: audit + drill-down + delete in one TUI
     Cleanup,
 
