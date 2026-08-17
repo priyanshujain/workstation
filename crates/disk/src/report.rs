@@ -1,3 +1,5 @@
+use std::ffi::{CStr, CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -204,10 +206,158 @@ fn changed_since(path: &Path, cutoff: SystemTime) -> bool {
         .is_ok_and(|m| m > cutoff)
 }
 
-pub fn cache_path() -> Option<PathBuf> {
+/// How this process was invoked, as far as the cache is concerned. Read from
+/// the environment once and carried as data so every decision below can be
+/// tested without root.
+#[derive(Debug, Clone, Default)]
+struct Invocation {
+    euid: u32,
+    sudo_user: Option<String>,
+    sudo_uid: Option<String>,
+    sudo_gid: Option<String>,
+}
+
+/// The user a privileged run is acting for, and who it owes the cache back to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Handback {
+    user: String,
+    home: PathBuf,
+    uid: u32,
+    gid: Option<u32>,
+}
+
+impl Invocation {
+    fn current() -> Self {
+        Self {
+            // SAFETY: geteuid cannot fail and reads no memory we pass in.
+            euid: unsafe { libc::geteuid() },
+            sudo_user: env_var("SUDO_USER"),
+            sudo_uid: env_var("SUDO_UID"),
+            sudo_gid: env_var("SUDO_GID"),
+        }
+    }
+
+    /// Root, reached through sudo from somebody else's account. Plain root is
+    /// a different situation: it owns its own cache and keeps today's path.
+    fn under_sudo(&self) -> bool {
+        self.euid == 0 && self.sudo_user.as_deref().is_some_and(|u| u != "root")
+    }
+}
+
+fn env_var(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn parse_id(raw: &str) -> Option<u32> {
+    raw.trim().parse().ok()
+}
+
+/// Who a privileged run has to hand the cache back to, or `None` when this is
+/// an ordinary run and there is nothing to hand back.
+///
+/// One decision drives both the path and the ownership, so a run that cannot
+/// work out the invoking user does not redirect the write either: it degrades
+/// to exactly today's behaviour instead of to a guess.
+fn handback(inv: &Invocation, home_of: impl Fn(&str) -> Option<PathBuf>) -> Option<Handback> {
+    if !inv.under_sudo() {
+        return None;
+    }
+    let user = inv.sudo_user.clone()?;
+
+    let uid = inv
+        .sudo_uid
+        .as_deref()
+        .and_then(parse_id)
+        .filter(|id| *id != 0);
+    let Some(uid) = uid else {
+        tracing::warn!(
+            "running under sudo as {user} but SUDO_UID is {}: the disk report cache stays where root put it and may need a chown",
+            inv.sudo_uid.as_deref().unwrap_or("unset")
+        );
+        return None;
+    };
+
+    let Some(home) = home_of(&user).filter(|h| h.is_absolute()) else {
+        tracing::warn!(
+            "running under sudo as {user} but that account has no home directory here: the disk report cache stays where root put it and may need a chown"
+        );
+        return None;
+    };
+
+    let gid = inv.sudo_gid.as_deref().and_then(parse_id);
+    if gid.is_none() && inv.sudo_gid.is_some() {
+        tracing::warn!("SUDO_GID is not a number, so the group of the disk report is left alone");
+    }
+
+    Some(Handback {
+        user,
+        home,
+        uid,
+        gid,
+    })
+}
+
+/// `dirs::data_dir()` for a home other than this process's own, which is the
+/// entire point: under sudo `$HOME` is either the user's or `/var/root` and
+/// there is no way to tell which from inside.
+fn data_dir_in(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library").join("Application Support")
+    } else {
+        home.join(".local").join("share")
+    }
+}
+
+fn cache_path_with(handback: Option<&Handback>) -> Option<PathBuf> {
     // Application Support, deliberately not Caches: wsctl's own cleanup
     // empties Caches, which would have it delete its own report.
-    Some(dirs::data_dir()?.join("wsctl").join("disk-report.json"))
+    let data = match handback {
+        Some(hb) => data_dir_in(&hb.home),
+        None => dirs::data_dir()?,
+    };
+    Some(data.join("wsctl").join("disk-report.json"))
+}
+
+fn cache_path_for(inv: &Invocation, home_of: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    cache_path_with(handback(inv, home_of).as_ref())
+}
+
+/// The invoking user's home, from the password database rather than `$HOME`.
+/// `None` unless it resolves to a directory that exists.
+fn existing_home(user: &str) -> Option<PathBuf> {
+    let name = CString::new(user).ok()?;
+    // SAFETY: getpwnam returns null or a pointer to a static passwd whose
+    // fields are copied out here, before any other libc call can reuse it.
+    let home = unsafe {
+        let pw = libc::getpwnam(name.as_ptr());
+        if pw.is_null() || (*pw).pw_dir.is_null() {
+            return None;
+        }
+        PathBuf::from(OsStr::from_bytes(CStr::from_ptr((*pw).pw_dir).to_bytes()))
+    };
+    home.is_dir().then_some(home)
+}
+
+pub fn cache_path() -> Option<PathBuf> {
+    cache_path_for(&Invocation::current(), existing_home)
+}
+
+/// One line saying how a privileged run differs from an ordinary one, or
+/// `None` when it does not. Callers print it so the redirect is never silent.
+pub fn privileged_notice() -> Option<String> {
+    let hb = handback(&Invocation::current(), existing_home)?;
+    let path = cache_path_with(Some(&hb))?;
+    let gid = hb.gid.map_or_else(|| "-".to_string(), |g| g.to_string());
+    Some(format!(
+        "running as root under sudo: the disk report goes to {} and is handed back to {} ({}:{})",
+        path.display(),
+        hb.user,
+        hb.uid,
+        gid
+    ))
 }
 
 /// Read the cache. `None` for missing, unreadable, corrupt, wrong schema, or
@@ -226,11 +376,34 @@ fn usable(report: &Report, now: SystemTime) -> bool {
 }
 
 pub fn save(report: &Report) -> std::io::Result<()> {
-    let Some(path) = cache_path() else {
+    let handback = handback(&Invocation::current(), existing_home);
+    let Some(path) = cache_path_with(handback.as_ref()) else {
         return Ok(());
     };
+    write_cache(&path, report, handback.as_ref())
+}
+
+/// `sudo wsctl disk audit` writes into the user's own home as root. Anything
+/// left there owned by root outlives the run: the unprivileged runs that
+/// follow cannot rewrite a root-owned temp file, and cannot write into a
+/// root-owned directory at all. So a privileged run gives back everything it
+/// creates, and takes its temp file with it if it fails.
+fn write_cache(path: &Path, report: &Report, handback: Option<&Handback>) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
+        // Every directory this run brings into existence, plus the one the
+        // report lands in: an earlier privileged run may have left that one
+        // owned by root, and this is where that gets repaired.
+        let created: Vec<PathBuf> = parent
+            .ancestors()
+            .skip(1)
+            .take_while(|a| !a.exists())
+            .map(PathBuf::from)
+            .collect();
         std::fs::create_dir_all(parent)?;
+        give_back(parent, handback);
+        for dir in created {
+            give_back(&dir, handback);
+        }
     }
     let json = serde_json::to_vec_pretty(report)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -238,8 +411,43 @@ pub fn save(report: &Report) -> std::io::Result<()> {
     // Write-then-rename so a crash mid-write cannot leave a half-parsed file
     // that every later read has to reject.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, &path)
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        discard(&tmp);
+        return Err(e);
+    }
+    // Handed back before the rename, so the report is never visible at its
+    // real path still owned by root.
+    give_back(&tmp, handback);
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        discard(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn discard(tmp: &Path) {
+    let _ = std::fs::remove_file(tmp);
+}
+
+/// Never fatal: a filesystem that will not chown costs the user a manual fix,
+/// not the scan they just waited for.
+fn give_back(path: &Path, handback: Option<&Handback>) {
+    let Some(hb) = handback else {
+        return;
+    };
+    if let Err(e) = std::os::unix::fs::chown(path, Some(hb.uid), hb.gid) {
+        let gid = hb.gid.map_or_else(|| "-".to_string(), |g| g.to_string());
+        tracing::warn!(
+            "could not give {} back to {} ({}:{}): {e}. Later runs may need: sudo chown {}:{} {}",
+            path.display(),
+            hb.user,
+            hb.uid,
+            gid,
+            hb.uid,
+            gid,
+            path.display()
+        );
+    }
 }
 
 /// Walk the disk and build a fresh report. This is the slow path, tens of
@@ -537,6 +745,243 @@ mod tests {
             "{}",
             path.display()
         );
+    }
+
+    fn sudo(uid: Option<&str>, gid: Option<&str>) -> Invocation {
+        Invocation {
+            euid: 0,
+            sudo_user: Some("invoker".into()),
+            sudo_uid: uid.map(Into::into),
+            sudo_gid: gid.map(Into::into),
+        }
+    }
+
+    fn home_of_invoker(user: &str) -> Option<PathBuf> {
+        (user == "invoker").then(|| PathBuf::from("/Users/invoker"))
+    }
+
+    fn todays_path() -> PathBuf {
+        dirs::data_dir()
+            .expect("a data dir")
+            .join("wsctl")
+            .join("disk-report.json")
+    }
+
+    #[test]
+    fn a_sudo_run_writes_into_the_invoking_users_home() {
+        let path = cache_path_for(&sudo(Some("501"), Some("20")), home_of_invoker).unwrap();
+
+        assert!(
+            path.starts_with("/Users/invoker"),
+            "went to {} instead of the invoking user's home",
+            path.display()
+        );
+        assert!(
+            path.ends_with("wsctl/disk-report.json"),
+            "{}",
+            path.display()
+        );
+        assert_ne!(
+            path,
+            todays_path(),
+            "the path must come from SUDO_USER, not from whatever HOME says"
+        );
+        assert!(!path.starts_with("/var/root"));
+    }
+
+    #[test]
+    fn an_ordinary_run_keeps_todays_path() {
+        let plain = Invocation {
+            euid: 501,
+            ..Invocation::default()
+        };
+        assert_eq!(
+            cache_path_for(&plain, home_of_invoker).unwrap(),
+            todays_path()
+        );
+        assert!(handback(&plain, home_of_invoker).is_none());
+    }
+
+    #[test]
+    fn an_unprivileged_shell_carrying_sudo_variables_is_not_a_sudo_run() {
+        // `sudo -u someone bash` leaves SUDO_* set for everything run inside
+        // it. Without euid 0 there is nothing to hand back and nothing to move.
+        let inv = Invocation {
+            euid: 501,
+            ..sudo(Some("501"), Some("20"))
+        };
+        assert!(handback(&inv, home_of_invoker).is_none());
+        assert_eq!(
+            cache_path_for(&inv, home_of_invoker).unwrap(),
+            todays_path()
+        );
+    }
+
+    #[test]
+    fn plain_root_and_sudo_from_root_keep_todays_behaviour() {
+        for user in [None, Some("root")] {
+            let inv = Invocation {
+                euid: 0,
+                sudo_user: user.map(Into::into),
+                sudo_uid: Some("0".into()),
+                sudo_gid: Some("0".into()),
+            };
+            assert!(handback(&inv, home_of_invoker).is_none(), "{user:?}");
+            assert_eq!(
+                cache_path_for(&inv, home_of_invoker).unwrap(),
+                todays_path(),
+                "{user:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unusable_sudo_uid_falls_back_instead_of_panicking() {
+        for uid in [None, Some(""), Some("nine hundred"), Some("0")] {
+            let inv = sudo(uid, Some("20"));
+            assert!(handback(&inv, home_of_invoker).is_none(), "{uid:?}");
+            assert_eq!(
+                cache_path_for(&inv, home_of_invoker).unwrap(),
+                todays_path(),
+                "{uid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_home_that_does_not_resolve_falls_back() {
+        let inv = sudo(Some("501"), Some("20"));
+        assert!(handback(&inv, |_| None).is_none());
+        assert!(handback(&inv, |_| Some(PathBuf::from("relative/home"))).is_none());
+        assert_eq!(cache_path_for(&inv, |_| None).unwrap(), todays_path());
+    }
+
+    #[test]
+    fn the_handback_carries_the_invoking_users_ids() {
+        let hb = handback(&sudo(Some("501"), Some("20")), home_of_invoker).unwrap();
+        assert_eq!(hb.uid, 501);
+        assert_eq!(hb.gid, Some(20));
+        assert_eq!(hb.user, "invoker");
+        assert_eq!(hb.home, PathBuf::from("/Users/invoker"));
+    }
+
+    #[test]
+    fn an_unusable_sudo_gid_still_hands_the_file_back() {
+        // The uid is what lets the next unprivileged run replace the file, so
+        // a junk group is worth a warning, not a lost handback.
+        for gid in [None, Some("staff")] {
+            let hb = handback(&sudo(Some("501"), gid), home_of_invoker).unwrap();
+            assert_eq!(hb.uid, 501);
+            assert_eq!(hb.gid, None, "{gid:?}");
+        }
+    }
+
+    #[test]
+    fn a_write_lands_the_report_where_it_was_asked_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wsctl").join("disk-report.json");
+
+        write_cache(&path, &report_at(0), None).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let back: Report = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back.schema, SCHEMA);
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn the_password_database_finds_a_real_home_and_refuses_a_fake_one() {
+        // The one part of the redirect that cannot be faked: if this lookup is
+        // wrong, a privileged run quietly falls back instead of redirecting.
+        if let Ok(user) = std::env::var("USER") {
+            let home = existing_home(&user).expect("the current user has a home");
+            assert!(home.is_absolute());
+            assert_eq!(
+                home.canonicalize().unwrap(),
+                dirs::home_dir().unwrap().canonicalize().unwrap()
+            );
+        }
+        assert!(existing_home("no-such-account-on-this-machine").is_none());
+        assert!(existing_home("has\0a\0nul").is_none());
+    }
+
+    #[test]
+    fn a_handback_run_leaves_the_report_and_its_directory_to_the_named_user() {
+        // Handing back to the ids this process already has is the most a test
+        // without root can do: it exercises the chown, not the privilege drop.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wsctl").join("disk-report.json");
+        let hb = Handback {
+            user: "invoker".into(),
+            home: dir.path().to_path_buf(),
+            // SAFETY: neither call can fail or touch memory we pass in.
+            uid: unsafe { libc::geteuid() },
+            gid: Some(unsafe { libc::getegid() }),
+        };
+
+        write_cache(&path, &report_at(0), Some(&hb)).unwrap();
+
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().uid(), hb.uid);
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap()).unwrap().uid(),
+            hb.uid,
+            "a root-owned directory is worse than a root-owned file"
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn every_directory_the_run_creates_is_handed_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("Application Support").join("wsctl");
+        let path = deep.join("disk-report.json");
+        let hb = Handback {
+            user: "invoker".into(),
+            home: dir.path().to_path_buf(),
+            // SAFETY: neither call can fail or touch memory we pass in.
+            uid: unsafe { libc::geteuid() },
+            gid: Some(unsafe { libc::getegid() }),
+        };
+
+        write_cache(&path, &report_at(0), Some(&hb)).unwrap();
+
+        use std::os::unix::fs::MetadataExt;
+        for created in [deep.as_path(), deep.parent().unwrap()] {
+            assert_eq!(
+                std::fs::metadata(created).unwrap().uid(),
+                hb.uid,
+                "{} was left behind",
+                created.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_and_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wsctl").join("disk-report.json");
+        // A directory sitting where the report goes: the rename cannot win.
+        std::fs::create_dir_all(&path).unwrap();
+
+        assert!(write_cache(&path, &report_at(0), None).is_err());
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "a leftover temp file is what blocks the next unprivileged write"
+        );
+    }
+
+    #[test]
+    fn a_cache_that_cannot_be_written_is_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("file");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+
+        let err = write_cache(&blocked.join("wsctl/disk-report.json"), &report_at(0), None)
+            .expect_err("a file cannot be a parent directory");
+        // save() returns this to callers that only warn, which is the contract
+        // load_or_refresh relies on: no cache is slower, never broken.
+        tracing::warn!("could not write disk report cache: {err}");
     }
 
     #[test]

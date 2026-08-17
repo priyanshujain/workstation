@@ -570,6 +570,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "filetime",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

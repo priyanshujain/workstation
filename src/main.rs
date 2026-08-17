@@ -46,36 +46,33 @@ fn main() -> anyhow::Result<()> {
         Commands::Profiles { json } => {
             commands::profiles::run(&workstation, json)?;
         }
-        Commands::Disk { sub } => match sub {
-            DiskCommand::Audit { no_cache } => {
-                if std::io::stdout().is_terminal() {
-                    tui::audit::run(no_cache)?;
-                } else {
-                    commands::audit::run_report(no_cache)?;
-                }
+        Commands::Disk { sub } => {
+            // Said before anything takes the screen, because a privileged run
+            // writes its cache somewhere an unprivileged one would not.
+            if let Some(notice) = disk::report::privileged_notice() {
+                tracing::warn!("{notice}");
             }
-            DiskCommand::Cleanup => {
-                if std::io::stdout().is_terminal() {
-                    tui::cleanup::run()?;
-                } else {
-                    commands::audit::run_report(false)?;
+            match sub {
+                DiskCommand::Audit { no_cache } => {
+                    if std::io::stdout().is_terminal() {
+                        tui::audit::run(no_cache)?;
+                    } else {
+                        commands::audit::run_report(no_cache)?;
+                    }
                 }
-            }
-            DiskCommand::Agent { sub } => match sub {
-                DiskAgentCommand::Enable => commands::disk_agent::enable()?,
-                DiskAgentCommand::Disable => commands::disk_agent::disable()?,
-                DiskAgentCommand::Status => commands::disk_agent::status()?,
-            },
-            DiskCommand::Projects {
-                roots,
-                idle_days,
-                min_size_mb,
-                clean,
-                dry_run,
-                yes,
-                no_cache,
-            } => {
-                commands::projects::run(commands::projects::Options {
+                DiskCommand::Cleanup => {
+                    if std::io::stdout().is_terminal() {
+                        tui::cleanup::run()?;
+                    } else {
+                        commands::audit::run_report(false)?;
+                    }
+                }
+                DiskCommand::Agent { sub } => match sub {
+                    DiskAgentCommand::Enable => commands::disk_agent::enable()?,
+                    DiskAgentCommand::Disable => commands::disk_agent::disable()?,
+                    DiskAgentCommand::Status => commands::disk_agent::status()?,
+                },
+                DiskCommand::Projects {
                     roots,
                     idle_days,
                     min_size_mb,
@@ -83,9 +80,19 @@ fn main() -> anyhow::Result<()> {
                     dry_run,
                     yes,
                     no_cache,
-                })?;
+                } => {
+                    commands::projects::run(commands::projects::Options {
+                        roots,
+                        idle_days,
+                        min_size_mb,
+                        clean,
+                        dry_run,
+                        yes,
+                        no_cache,
+                    })?;
+                }
             }
-        },
+        }
         Commands::Android { sub } => match sub {
             AndroidCommand::List => commands::android::list()?,
             AndroidCommand::Clip { device } => commands::android::clip(device)?,
