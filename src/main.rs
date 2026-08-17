@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AppCommand, AudioCommand, Cli, Commands, DiskCommand, SelfCommand};
+use cli::{AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -54,6 +54,11 @@ fn main() -> anyhow::Result<()> {
                     commands::audit::run_report(false)?;
                 }
             }
+            DiskCommand::Agent { sub } => match sub {
+                DiskAgentCommand::Enable => commands::disk_agent::enable()?,
+                DiskAgentCommand::Disable => commands::disk_agent::disable()?,
+                DiskAgentCommand::Status => commands::disk_agent::status()?,
+            },
             DiskCommand::Projects {
                 roots,
                 idle_days,

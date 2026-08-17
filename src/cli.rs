@@ -170,6 +170,12 @@ pub enum DiskCommand {
     /// Interactive disk cleanup: audit + drill-down + delete in one TUI
     Cleanup,
 
+    /// Manage the scheduled refresh of the cached disk report
+    Agent {
+        #[command(subcommand)]
+        sub: DiskAgentCommand,
+    },
+
     /// Build artifacts per project, with how long each has sat idle
     Projects {
         /// Where to look, repeatable (default: ~/Workspace and ~/go/src)
@@ -200,6 +206,18 @@ pub enum DiskCommand {
         #[arg(long)]
         no_cache: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum DiskAgentCommand {
+    /// Install and load the scheduled refresh
+    Enable,
+
+    /// Unload and remove the scheduled refresh
+    Disable,
+
+    /// Show cache age and whether the refresh is armed
+    Status,
 }
 
 #[derive(Subcommand)]
