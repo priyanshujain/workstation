@@ -8,6 +8,12 @@ use disk::util::format_size;
 
 const RULE: usize = 58;
 
+/// Roots smaller than this are macOS bookkeeping directories that only add
+/// rows. They still count towards the totals, they just do not get a line.
+const ROOT_FLOOR: u64 = 16 * 1024 * 1024;
+
+const NAME_WIDTH: usize = 18;
+
 pub fn run_report(no_cache: bool) -> anyhow::Result<()> {
     println!();
     println!(
@@ -87,11 +93,22 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
     );
     println!("  {}", style("─".repeat(RULE)).dim());
 
-    for root in audit.roots.iter().filter(|r| r.total > 0) {
+    // A root that could not be opened still gets a row: "unknown" and "empty"
+    // are different answers and the old audit only ever gave the second one.
+    for root in audit
+        .roots
+        .iter()
+        .filter(|r| r.total >= ROOT_FLOOR || r.unreadable_count > 0)
+    {
+        let size = if root.total == 0 && root.unreadable_count > 0 {
+            style("unknown".to_string()).red().to_string()
+        } else {
+            style(format_size(root.total)).yellow().bold().to_string()
+        };
         println!(
-            "  {:>10}  {:<18}  {}",
-            style(format_size(root.total)).yellow().bold(),
-            style(&root.name).white().bold(),
+            "  {:>10}  {:<NAME_WIDTH$}  {}",
+            size,
+            style(clip(&root.name, NAME_WIDTH)).white().bold(),
             style(tilde(&root.path)).dim(),
         );
     }
@@ -100,7 +117,7 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
         && overview.other_volumes > 0
     {
         println!(
-            "  {:>10}  {:<18}  {}",
+            "  {:>10}  {:<NAME_WIDTH$}  {}",
             style(format_size(overview.other_volumes)).yellow(),
             style("Other volumes").white(),
             style("System, Preboot, Recovery, VM").dim(),
@@ -129,14 +146,22 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
 
     let unreadable = audit.unreadable_count();
     if unreadable > 0 {
+        println!();
         println!(
             "  {}",
             style(format!(
-                "{unreadable} director{} could not be opened, so their contents are \
-                 unknown rather than empty. Grant Terminal Full Disk Access to include them.",
+                "{unreadable} director{} could not be opened, so what they hold is \
+                 unknown rather than zero.",
                 if unreadable == 1 { "y" } else { "ies" }
             ))
             .dim()
+        );
+        for path in audit.unreadable_examples(4) {
+            println!("  {}", style(format!("  {}", tilde(path))).dim());
+        }
+        println!(
+            "  {}",
+            style("Give Terminal Full Disk Access in System Settings to measure them.").dim()
         );
     }
     println!();
@@ -223,6 +248,16 @@ fn print_staleness(report: &Report) {
     println!();
 }
 
+/// Keep the column. A root name wider than its column pushes every path on
+/// that row out of line, and the paths are the part worth reading.
+fn clip(name: &str, width: usize) -> String {
+    if name.chars().count() <= width {
+        return name.to_string();
+    }
+    let kept: String = name.chars().take(width - 1).collect();
+    format!("{kept}\u{2026}")
+}
+
 fn tilde(path: &Path) -> String {
     let display = path.to_string_lossy();
     match dirs::home_dir() {
@@ -238,6 +273,13 @@ fn tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_keeps_the_column_width() {
+        assert_eq!(clip("Home", 18), "Home");
+        assert_eq!(clip(".PreviousSystemInformation", 18).chars().count(), 18);
+        assert!(clip(".PreviousSystemInformation", 18).ends_with('\u{2026}'));
+    }
 
     #[test]
     fn tilde_shortens_paths_inside_home() {

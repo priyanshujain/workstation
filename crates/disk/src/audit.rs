@@ -41,6 +41,16 @@ impl Audit {
         self.roots.iter().map(|r| r.unreadable_count).sum()
     }
 
+    /// Sample of what could not be opened, so "grant Full Disk Access" is
+    /// advice the user can act on rather than a shrug.
+    pub fn unreadable_examples(&self, limit: usize) -> Vec<&PathBuf> {
+        self.roots
+            .iter()
+            .flat_map(|r| r.unreadable.iter())
+            .take(limit)
+            .collect()
+    }
+
     /// Biggest unnamed directories anywhere, so the gap is actionable rather
     /// than just honest.
     pub fn largest_unattributed(&self, limit: usize) -> Vec<(&PathBuf, u64)> {
