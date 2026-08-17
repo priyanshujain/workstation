@@ -10,8 +10,8 @@ use tracing_subscriber::EnvFilter;
 use std::io::IsTerminal;
 
 use cli::{
-    AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand, DisplayCommand,
-    SelfCommand,
+    AndroidCommand, AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand,
+    DisplayCommand, SelfCommand,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -81,6 +81,12 @@ fn main() -> anyhow::Result<()> {
                     no_cache,
                 })?;
             }
+        },
+        Commands::Android { sub } => match sub {
+            AndroidCommand::List => commands::android::list()?,
+            AndroidCommand::Clip { device } => commands::android::clip(device)?,
+            AndroidCommand::Mirror { device } => commands::android::mirror(device)?,
+            AndroidCommand::Paste { device, text } => commands::android::paste(device, text)?,
         },
         Commands::Display { sub } => match sub {
             DisplayCommand::List => commands::display::list()?,

@@ -62,6 +62,12 @@ pub enum Commands {
         sub: AppCommand,
     },
 
+    /// Share the clipboard with, or mirror, the connected Android device
+    Android {
+        #[command(subcommand)]
+        sub: AndroidCommand,
+    },
+
     /// Keep the menu bar on a chosen monitor across dock reconnects
     Display {
         #[command(subcommand)]
@@ -104,6 +110,36 @@ pub enum AppCommand {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AndroidCommand {
+    /// Show connected devices and which one commands would target
+    List,
+
+    /// Bridge the device clipboard to the Mac, no window (Ctrl-C to stop)
+    Clip {
+        /// Target a specific serial from `wsctl android list`
+        #[arg(short, long)]
+        device: Option<String>,
+    },
+
+    /// Mirror the screen, which also syncs the clipboard both ways (Ctrl-C to stop)
+    Mirror {
+        /// Target a specific serial from `wsctl android list`
+        #[arg(short, long)]
+        device: Option<String>,
+    },
+
+    /// Type the Mac clipboard into the focused field on the device
+    Paste {
+        /// Target a specific serial from `wsctl android list`
+        #[arg(short, long)]
+        device: Option<String>,
+
+        /// Text to type instead of the clipboard contents
+        text: Option<String>,
     },
 }
 
