@@ -4,6 +4,13 @@ use std::process::Command;
 use crate::cleanup::{CleanAction, Target};
 use crate::util::dir_size;
 
+/// Paths that get a category name in the audit. This list is attribution
+/// only: it decides what a byte is *called*, never whether it is counted.
+/// Everything it misses is still measured and reported as unattributed, which
+/// is the difference between this and the allowlist it replaced.
+///
+/// A deeper rule wins over a shallower one, so a broad directory can carry a
+/// general name while the interesting subtrees inside it keep their own.
 pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
@@ -12,19 +19,14 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
 
     vec![
         (
-            "Docker",
-            vec![(
-                "Docker data",
-                home.join("Library/Containers/com.docker.docker/Data"),
-            )],
-        ),
-        (
             "Go",
             vec![
                 ("Source (~/go/src)", home.join("go/src")),
                 ("Packages (~/go/pkg)", home.join("go/pkg")),
                 ("Binaries (~/go/bin)", home.join("go/bin")),
+                ("Toolchains (~/sdk)", home.join("sdk")),
                 ("Build cache", go_cache),
+                ("goimports cache", home.join("Library/Caches/goimports")),
             ],
         ),
         (
@@ -33,7 +35,9 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
                 ("nvm", home.join(".nvm")),
                 ("npm cache", home.join(".npm")),
                 ("pnpm", home.join("Library/pnpm")),
+                ("pnpm cache", home.join("Library/Caches/pnpm")),
                 ("bun", home.join(".bun")),
+                ("deno", home.join(".deno")),
             ],
         ),
         (
@@ -41,6 +45,7 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
             vec![
                 ("uv cache", home.join(".cache/uv")),
                 ("pyenv", home.join(".pyenv")),
+                ("pip cache", home.join("Library/Caches/pip")),
             ],
         ),
         (
@@ -50,8 +55,31 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
                 ("cargo", home.join(".cargo")),
             ],
         ),
+        (
+            "Haskell",
+            vec![
+                ("ghcup", home.join(".ghcup")),
+                ("cabal", home.join(".cabal")),
+                ("stack", home.join(".stack")),
+            ],
+        ),
+        ("OCaml", vec![("opam", home.join(".opam"))]),
+        ("Lean", vec![("elan", home.join(".elan"))]),
         ("Kotlin/Native", vec![("konan", home.join(".konan"))]),
-        ("Gradle", vec![("gradle", home.join(".gradle"))]),
+        (
+            "Gradle",
+            vec![
+                ("gradle", home.join(".gradle")),
+                ("maven", home.join(".m2")),
+            ],
+        ),
+        (
+            "Android",
+            vec![
+                ("Emulator images", home.join(".android/avd")),
+                ("SDK state", home.join(".android")),
+            ],
+        ),
         (
             "Xcode",
             vec![
@@ -60,6 +88,15 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
                     home.join("Library/Developer/Xcode/DerivedData"),
                 ),
                 ("Simulators", home.join("Library/Developer/CoreSimulator")),
+                ("Archives", home.join("Library/Developer/Xcode/Archives")),
+                (
+                    "Device support",
+                    home.join("Library/Developer/Xcode/iOS DeviceSupport"),
+                ),
+                (
+                    "SwiftPM cache",
+                    home.join("Library/Caches/org.swift.swiftpm"),
+                ),
             ],
         ),
         (
@@ -70,17 +107,83 @@ pub fn audit_categories() -> Vec<(&'static str, Vec<(&'static str, PathBuf)>)> {
             ],
         ),
         (
-            "App Caches",
+            "Containers",
             vec![
-                ("Chrome", home.join("Library/Caches/Google")),
                 (
-                    "Slack",
-                    home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt"),
+                    "Docker data",
+                    home.join("Library/Containers/com.docker.docker/Data"),
                 ),
-                ("Playwright", home.join("Library/Caches/ms-playwright")),
+                ("Docker config", home.join(".docker")),
+                ("OrbStack", home.join(".orbstack")),
+                ("colima", home.join(".colima")),
+                ("lima", home.join(".lima")),
             ],
         ),
-        ("Downloads", vec![("~/Downloads", home.join("Downloads"))]),
+        (
+            "Editors",
+            vec![
+                ("VS Code", home.join("Library/Application Support/Code")),
+                ("VS Code extensions", home.join(".vscode")),
+                ("Cursor", home.join(".cursor")),
+                (
+                    "JetBrains",
+                    home.join("Library/Application Support/JetBrains"),
+                ),
+                ("JetBrains cache", home.join("Library/Caches/JetBrains")),
+            ],
+        ),
+        (
+            "Agent tooling",
+            vec![
+                ("Claude Code", home.join(".claude")),
+                ("Claude experiments", home.join(".claude-science")),
+                (
+                    "Claude desktop",
+                    home.join("Library/Application Support/Claude"),
+                ),
+                (
+                    "Playwright browsers",
+                    home.join("Library/Caches/ms-playwright"),
+                ),
+                (
+                    "Playwright MCP",
+                    home.join("Library/Caches/ms-playwright-mcp"),
+                ),
+            ],
+        ),
+        (
+            "Apps",
+            vec![
+                ("Chrome", home.join("Library/Application Support/Google")),
+                ("Chrome cache", home.join("Library/Caches/Google")),
+                ("Slack", home.join("Library/Application Support/Slack")),
+                (
+                    "Slack updates",
+                    home.join("Library/Caches/com.tinyspeck.slackmacgap.ShipIt"),
+                ),
+                ("Discord", home.join("Library/Application Support/discord")),
+                (
+                    "WhatsApp",
+                    home.join("Library/Group Containers/group.net.whatsapp.WhatsApp.shared"),
+                ),
+            ],
+        ),
+        (
+            "Cloud CLIs",
+            vec![
+                ("gcloud", home.join("google-cloud-sdk")),
+                ("~/.local", home.join(".local")),
+            ],
+        ),
+        (
+            "Personal",
+            vec![
+                ("~/Downloads", home.join("Downloads")),
+                ("~/Documents", home.join("Documents")),
+                ("~/dotfiles", home.join("dotfiles")),
+                ("~/Desktop", home.join("Desktop")),
+            ],
+        ),
     ]
 }
 
