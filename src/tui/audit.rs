@@ -127,6 +127,9 @@ struct Item {
     /// `None` for a row that is not one path: a category, or the row standing in
     /// for a directory's own files.
     path: Option<PathBuf>,
+    /// What the path column says when there is no path to put there. Four
+    /// volumes have no single path and still have to say what they are.
+    detail: Option<String>,
     size: Size,
     denials: Denials,
     /// The top-level root that counts this row's bytes, when another one does.
@@ -490,10 +493,14 @@ impl App {
         self.status == Status::Scanning
     }
 
-    /// Everything the walk measured, or `None` while one is running. A total
-    /// missing most of the volume is not a total, and the row rule applies just
-    /// as much to the sum of the rows.
-    fn measured(&self) -> Option<u64> {
+    /// Everything the rows account for, or `None` while a walk is running. A
+    /// total missing most of the volume is not a total, and the row rule applies
+    /// just as much to the sum of the rows.
+    ///
+    /// This is the sum of the top rows and nothing besides, so the header cannot
+    /// state bytes no row shows. The volumes the walk cannot open are one of
+    /// those rows rather than an addition made here.
+    fn accounted(&self) -> Option<u64> {
         if self.scanning() {
             return None;
         }
@@ -519,8 +526,13 @@ impl App {
     }
 
     fn load_cached(&mut self, audit: &Audit, age: Duration) {
-        self.space.reset(root_items(&audit.roots));
-        self.naming.reset(group_items(audit));
+        let overview = self.overview.as_ref();
+        let (space, naming) = (
+            root_items(&audit.roots, overview),
+            group_items(audit, overview),
+        );
+        self.space.reset(space);
+        self.naming.reset(naming);
         self.age = Some(age);
         self.status = Status::Idle;
     }
@@ -557,8 +569,13 @@ impl App {
     }
 
     fn finish(&mut self, audit: &Audit) {
-        self.space.reset(root_items(&audit.roots));
-        self.naming.reset(group_items(audit));
+        let overview = self.overview.as_ref();
+        let (space, naming) = (
+            root_items(&audit.roots, overview),
+            group_items(audit, overview),
+        );
+        self.space.reset(space);
+        self.naming.reset(naming);
         self.stop();
     }
 
@@ -595,6 +612,7 @@ fn pending_item(root: &Root) -> Item {
     Item {
         name: root.name.clone(),
         path: Some(root.path.clone()),
+        detail: None,
         size: Size::Counting(0),
         denials: Denials::default(),
         counted_as: None,
@@ -603,20 +621,56 @@ fn pending_item(root: &Root) -> Item {
 }
 
 /// One row per root, dropping the ones that hold nothing and refused nothing: an
-/// empty row is neither somewhere to explore nor anything to reclaim.
-fn root_items(roots: &[RootUsage]) -> Vec<Item> {
-    roots
+/// empty row is neither somewhere to explore nor anything to reclaim. The
+/// volumes no walk can open get a row too, because the header counts them.
+fn root_items(roots: &[RootUsage], overview: Option<&DiskOverview>) -> Vec<Item> {
+    let mut items: Vec<Item> = roots
         .iter()
         .filter(|r| r.total > 0 || r.denials.total() > 0)
         .map(|r| Item {
             name: r.name.clone(),
             path: Some(r.path.clone()),
+            detail: None,
             size: Size::Measured(r.total).settle(r.denials),
             denials: r.denials,
             counted_as: None,
             down: Down::Children(level_of(r, roots)),
         })
-        .collect()
+        .collect();
+
+    // Where its own size puts it, rather than pinned to an end. The audit
+    // decides the order of the rows it produced, so this reads that order
+    // instead of imposing one.
+    if let Some(row) = other_volumes_item(overview) {
+        let at = items
+            .iter()
+            .position(|i| i.size.bytes() < row.size.bytes())
+            .unwrap_or(items.len());
+        items.insert(at, row);
+    }
+    items
+}
+
+/// The rest of the APFS container: System, Preboot, Recovery, VM. The container
+/// figures count these bytes and no walk can enumerate them, so they are part of
+/// what the header accounts for while no root row can ever show them. A total
+/// with no row behind it is exactly the sort of number this screen exists to
+/// stop stating.
+///
+/// It is a statement and nothing else. There is no single path, so the column
+/// that holds one says what the volumes are instead, and `Enter` has nowhere to
+/// go: nothing here can look inside them.
+fn other_volumes_item(overview: Option<&DiskOverview>) -> Option<Item> {
+    let bytes = overview.map_or(0, |o| o.other_volumes);
+    (bytes > 0).then(|| Item {
+        name: "Other volumes".to_string(),
+        path: None,
+        detail: Some("System, Preboot, Recovery, VM".to_string()),
+        size: Size::Measured(bytes),
+        denials: Denials::default(),
+        counted_as: None,
+        down: Down::Unmeasured,
+    })
 }
 
 /// What a sweep knows about one root's immediate children, the ones it
@@ -646,13 +700,14 @@ fn level_of(usage: &RootUsage, roots: &[RootUsage]) -> Level {
 /// The naming layer over a finished measurement, and the remainder it could not
 /// name. Together these two are the partition again, which is the only reason
 /// the section is worth printing.
-fn group_items(audit: &Audit) -> Vec<Item> {
+fn group_items(audit: &Audit, overview: Option<&DiskOverview>) -> Vec<Item> {
     let mut items: Vec<Item> = audit
         .categories
         .iter()
         .map(|category| Item {
             name: category.name.clone(),
             path: None,
+            detail: None,
             size: Size::Measured(category.total_size),
             denials: Denials::default(),
             counted_as: None,
@@ -663,6 +718,7 @@ fn group_items(audit: &Audit) -> Vec<Item> {
                     .map(|path| Item {
                         name: path.label.clone(),
                         path: Some(path.path.clone()),
+                        detail: None,
                         size: Size::Measured(path.size),
                         denials: Denials::default(),
                         counted_as: None,
@@ -678,6 +734,7 @@ fn group_items(audit: &Audit) -> Vec<Item> {
         items.push(Item {
             name: UNNAMED.to_string(),
             path: None,
+            detail: None,
             size: Size::Measured(unattributed),
             denials: Denials::default(),
             counted_as: None,
@@ -688,6 +745,7 @@ fn group_items(audit: &Audit) -> Vec<Item> {
                     .map(|(path, size)| Item {
                         name: path.display().to_string(),
                         path: Some(path.clone()),
+                        detail: None,
                         size: Size::Measured(size),
                         denials: Denials::default(),
                         counted_as: None,
@@ -697,6 +755,12 @@ fn group_items(audit: &Audit) -> Vec<Item> {
             ),
         });
     }
+
+    // Last, one step further out than the remainder above it: that row is bytes
+    // the rules did not name, these are bytes nothing on this machine can look
+    // inside, so no rule could ever name them. Both belong after the categories,
+    // and the unnameable one belongs after the unnamed one.
+    items.extend(other_volumes_item(overview));
     items
 }
 
@@ -709,6 +773,7 @@ fn pending_groups(rules: &[Rule]) -> Vec<Item> {
         let row = Item {
             name: rule.label.clone(),
             path: Some(rule.path.clone()),
+            detail: None,
             size: Size::Counting(0),
             denials: Denials::default(),
             counted_as: None,
@@ -723,6 +788,7 @@ fn pending_groups(rules: &[Rule]) -> Vec<Item> {
             None => items.push(Item {
                 name: rule.category.clone(),
                 path: None,
+                detail: None,
                 size: Size::Counting(0),
                 denials: Denials::default(),
                 counted_as: None,
@@ -742,6 +808,7 @@ fn counting_items(listing: &Children) -> Vec<Item> {
         .map(|root| Item {
             name: root.name.clone(),
             path: Some(root.path.clone()),
+            detail: None,
             size: Size::Counting(0),
             denials: Denials::default(),
             counted_as: None,
@@ -771,6 +838,7 @@ fn measured_items(listing: &Children, below: &Level) -> Vec<Item> {
             items.push(Item {
                 name: file_name(path),
                 path: Some(path.clone()),
+                detail: None,
                 size: Size::Measured(*bytes),
                 denials: Denials::default(),
                 counted_as: None,
@@ -794,6 +862,7 @@ fn child_item(name: &str, path: &Path, below: &Level) -> Item {
     let row = |size, denials, counted_as, down| Item {
         name: name.to_string(),
         path: Some(path.to_path_buf()),
+        detail: None,
         size,
         denials,
         counted_as,
@@ -855,6 +924,7 @@ fn loose_item(listing: &Children) -> Option<Item> {
     Some(Item {
         name,
         path: None,
+        detail: None,
         size: Size::Measured(listing.loose_bytes),
         denials: Denials::default(),
         counted_as: None,
@@ -987,7 +1057,10 @@ fn directories(count: usize) -> String {
 /// A walk still running contributes nothing here. Its running total would read
 /// as a measurement, and the shortfall computed from it would name most of the
 /// volume as unreachable when it is only unfinished.
-fn figures(overview: Option<&DiskOverview>, measured: Option<u64>) -> Vec<(String, &'static str)> {
+///
+/// `accounted` arrives already summed from the rows. Adding anything to it here
+/// is how the header came to claim 30.7 GB that no row on screen showed.
+fn figures(overview: Option<&DiskOverview>, accounted: Option<u64>) -> Vec<(String, &'static str)> {
     let mut out = Vec::new();
     if let Some(overview) = overview {
         out.push((format_size(overview.used()), "used"));
@@ -995,10 +1068,9 @@ fn figures(overview: Option<&DiskOverview>, measured: Option<u64>) -> Vec<(Strin
         out.push((format_size(overview.free), "free"));
     }
 
-    let Some(measured) = measured else {
+    let Some(accounted) = accounted else {
         return out;
     };
-    let accounted = measured + overview.map_or(0, |o| o.other_volumes);
     out.push((format_size(accounted), "accounted for"));
 
     if let Some(overview) = overview {
@@ -1266,7 +1338,7 @@ fn header(app: &App, width: u16) -> Paragraph<'static> {
     };
 
     let mut totals = vec![Span::raw("  ")];
-    for (size, label) in fit(figures(app.overview.as_ref(), app.measured()), width) {
+    for (size, label) in fit(figures(app.overview.as_ref(), app.accounted()), width) {
         if totals.len() > 1 {
             totals.push(Span::raw("  "));
         }
@@ -1374,17 +1446,20 @@ fn item_row(item: &Item, cursor: bool, with_path: bool) -> Row<'_> {
 
     let mut cells = vec![
         Cell::from(if item.drillable() { "📁" } else { "  " }),
-        Cell::from(item.name.as_str()).style(Style::default().fg(name_color)),
+        Cell::from(item.name.as_str()).style(Style::default().fg(readable(name_color, cursor))),
         Cell::from(Text::from(item.size.label()).right_aligned())
-            .style(Style::default().fg(size_color)),
+            .style(Style::default().fg(readable(size_color, cursor))),
     ];
     if with_path {
-        let path = item
+        // A row that is not one path says what it is instead. Leaving the column
+        // blank there reads as a row the tool gave up on.
+        let about = item
             .path
             .as_ref()
             .map(|p| p.display().to_string())
+            .or_else(|| item.detail.clone())
             .unwrap_or_default();
-        cells.push(Cell::from(path).style(Style::default().fg(Color::DarkGray)));
+        cells.push(Cell::from(about).style(Style::default().fg(readable(Color::DarkGray, cursor))));
     }
 
     Row::new(cells).style(if cursor {
@@ -1392,6 +1467,18 @@ fn item_row(item: &Item, cursor: bool, with_path: bool) -> Row<'_> {
     } else {
         Style::default()
     })
+}
+
+/// The cursor is a DarkGray background, so a DarkGray cell on that row is text
+/// drawn in the colour behind it: the path of the selected row was being
+/// rendered and could not be read. Secondary text lifts to White under the
+/// cursor and is left alone everywhere else, which keeps the cursor a background
+/// and nothing else.
+fn readable(color: Color, cursor: bool) -> Color {
+    match (cursor, color) {
+        (true, Color::DarkGray) => Color::White,
+        _ => color,
+    }
 }
 
 /// A directory that refused to open is not an empty one, so it does not get to
@@ -1560,10 +1647,114 @@ mod tests {
         app
     }
 
+    fn category(name: &str, total: u64) -> Category {
+        Category {
+            name: name.to_string(),
+            total_size: total,
+            paths: Vec::new(),
+        }
+    }
+
+    /// A container with volumes no walk can open, which is every Mac. Round
+    /// numbers throughout, so a test can add up what the screen prints without
+    /// rounding deciding the answer.
+    fn container(other_volumes: u64) -> DiskOverview {
+        DiskOverview {
+            total: 500 * GB,
+            free: 100 * GB,
+            data_used: 372 * GB,
+            other_volumes,
+        }
+    }
+
+    /// One measurement with something to draw in both views: three roots, two
+    /// named categories and the 100 GB remainder no rule named. 372 GB measured,
+    /// so the container's 400 GB used is fully accounted for once the volumes the
+    /// walk cannot open are counted.
+    fn both_views(other_volumes: u64) -> App {
+        let mut home = usage("Home", 300 * GB, Denials::default());
+        home.unattributed_total = 100 * GB;
+        home.unattributed = vec![(PathBuf::from("/tmp/Home/stray"), 100 * GB)];
+
+        let audit = Audit {
+            roots: vec![
+                home,
+                usage("User Library", 60 * GB, Denials::default()),
+                usage("opt", 12 * GB, Denials::default()),
+            ],
+            categories: vec![category("Rust", 200 * GB), category("Xcode", 72 * GB)],
+        };
+
+        let mut app = App::new(Some(container(other_volumes)));
+        app.load_cached(&audit, Duration::ZERO);
+        app
+    }
+
     fn drawn(app: &App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| render(f, app)).unwrap();
         terminal.backend().to_string()
+    }
+
+    /// The figure the header states, taken from the call the header makes.
+    fn accounted_figure(app: &App) -> String {
+        figures(app.overview.as_ref(), app.accounted())
+            .into_iter()
+            .find(|(_, label)| *label == "accounted for")
+            .expect("a finished measurement states a total")
+            .0
+    }
+
+    /// Every size the frame prints, parsed back out of the rendered text, so a
+    /// test adds up what the screen says rather than what the model holds.
+    fn drawn_sizes(screen: &str) -> Vec<u64> {
+        let mut sizes = Vec::new();
+        for line in screen.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            for pair in words.windows(2) {
+                if let (Ok(value), Some(unit)) = (pair[0].parse::<f64>(), unit(pair[1])) {
+                    sizes.push((value * unit as f64) as u64);
+                }
+            }
+        }
+        sizes
+    }
+
+    fn unit(name: &str) -> Option<u64> {
+        match name {
+            "B" => Some(1),
+            "KB" => Some(1024),
+            "MB" => Some(1024 * 1024),
+            "GB" => Some(GB),
+            _ => None,
+        }
+    }
+
+    /// Any glyph the frame draws in the colour of the background behind it, which
+    /// is a cell nobody can read. The cursor is a background, so this is what
+    /// keeps a row from losing a cell the moment it is selected.
+    fn unreadable_cells(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .filter(|cell| {
+                cell.bg != Color::Reset && cell.fg == cell.bg && !cell.symbol().trim().is_empty()
+            })
+            .map(|cell| format!("{:?} in {:?}", cell.symbol(), cell.fg))
+            .collect()
+    }
+
+    fn cursor_on(app: &mut App, row: usize) {
+        while app.pane().cursor() > row {
+            app.pane_mut().move_up();
+        }
+        while app.pane().cursor() < row {
+            app.pane_mut().move_down();
+        }
     }
 
     /// Everything below the header, so a test about what a row says cannot be
@@ -1652,7 +1843,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            app.measured(),
+            app.accounted(),
             None,
             "a walk still running has no total to report either"
         );
@@ -1661,7 +1852,7 @@ mod tests {
             usage("Home", 40 * GB, Denials::default()),
             usage("User Library", 2 * GB, Denials::default()),
         ]);
-        assert_eq!(done.measured(), Some(42 * GB));
+        assert_eq!(done.accounted(), Some(42 * GB));
     }
 
     #[test]
@@ -2447,13 +2638,15 @@ mod tests {
             other_volumes: 20 * GB,
         };
 
-        let reachable = figures(Some(&overview), Some(380 * GB));
+        // 380 GB of roots plus the 20 GB of volumes the walk cannot open, which
+        // arrives already summed: every byte in this figure is on a row.
+        let reachable = figures(Some(&overview), Some(400 * GB));
         let labelled: Vec<&str> = reachable.iter().map(|(_, label)| *label).collect();
         assert_eq!(labelled, ["used", "total", "free", "accounted for"]);
         assert_eq!(reachable[3].0, format_size(400 * GB));
 
         // Half the volume unmeasured is a gap the screen has to own up to.
-        let missed = figures(Some(&overview), Some(180 * GB));
+        let missed = figures(Some(&overview), Some(200 * GB));
         assert_eq!(missed[4].1, "not reachable by this scan");
         assert_eq!(missed[4].0, format_size(200 * GB));
     }
@@ -2530,6 +2723,173 @@ mod tests {
 
         for (width, height) in [(1, 1), (4, 2), (20, 3), (40, 6)] {
             drawn(&app, width, height);
+        }
+    }
+
+    #[test]
+    fn the_rows_on_screen_add_up_to_the_figure_the_header_states() {
+        // The shipped bug: the header said 373.7 GB accounted for and the rows
+        // came to 343.0 GB, because the volumes the walk cannot open were in the
+        // figure and on no row. Both views state that same figure, so the sum of
+        // what each one draws has to reach it. Read off the frame rather than off
+        // the model: the model agreeing with itself is what shipped.
+        let mut app = both_views(28 * GB);
+        let stated = accounted_figure(&app);
+
+        for section in [Section::Space, Section::Naming] {
+            app.section = section;
+            let screen = drawn(&app, 100, 20);
+            assert!(
+                screen.contains(&format!("{stated} accounted for")),
+                "{screen}"
+            );
+
+            let rows: u64 = drawn_sizes(&body_of(&app, 100, 20)).iter().sum();
+            assert_eq!(
+                format_size(rows),
+                stated,
+                "the rows the {section:?} view draws do not reach the header figure: {screen}"
+            );
+            assert_eq!(
+                app.listed(),
+                app.accounted().expect("a finished measurement"),
+                "{section:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_volumes_no_walk_can_open_get_a_row_in_both_views() {
+        let mut app = both_views(28 * GB);
+
+        assert_eq!(
+            names(&app),
+            vec!["Home", "User Library", "Other volumes", "opt"],
+            "on its own size, not pinned to an end"
+        );
+        let screen = body_of(&app, 100, 20);
+        assert!(
+            screen.contains("System, Preboot, Recovery, VM"),
+            "the row says what it is, since there is no path to name: {screen}"
+        );
+
+        app.toggle();
+        assert_eq!(
+            names(&app),
+            vec!["Rust", "Xcode", UNNAMED, "Other volumes"],
+            "after the remainder no rule named: no rule could ever name these"
+        );
+    }
+
+    #[test]
+    fn a_container_holding_nothing_else_gets_no_such_row() {
+        let mut app = both_views(0);
+
+        assert_eq!(names(&app), vec!["Home", "User Library", "opt"]);
+        app.toggle();
+        assert_eq!(names(&app), vec!["Rust", "Xcode", UNNAMED]);
+        assert_eq!(
+            app.accounted(),
+            Some(372 * GB),
+            "the header states what the rows show and nothing more"
+        );
+    }
+
+    #[test]
+    fn enter_on_the_volumes_no_walk_can_open_goes_nowhere() {
+        // Nothing on this machine can look inside them, so a drill would be a
+        // dead end. The folder glyph is the promise of a level below, and this
+        // row must not make it.
+        let mut app = both_views(28 * GB);
+        cursor_on(&mut app, 2);
+
+        let row = app.pane().selected().expect("a row under the cursor");
+        assert_eq!(row.name, "Other volumes");
+        assert!(!row.drillable());
+
+        assert!(app.pane_mut().enter().is_none(), "nothing to walk");
+        assert_eq!(app.pane().stack.len(), 1, "Enter did not open a level");
+        assert!(app.pane().at_top());
+
+        let line = body_of(&app, 100, 20)
+            .lines()
+            .find(|line| line.contains("Other volumes"))
+            .expect("the row is drawn")
+            .to_string();
+        assert!(!line.contains('\u{1f4c1}'), "{line}");
+
+        app.toggle();
+        cursor_on(&mut app, 3);
+        assert_eq!(app.pane().selected().unwrap().name, "Other volumes");
+        assert!(app.pane_mut().enter().is_none());
+        assert_eq!(app.pane().stack.len(), 1);
+    }
+
+    #[test]
+    fn no_cell_on_the_cursor_row_is_drawn_in_the_colour_behind_it() {
+        // The shipped bug: the cursor row is a DarkGray background and the path
+        // cell is DarkGray text, so the selected row was the one row whose path
+        // could not be read. Every cell of every row is checked rather than the
+        // two that were wrong, so a DarkGray cell added later fails here too.
+        let mut app = both_views(28 * GB);
+
+        for section in [Section::Space, Section::Naming] {
+            app.section = section;
+            for row in 0..app.pane().items().len() {
+                cursor_on(&mut app, row);
+                let hidden = unreadable_cells(&app, 100, 20);
+                assert!(hidden.is_empty(), "{section:?} row {row}: {hidden:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_selected_row_still_shows_its_path() {
+        let app = both_views(28 * GB);
+        let line = body_of(&app, 100, 20)
+            .lines()
+            .find(|line| line.contains("Home"))
+            .expect("the first row is drawn")
+            .to_string();
+
+        assert_eq!(app.pane().cursor(), 0, "the cursor starts on this row");
+        assert!(line.contains("/tmp/Home"), "{line}");
+        assert!(unreadable_cells(&app, 100, 20).is_empty());
+    }
+
+    #[test]
+    fn a_size_the_screen_will_not_print_stays_readable_under_the_cursor() {
+        // Both of the sizes that are not Yellow, on the row a cursor lands on
+        // first: "elsewhere" is DarkGray because it is not a size, and it is the
+        // biggest row in a home folder listing.
+        let scratch = Scratch::new("cursorcolour");
+        let library = scratch.dir("Library");
+        let documents = scratch.dir("Documents");
+        let locked = scratch.dir("locked");
+        fs::write(documents.join("f.bin"), vec![0u8; 128 * 1024]).unwrap();
+        scratch.file("loose.bin", 8 * 1024);
+
+        let mut home = usage("Home", 128 * 1024, protected(1));
+        home.path = scratch.path().to_path_buf();
+        home.children = vec![(documents, 128 * 1024), (locked.clone(), 0)];
+        home.refused_children = vec![Unreadable {
+            path: locked,
+            denial: Denial::Protected,
+        }];
+        let mut user_library = usage("User Library", 512 * 1024, Denials::default());
+        user_library.path = library;
+
+        let mut app = cached(vec![home, user_library]);
+        app.pane_mut().enter();
+
+        let drawn = body_of(&app, 100, 16);
+        assert!(drawn.contains("elsewhere"), "{drawn}");
+        assert!(drawn.contains("unknown"), "{drawn}");
+
+        for row in 0..app.pane().items().len() {
+            cursor_on(&mut app, row);
+            let hidden = unreadable_cells(&app, 100, 16);
+            assert!(hidden.is_empty(), "row {row}: {hidden:?}");
         }
     }
 }
