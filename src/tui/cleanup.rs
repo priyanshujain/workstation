@@ -1186,18 +1186,30 @@ fn body_block() -> Block<'static> {
         .padding(Padding::horizontal(1))
 }
 
+/// The cursor is a DarkGray background, so a DarkGray cell on that row is text
+/// drawn in the colour behind it: a selected row was losing its description.
+/// Secondary text lifts to White under the cursor and is left alone everywhere
+/// else, which keeps the cursor a background and nothing else.
+fn readable(color: Color, cursor: bool) -> Color {
+    match (cursor, color) {
+        (true, Color::DarkGray) => Color::White,
+        _ => color,
+    }
+}
+
 fn render_top(f: &mut Frame, body: Rect, app: &App, cursor: usize) {
     let rows: Vec<Row> = top_rows(&app.targets, &app.order, &app.marked_targets)
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
+            let on_cursor = i == cursor;
             let check = if r.marked { " ✓" } else { " ·" };
             let check_style = if r.marked {
                 Style::default().fg(Color::Green).bold()
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(readable(Color::DarkGray, on_cursor))
             };
-            let row_style = if i == cursor {
+            let row_style = if on_cursor {
                 Style::default().bg(Color::DarkGray)
             } else {
                 Style::default()
@@ -1207,7 +1219,7 @@ fn render_top(f: &mut Frame, body: Rect, app: &App, cursor: usize) {
                 Cell::from(check).style(check_style),
                 Cell::from(if r.drillable { "📁" } else { "  " }),
                 Cell::from(r.name).style(Style::default().fg(Color::White)),
-                Cell::from(r.note).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(r.note).style(Style::default().fg(readable(Color::DarkGray, on_cursor))),
                 Cell::from(r.size).style(Style::default().fg(Color::Yellow)),
             ])
             .style(row_style)
@@ -1267,14 +1279,15 @@ fn render_directory(f: &mut Frame, body: Rect, app: &App, cursor: usize) {
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
+            let on_cursor = i == cursor;
             let check = if r.marked { " ✓" } else { " ·" };
             let check_style = if r.marked {
                 Style::default().fg(Color::Green).bold()
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(readable(Color::DarkGray, on_cursor))
             };
             let name_color = if r.is_dir { Color::Cyan } else { Color::White };
-            let row_style = if i == cursor {
+            let row_style = if on_cursor {
                 Style::default().bg(Color::DarkGray)
             } else {
                 Style::default()
@@ -1283,7 +1296,7 @@ fn render_directory(f: &mut Frame, body: Rect, app: &App, cursor: usize) {
             Row::new(vec![
                 Cell::from(check).style(check_style),
                 Cell::from(if r.is_dir { "📁" } else { "  " }),
-                Cell::from(r.name).style(Style::default().fg(name_color)),
+                Cell::from(r.name).style(Style::default().fg(readable(name_color, on_cursor))),
                 Cell::from(r.size).style(Style::default().fg(Color::Yellow)),
             ])
             .style(row_style)
@@ -1507,6 +1520,7 @@ fn result_lines(r: &CleanResult) -> Vec<Line<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::backend::TestBackend;
     use std::fs;
 
     /// The binary crate has no dev-dependencies, so scratch trees are built by
@@ -1580,6 +1594,45 @@ mod tests {
             entries,
             loose_bytes,
             denied,
+        }
+    }
+
+    fn drawn(app: &App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// Any glyph the frame draws in the colour of the background behind it, which
+    /// is a cell nobody can read. The cursor is a background, so this is what
+    /// keeps a row from losing a cell the moment it is selected.
+    fn unreadable_cells(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .filter(|cell| {
+                cell.bg != Color::Reset && cell.fg == cell.bg && !cell.symbol().trim().is_empty()
+            })
+            .map(|cell| format!("{:?} in {:?}", cell.symbol(), cell.fg))
+            .collect()
+    }
+
+    fn cursor(app: &App) -> usize {
+        match app.current() {
+            View::Top { cursor, .. } | View::Directory { cursor, .. } => *cursor,
+        }
+    }
+
+    fn cursor_on(app: &mut App, row: usize) {
+        while cursor(app) > row {
+            app.move_up();
+        }
+        while cursor(app) < row {
+            app.move_down();
         }
     }
 
@@ -2025,5 +2078,50 @@ mod tests {
         assert!(rows[0].drillable);
         assert!(!rows[1].drillable, "there is no directory behind a command");
         assert_eq!(rows[1].size, "unknown", "and nothing can size it up front");
+    }
+
+    #[test]
+    fn no_cell_on_the_cursor_row_is_drawn_in_the_colour_behind_it() {
+        // The cursor row is a DarkGray background and the description cell is
+        // DarkGray text, so a selected row was drawing its description in the
+        // colour behind it. Every cell of every row is checked rather than the
+        // one that was wrong, so a DarkGray cell added later fails here too.
+        let mut app = App::new(vec![
+            target("caches", Size::known(4 * 1024)),
+            target("logs", Size::known(2 * 1024)),
+        ]);
+        app.toggle_mark();
+
+        for row in 0..app.rows() {
+            cursor_on(&mut app, row);
+            let hidden = unreadable_cells(&app, 100, 12);
+            assert!(hidden.is_empty(), "top row {row}: {hidden:?}");
+        }
+        assert!(drawn(&app, 100, 12).contains("a description"));
+
+        let dir = PathBuf::from("/tmp/wsctl-cleanup-cursor");
+        app.listings.insert(
+            dir.clone(),
+            listing(
+                vec![
+                    entry("sub", true, Size::known(8 * 1024)),
+                    entry("f.bin", false, Size::Unknown(0)),
+                ],
+                0,
+                None,
+            ),
+        );
+        app.stack.push(View::Directory {
+            path: dir,
+            cursor: 0,
+            picked: false,
+            crumb: "caches".to_string(),
+        });
+
+        for row in 0..app.rows() {
+            cursor_on(&mut app, row);
+            let hidden = unreadable_cells(&app, 100, 12);
+            assert!(hidden.is_empty(), "directory row {row}: {hidden:?}");
+        }
     }
 }
