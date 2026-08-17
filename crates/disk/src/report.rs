@@ -3,12 +3,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit::{Category, CategoryPath};
+use crate::audit::{Audit, Category, CategoryPath};
 use crate::projects::{Artifact, Project, ProjectKind};
+use crate::sweep::RootUsage;
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -20,8 +21,22 @@ pub struct Report {
     /// Unix seconds. Stored as an instant, never as a precomputed age, so
     /// everything derived from it stays right as the cache gets older.
     pub generated_at: u64,
+    /// The volume, partitioned. Sums to what the walk could see, so the
+    /// categories below can be checked against it instead of floating free.
+    pub roots: Vec<RootSnap>,
     pub categories: Vec<CategorySnap>,
     pub projects: Vec<ProjectSnap>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RootSnap {
+    pub name: String,
+    pub path: PathBuf,
+    pub total: u64,
+    pub unattributed_total: u64,
+    pub unattributed: Vec<(PathBuf, u64)>,
+    pub unreadable: Vec<PathBuf>,
+    pub unreadable_count: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,6 +98,28 @@ impl Report {
                     .collect(),
             })
             .collect()
+    }
+
+    pub fn to_roots(&self) -> Vec<RootUsage> {
+        self.roots
+            .iter()
+            .map(|r| RootUsage {
+                name: r.name.clone(),
+                path: r.path.clone(),
+                total: r.total,
+                unattributed_total: r.unattributed_total,
+                unattributed: r.unattributed.clone(),
+                unreadable: r.unreadable.clone(),
+                unreadable_count: r.unreadable_count,
+            })
+            .collect()
+    }
+
+    pub fn to_audit(&self) -> Audit {
+        Audit {
+            roots: self.to_roots(),
+            categories: self.to_categories(),
+        }
     }
 
     pub fn to_projects(&self) -> Vec<Project> {
@@ -163,8 +200,23 @@ pub fn save(report: &Report) -> std::io::Result<()> {
 
 /// Walk the disk and build a fresh report. This is the slow path, tens of
 /// seconds, and is what the scheduled refresh runs.
-pub fn generate(roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report {
-    let categories = crate::audit::scan_categories()
+pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report {
+    let audit = crate::audit::scan();
+    let roots = audit
+        .roots
+        .into_iter()
+        .map(|r| RootSnap {
+            name: r.name,
+            path: r.path,
+            total: r.total,
+            unattributed_total: r.unattributed_total,
+            unattributed: r.unattributed,
+            unreadable: r.unreadable,
+            unreadable_count: r.unreadable_count,
+        })
+        .collect();
+    let categories = audit
+        .categories
         .into_iter()
         .map(|c| CategorySnap {
             name: c.name,
@@ -181,7 +233,7 @@ pub fn generate(roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report 
         })
         .collect();
 
-    let projects = crate::projects::discover(roots, max_depth)
+    let projects = crate::projects::discover(project_roots, max_depth)
         .into_iter()
         .map(|p| ProjectSnap {
             root: p.root,
@@ -207,6 +259,7 @@ pub fn generate(roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report 
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
             .as_secs(),
+        roots,
         categories,
         projects,
     }
@@ -217,7 +270,11 @@ pub fn generate(roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report 
 /// `no_cache` forces a walk. Either way a successful walk is written back, so
 /// there is no separate refresh command to remember: the slow path always
 /// leaves the fast path better off than it found it.
-pub fn load_or_refresh(roots: &[PathBuf], max_depth: usize, no_cache: bool) -> (Report, Source) {
+pub fn load_or_refresh(
+    project_roots: &[PathBuf],
+    max_depth: usize,
+    no_cache: bool,
+) -> (Report, Source) {
     let now = SystemTime::now();
 
     if !no_cache && let Some(report) = load(now) {
@@ -225,7 +282,7 @@ pub fn load_or_refresh(roots: &[PathBuf], max_depth: usize, no_cache: bool) -> (
         return (report, Source::Cache { age });
     }
 
-    let report = generate(roots, max_depth, now);
+    let report = generate(project_roots, max_depth, now);
     if let Err(e) = save(&report) {
         tracing::warn!("could not write disk report cache: {e}");
     }
@@ -261,6 +318,7 @@ mod tests {
         Report {
             schema: SCHEMA,
             generated_at: now - secs_ago,
+            roots: Vec::new(),
             categories: Vec::new(),
             projects: Vec::new(),
         }
@@ -282,6 +340,7 @@ mod tests {
         let report = Report {
             schema: SCHEMA,
             generated_at: 1_700_000_000,
+            roots: Vec::new(),
             categories: vec![CategorySnap {
                 name: "Rust".into(),
                 total_size: 4096,
@@ -324,16 +383,12 @@ mod tests {
             root: PathBuf::from("/tmp/app"),
             kind: ProjectKind::Cargo,
             artifacts: Vec::new(),
-            last_active: Some(
-                ten_days_ago
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            ),
+            last_active: Some(ten_days_ago.duration_since(UNIX_EPOCH).unwrap().as_secs()),
         };
         let report = Report {
             schema: SCHEMA,
             generated_at: 0,
+            roots: Vec::new(),
             categories: Vec::new(),
             projects: vec![snap],
         };
@@ -364,7 +419,11 @@ mod tests {
             "report would be self-deleted at {}",
             path.display()
         );
-        assert!(path.ends_with("wsctl/disk-report.json"), "{}", path.display());
+        assert!(
+            path.ends_with("wsctl/disk-report.json"),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]
@@ -377,6 +436,7 @@ mod tests {
         let report = Report {
             schema: SCHEMA,
             generated_at: 1,
+            roots: Vec::new(),
             categories: Vec::new(),
             projects: vec![ProjectSnap {
                 root: dir.path().to_path_buf(),
