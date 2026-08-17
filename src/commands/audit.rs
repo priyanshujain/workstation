@@ -11,7 +11,7 @@ const RULE: usize = 58;
 
 /// Roots smaller than this are macOS bookkeeping directories that only add
 /// rows. They still count towards the totals, they just do not get a line.
-const ROOT_FLOOR: u64 = 16 * 1024 * 1024;
+const ROOT_FLOOR: u64 = 16_000_000;
 
 const NAME_WIDTH: usize = 18;
 

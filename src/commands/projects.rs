@@ -70,7 +70,9 @@ pub fn run(opts: Options) -> Result<()> {
         Source::Cache { age } => report::humanize_age(age),
     };
 
-    let min_bytes = opts.min_size_mb * 1024 * 1024;
+    // Decimal, so --min-size-mb 50 hides exactly what the SIZE column calls
+    // less than 50 MB.
+    let min_bytes = opts.min_size_mb * 1_000_000;
     let shown: Vec<&Project> = projects
         .iter()
         .filter(|p| p.artifact_size() >= min_bytes)

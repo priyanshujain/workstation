@@ -1812,7 +1812,7 @@ mod tests {
             !complete,
             "a walk that was refused part of the tree is a floor"
         );
-        assert_eq!(total_label(bytes, complete), "at least 512 KB");
+        assert_eq!(total_label(bytes, complete), "at least 524 KB");
     }
 
     #[test]
@@ -2033,8 +2033,8 @@ mod tests {
     fn what_a_command_freed_is_not_reported_as_the_size_we_measured() {
         // The cache was 900 MB before `brew cleanup` ran. How much of it brew
         // decided to prune is not something anybody here measured.
-        assert_eq!(freed_label(900 * 1024 * 1024, false), "unknown");
-        assert_eq!(freed_label(900 * 1024 * 1024, true), "900 MB");
+        assert_eq!(freed_label(900_000_000, false), "unknown");
+        assert_eq!(freed_label(900_000_000, true), "900 MB");
     }
 
     #[test]

@@ -1561,7 +1561,10 @@ mod tests {
         }
     }
 
-    const GB: u64 = 1024 * 1024 * 1024;
+    /// Decimal, matching `format_size`, so a fixture written as `40 * GB` is
+    /// the same 40 GB the screen draws and `drawn_sizes` reads back.
+    const MB: u64 = 1_000_000;
+    const GB: u64 = 1_000_000_000;
 
     /// Fixed here on purpose: what matters is that the advice names the
     /// application the grant attaches to, not which one this machine reports.
@@ -1723,9 +1726,10 @@ mod tests {
     fn unit(name: &str) -> Option<u64> {
         match name {
             "B" => Some(1),
-            "KB" => Some(1024),
-            "MB" => Some(1024 * 1024),
+            "KB" => Some(1_000),
+            "MB" => Some(MB),
             "GB" => Some(GB),
+            "TB" => Some(1_000 * GB),
             _ => None,
         }
     }
@@ -1820,7 +1824,7 @@ mod tests {
         // 4.3 GB of a directory that turns out to hold 184 GB is as wrong as
         // zero, so a running total never reaches the size column.
         let mut app = started(&["Home"]);
-        scanned(&mut app, 0, 4 * GB + 300 * 1024 * 1024);
+        scanned(&mut app, 0, 4 * GB + 300 * MB);
 
         assert_eq!(labels(&app)[0].1, "scanning");
 
@@ -2036,8 +2040,8 @@ mod tests {
         assert_eq!(
             labels(&app),
             vec![
-                ("sub".to_string(), "512 KB".to_string()),
-                ("1 loose file".to_string(), "64 KB".to_string()),
+                ("sub".to_string(), "524 KB".to_string()),
+                ("1 loose file".to_string(), "66 KB".to_string()),
             ]
         );
     }
@@ -2093,7 +2097,7 @@ mod tests {
         assert_eq!(
             labels(&app),
             vec![
-                ("plain".to_string(), "32 KB".to_string()),
+                ("plain".to_string(), "33 KB".to_string()),
                 ("locked".to_string(), "unknown".to_string()),
             ]
         );
@@ -2165,7 +2169,7 @@ mod tests {
 
         assert_eq!(
             labels(&app),
-            vec![("child".to_string(), "64 KB".to_string())]
+            vec![("child".to_string(), "66 KB".to_string())]
         );
         assert!(!body_of(&app, 100, 12).contains("unknown"));
     }
@@ -2188,7 +2192,7 @@ mod tests {
         assert_eq!(
             labels(&app),
             vec![
-                ("full".to_string(), "32 KB".to_string()),
+                ("full".to_string(), "33 KB".to_string()),
                 ("empty".to_string(), "0 B".to_string()),
             ]
         );
@@ -2223,7 +2227,7 @@ mod tests {
             labels(&app),
             vec![
                 ("Library".to_string(), "elsewhere".to_string()),
-                ("Documents".to_string(), "128 KB".to_string()),
+                ("Documents".to_string(), "131 KB".to_string()),
                 ("1 loose file".to_string(), "8 KB".to_string()),
             ],
             "a root of its own is neither unknown nor part of this total"
@@ -2258,7 +2262,7 @@ mod tests {
     fn a_listing_that_cannot_show_everything_says_how_much_it_left_out() {
         let mut root = usage("Home", 2 * GB, Denials::default());
         root.unattributed_total = 2 * GB;
-        root.unattributed = vec![(PathBuf::from("/tmp/one"), 512 * 1024 * 1024)];
+        root.unattributed = vec![(PathBuf::from("/tmp/one"), 512 * MB)];
 
         let mut app = App::new(None);
         app.load_cached(&audit_of(vec![root]), Duration::ZERO);
@@ -2267,7 +2271,7 @@ mod tests {
 
         app.pane_mut().enter();
         let note = unlisted_note(&app).expect("bytes are missing from this listing");
-        assert!(note.contains(&format_size(1536 * 1024 * 1024)), "{note}");
+        assert!(note.contains(&format_size(2 * GB - 512 * MB)), "{note}");
         assert!(note.contains("not listed"), "{note}");
         assert!(drawn(&app, 100, 12).contains("not listed"));
     }

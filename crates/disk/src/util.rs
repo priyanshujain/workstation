@@ -6,19 +6,32 @@ use std::time::SystemTime;
 
 use walkdir::WalkDir;
 
+/// Decimal units, so a size here reads the same as it does in Finder, About
+/// This Mac, `df -H` and `diskutil`. Dividing by 1024 would be GiB under a GB
+/// label, which puts every figure about 7 percent below what macOS says about
+/// the same bytes.
 pub fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
+    const KB: u64 = 1_000;
+    const MB: u64 = 1_000_000;
+    const GB: u64 = 1_000_000_000;
+    const TB: u64 = 1_000_000_000_000;
 
-    if bytes >= GB {
+    // A tier begins where the tier below it would round up to four digits, so
+    // nothing ever prints as "1000 KB" or "1000.0 GB".
+    const MB_FLOOR: u64 = 999_500; // 999.5 KB
+    const GB_FLOOR: u64 = 999_500_000; // 999.5 MB
+    const TB_FLOOR: u64 = 999_950_000_000; // 999.95 GB
+
+    if bytes >= TB_FLOOR {
+        format!("{:.1} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB_FLOOR {
         format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
+    } else if bytes >= MB_FLOOR {
         format!("{:.0} MB", bytes as f64 / MB as f64)
     } else if bytes >= KB {
         format!("{:.0} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -82,12 +95,44 @@ mod tests {
     fn format_size_picks_units() {
         assert_eq!(format_size(0), "0 B");
         assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(2048), "2 KB");
-        assert_eq!(format_size(2 * 1024 * 1024), "2 MB");
-        assert_eq!(
-            format_size(3 * 1024 * 1024 * 1024 + 512 * 1024 * 1024),
-            "3.5 GB"
-        );
+        assert_eq!(format_size(2_000), "2 KB");
+        assert_eq!(format_size(2_048), "2 KB");
+        assert_eq!(format_size(2_000_000), "2 MB");
+        assert_eq!(format_size(3_500_000_000), "3.5 GB");
+        assert_eq!(format_size(3_500_000_000_000), "3.5 TB");
+    }
+
+    #[test]
+    fn format_size_changes_unit_at_each_thousand() {
+        assert_eq!(format_size(999), "999 B");
+        assert_eq!(format_size(1_000), "1 KB");
+        assert_eq!(format_size(999_999), "1 MB");
+        assert_eq!(format_size(1_000_000), "1 MB");
+        assert_eq!(format_size(999_999_999), "1.0 GB");
+        assert_eq!(format_size(1_000_000_000), "1.0 GB");
+        assert_eq!(format_size(999_999_999_999), "1.0 TB");
+        assert_eq!(format_size(1_000_000_000_000), "1.0 TB");
+    }
+
+    #[test]
+    fn format_size_never_prints_four_digits_before_the_unit() {
+        // The tier below is left the moment its own rounding would reach 1000.
+        assert_eq!(format_size(999_499), "999 KB");
+        assert_eq!(format_size(999_500), "1 MB");
+        assert_eq!(format_size(999_499_999), "999 MB");
+        assert_eq!(format_size(999_500_000), "1.0 GB");
+        assert_eq!(format_size(999_949_999_999), "999.9 GB");
+        assert_eq!(format_size(999_950_000_000), "1.0 TB");
+    }
+
+    #[test]
+    fn format_size_agrees_with_what_macos_says_about_this_disk() {
+        // `diskutil info /System/Volumes/Data` reports this machine's container
+        // as "494.4 GB (494384795648 Bytes)", and Finder, About This Mac and
+        // `df -H` all agree with it. Dividing by 1024 gives 460.4 GB, which is
+        // the number that made the tool look broken. Do not restore it.
+        assert_eq!(format_size(494_384_795_648), "494.4 GB");
+        assert_eq!(format_size(63_222_611_968), "63.2 GB");
     }
 
     #[test]
