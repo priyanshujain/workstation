@@ -183,7 +183,7 @@ pub fn sweep(roots: &[Root], rules: &[Rule]) -> Sweep {
     let skip: HashSet<&Path> = roots.iter().map(|r| r.path.as_path()).collect();
     let seen = Mutex::new(HashSet::new());
 
-    let units = plan(roots, &by_path);
+    let units = plan(roots, &by_path, &seen);
     let queue = Mutex::new(units.jobs);
     let results = Mutex::new(Vec::new());
 
@@ -258,10 +258,13 @@ struct RootSeed {
     unreadable: Vec<PathBuf>,
 }
 
-fn plan(roots: &[Root], by_path: &HashMap<&Path, usize>) -> Plan {
+fn plan(
+    roots: &[Root],
+    by_path: &HashMap<&Path, usize>,
+    seen: &Mutex<HashSet<(u64, u64)>>,
+) -> Plan {
     let mut jobs = Vec::new();
     let mut seeds = Vec::new();
-    let mut seen = HashSet::new();
 
     for (index, root) in roots.iter().enumerate() {
         let mut seed = RootSeed {
@@ -300,7 +303,7 @@ fn plan(roots: &[Root], by_path: &HashMap<&Path, usize>) -> Plan {
                     if meta.is_dir() {
                         continue;
                     }
-                    let bytes = charge(&meta, &mut seen);
+                    let bytes = charge(&meta, &mut seen.lock().unwrap());
                     seed.loose_bytes += bytes;
                     if let Some(r) = rule {
                         seed.rule_sizes[r] += bytes;
@@ -567,6 +570,26 @@ mod tests {
         assert!(
             sweep.total() < 2 * 1024 * 1024,
             "hardlink billed to both roots: {}",
+            sweep.total()
+        );
+    }
+
+    #[test]
+    fn a_hardlink_between_a_loose_file_and_a_subtree_is_charged_once() {
+        // The root's own files are measured while planning and its
+        // subdirectories by the workers. Both have to consult the same set of
+        // seen inodes or a link spanning the two gets billed twice.
+        let dir = tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(dir.path().join("loose.bin"), vec![0u8; 1024 * 1024]).unwrap();
+        fs::hard_link(dir.path().join("loose.bin"), sub.join("same.bin")).unwrap();
+
+        let sweep = sweep(&[root("test", dir.path())], &[]);
+
+        assert!(
+            sweep.total() < 2 * 1024 * 1024,
+            "hardlink counted by both the planner and a worker: {}",
             sweep.total()
         );
     }
