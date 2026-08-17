@@ -36,7 +36,10 @@ pub fn disable() -> Result<()> {
 
 pub fn status() -> Result<()> {
     println!();
-    println!("  {}", style("Disk Report Cache").bold().underlined().cyan());
+    println!(
+        "  {}",
+        style("Disk Report Cache").bold().underlined().cyan()
+    );
     println!();
 
     let cache = report::cache_path();
