@@ -4,7 +4,7 @@ use console::style;
 use disk::audit::Audit;
 use disk::overview::{DiskOverview, disk_overview};
 use disk::report::{self, Report, Source};
-use disk::sweep::Denial;
+use disk::sweep::{self, Denial};
 use disk::util::format_size;
 
 const RULE: usize = 58;
@@ -169,7 +169,7 @@ fn print_unreadable(audit: &Audit) {
         .dim()
     );
 
-    let terminal = terminal_app_name(std::env::var("TERM_PROGRAM").ok().as_deref());
+    let terminal = sweep::full_disk_access_app();
     print_denial(
         audit,
         Denial::Protected,
@@ -193,27 +193,6 @@ fn print_denial(audit: &Audit, denial: Denial, advice: &str) {
     println!("  {}", style(advice).dim());
     for entry in audit.unreadable_examples(denial, 4) {
         println!("  {}", style(format!("  {}", tilde(&entry.path))).dim());
-    }
-}
-
-/// Full Disk Access is granted to the terminal application rather than to
-/// `wsctl`, so the advice has to name the terminal this run is sitting in.
-fn terminal_app_name(term_program: Option<&str>) -> String {
-    let Some(name) = term_program.map(str::trim).filter(|n| !n.is_empty()) else {
-        return "your terminal app".to_string();
-    };
-    let name = name.strip_suffix(".app").unwrap_or(name);
-    match name {
-        "Apple_Terminal" => "Terminal".to_string(),
-        "vscode" => "VS Code".to_string(),
-        _ if name.chars().any(char::is_uppercase) => name.to_string(),
-        _ => {
-            let mut chars = name.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                None => name.to_string(),
-            }
-        }
     }
 }
 
@@ -329,21 +308,6 @@ mod tests {
         assert_eq!(clip("Home", 18), "Home");
         assert_eq!(clip(".PreviousSystemInformation", 18).chars().count(), 18);
         assert!(clip(".PreviousSystemInformation", 18).ends_with('\u{2026}'));
-    }
-
-    #[test]
-    fn the_terminal_named_in_the_advice_is_the_one_running_the_scan() {
-        assert_eq!(terminal_app_name(Some("ghostty")), "Ghostty");
-        assert_eq!(terminal_app_name(Some("Apple_Terminal")), "Terminal");
-        assert_eq!(terminal_app_name(Some("iTerm.app")), "iTerm");
-        assert_eq!(terminal_app_name(Some("vscode")), "VS Code");
-        assert_eq!(terminal_app_name(Some("WezTerm")), "WezTerm");
-    }
-
-    #[test]
-    fn advice_stays_generic_when_the_terminal_is_unknown() {
-        assert_eq!(terminal_app_name(None), "your terminal app");
-        assert_eq!(terminal_app_name(Some("   ")), "your terminal app");
     }
 
     #[test]
