@@ -1,5 +1,8 @@
 use std::path::Path;
 use std::process::Command;
+use std::time::SystemTime;
+
+use walkdir::WalkDir;
 
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -15,6 +18,29 @@ pub fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+/// Newest mtime anywhere under `path`, the directory itself included.
+/// `None` when nothing readable is there.
+pub fn newest_mtime(path: &Path) -> Option<SystemTime> {
+    WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter_map(|m| m.modified().ok())
+        .max()
+}
+
+/// Whole days since anything under `path` last changed.
+pub fn idle_days(path: &Path, now: SystemTime) -> Option<u64> {
+    let last = newest_mtime(path)?;
+    Some(
+        now.duration_since(last)
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_secs()
+            / 86_400,
+    )
 }
 
 /// On-disk size of `path` in bytes via `du -sk`. Returns 0 if missing or `du` fails.
