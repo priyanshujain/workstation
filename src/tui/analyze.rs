@@ -614,6 +614,7 @@ mod tests {
             name: name.to_string(),
             path: PathBuf::from("/tmp").join(name),
             total,
+            children: Vec::new(),
             unattributed_total: 0,
             unattributed: Vec::new(),
             denials: unreadable.iter().fold(Denials::default(), |mut d, u| {
