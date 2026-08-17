@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{Audit, Category, CategoryPath};
 use crate::projects::{Artifact, Project, ProjectKind};
-use crate::sweep::RootUsage;
+use crate::sweep::{RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
@@ -35,8 +35,16 @@ pub struct RootSnap {
     pub total: u64,
     pub unattributed_total: u64,
     pub unattributed: Vec<(PathBuf, u64)>,
-    pub unreadable: Vec<PathBuf>,
+    pub unreadable: Vec<UnreadableSnap>,
     pub unreadable_count: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UnreadableSnap {
+    pub path: PathBuf,
+    /// Serialised as a bool because there are exactly two kinds and a bare
+    /// enum in the cache would need a migration the first time a third shows up.
+    pub protected: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -109,7 +117,18 @@ impl Report {
                 total: r.total,
                 unattributed_total: r.unattributed_total,
                 unattributed: r.unattributed.clone(),
-                unreadable: r.unreadable.clone(),
+                unreadable: r
+                    .unreadable
+                    .iter()
+                    .map(|u| Unreadable {
+                        path: u.path.clone(),
+                        denial: if u.protected {
+                            crate::sweep::Denial::Protected
+                        } else {
+                            crate::sweep::Denial::Forbidden
+                        },
+                    })
+                    .collect(),
                 unreadable_count: r.unreadable_count,
             })
             .collect()
@@ -211,7 +230,14 @@ pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) ->
             total: r.total,
             unattributed_total: r.unattributed_total,
             unattributed: r.unattributed,
-            unreadable: r.unreadable,
+            unreadable: r
+                .unreadable
+                .into_iter()
+                .map(|u| UnreadableSnap {
+                    protected: u.denial == crate::sweep::Denial::Protected,
+                    path: u.path,
+                })
+                .collect(),
             unreadable_count: r.unreadable_count,
         })
         .collect();

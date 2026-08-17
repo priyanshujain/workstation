@@ -12,6 +12,9 @@ use std::fs::Metadata;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 /// Everything `df` counts for the data volume hangs off here, firmlinks
 /// included. Walking `/` instead would cross into the read-only system volume
@@ -20,6 +23,68 @@ const DATA_VOLUME: &str = "/System/Volumes/Data";
 
 /// Per root, so one pathological tree cannot fill the report.
 const MAX_UNREADABLE_LISTED: usize = 20;
+
+/// How often a caller hears from a sweep that has nothing new to report. Slow
+/// enough to cost nothing, fast enough that a UI stays responsive to keys.
+const TICK: Duration = Duration::from_millis(80);
+
+/// Why a directory would not open. The two look identical through
+/// `io::ErrorKind::PermissionDenied` and have completely different fixes, so
+/// telling a user to grant Full Disk Access for a root-owned directory is
+/// advice that cannot work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Denial {
+    /// EPERM. macOS privacy policy: Full Disk Access for the terminal app
+    /// running the scan lifts it.
+    Protected,
+    /// EACCES. Ordinary unix permissions: needs sudo, and no amount of Full
+    /// Disk Access will help.
+    Forbidden,
+}
+
+impl Denial {
+    fn of(error: &std::io::Error) -> Self {
+        match error.raw_os_error() {
+            Some(1) => Denial::Protected,
+            _ => Denial::Forbidden,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Unreadable {
+    pub path: PathBuf,
+    pub denial: Denial,
+}
+
+/// What a sweep says while it is still running, so a caller can show rows
+/// filling in instead of a blank screen for two minutes.
+#[derive(Debug, Clone)]
+pub enum Progress {
+    /// Always first. The rows to draw, in the order they were discovered.
+    Started { roots: Vec<Root>, jobs: usize },
+    /// One immediate child of a root finished. `root_bytes` is that root's
+    /// running total, already including its loose files.
+    Scanned {
+        root: usize,
+        path: PathBuf,
+        root_bytes: u64,
+        remaining: usize,
+    },
+    /// Every job for this root is in. Its number is final.
+    RootDone { root: usize },
+    /// Nothing new. Emitted every `TICK` so a UI can poll for keys.
+    Tick,
+}
+
+/// A caller's answer to each [`Progress`]. Returning `Cancel` stops the walk;
+/// workers notice between directories, so it takes effect within milliseconds
+/// rather than at the end of whatever subtree is in flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Continue,
+    Cancel,
+}
 
 /// A named slice of the volume. Roots never overlap: one is skipped whenever
 /// the walk of another reaches it.
@@ -51,7 +116,7 @@ pub struct RootUsage {
     /// is a different claim from zero, and the old code made the wrong one:
     /// `du` returns 0 for a TCC-protected directory and the category builder
     /// then dropped the path for being empty.
-    pub unreadable: Vec<PathBuf>,
+    pub unreadable: Vec<Unreadable>,
     pub unreadable_count: usize,
 }
 
@@ -73,6 +138,14 @@ impl Sweep {
 
     pub fn unreadable_count(&self) -> usize {
         self.roots.iter().map(|r| r.unreadable_count).sum()
+    }
+
+    pub fn denied(&self, denial: Denial) -> usize {
+        self.roots
+            .iter()
+            .flat_map(|r| r.unreadable.iter())
+            .filter(|u| u.denial == denial)
+            .count()
     }
 }
 
@@ -175,6 +248,19 @@ fn same_inode(a: &Path, b: &Path) -> bool {
 
 /// Walk every root once, charging each byte to at most one rule.
 pub fn sweep(roots: &[Root], rules: &[Rule]) -> Sweep {
+    sweep_streaming(roots, rules, &mut |_| Flow::Continue)
+        .expect("a sweep that is never cancelled always finishes")
+}
+
+/// The same walk, reporting as it goes.
+///
+/// `on_progress` runs on the calling thread, never on a worker, so it can draw
+/// to the terminal without a lock. `None` means the caller cancelled.
+pub fn sweep_streaming(
+    roots: &[Root],
+    rules: &[Rule],
+    on_progress: &mut dyn FnMut(Progress) -> Flow,
+) -> Option<Sweep> {
     let by_path: HashMap<&Path, usize> = rules
         .iter()
         .enumerate()
@@ -184,49 +270,114 @@ pub fn sweep(roots: &[Root], rules: &[Rule]) -> Sweep {
     let seen = Mutex::new(HashSet::new());
 
     let units = plan(roots, &by_path, &seen);
+
+    // Loose files are already measured, so a root with nothing but files is
+    // final before a single worker starts.
+    let mut root_bytes: Vec<u64> = units.roots.iter().map(|s| s.loose_bytes).collect();
+    let mut root_pending = vec![0usize; roots.len()];
+    for job in &units.jobs {
+        root_pending[job.root] += 1;
+    }
+
+    if on_progress(Progress::Started {
+        roots: roots.to_vec(),
+        jobs: units.jobs.len(),
+    }) == Flow::Cancel
+    {
+        return None;
+    }
+    for (index, pending) in root_pending.iter().enumerate() {
+        if *pending == 0 && on_progress(Progress::RootDone { root: index }) == Flow::Cancel {
+            return None;
+        }
+    }
+
+    let mut remaining = units.jobs.len();
     let queue = Mutex::new(units.jobs);
-    let results = Mutex::new(Vec::new());
+    let cancel = AtomicBool::new(false);
+    let (tx, rx) = mpsc::channel();
 
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().clamp(1, 8))
         .unwrap_or(4);
 
-    std::thread::scope(|scope| {
+    let results = std::thread::scope(|scope| {
         for _ in 0..threads {
-            scope.spawn(|| {
-                loop {
+            let tx = tx.clone();
+            let queue = &queue;
+            let cancel = &cancel;
+            let (by_path, skip, seen) = (&by_path, &skip, &seen);
+            scope.spawn(move || {
+                while !cancel.load(Ordering::Relaxed) {
                     let Some(job) = queue.lock().unwrap().pop() else {
                         break;
                     };
                     let mut walker = Walker {
-                        rules: &by_path,
-                        skip: &skip,
-                        seen: &seen,
+                        rules: by_path,
+                        skip,
+                        seen,
+                        cancel,
                         dev: job.dev,
                         rule_sizes: vec![0; rules.len()],
                         unreadable: Vec::new(),
                     };
                     let total = walker.walk(&job.path, job.rule);
                     let attributed: u64 = walker.rule_sizes.iter().sum();
-                    results.lock().unwrap().push(JobResult {
-                        root: job.root,
-                        path: job.path,
-                        total,
-                        unattributed: total.saturating_sub(attributed),
-                        rule_sizes: walker.rule_sizes,
-                        unreadable: walker.unreadable,
-                    });
+                    // A closed receiver means the caller cancelled and went
+                    // away; there is nothing useful left to do.
+                    if tx
+                        .send(JobResult {
+                            root: job.root,
+                            path: job.path,
+                            total,
+                            unattributed: total.saturating_sub(attributed),
+                            rule_sizes: walker.rule_sizes,
+                            unreadable: walker.unreadable,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             });
         }
-    });
+        // The workers hold the only senders now, so the channel closes exactly
+        // when the last of them stops.
+        drop(tx);
 
-    collect(
-        roots,
-        rules.len(),
-        units.roots,
-        results.into_inner().unwrap(),
-    )
+        let mut results = Vec::new();
+        loop {
+            let flow = match rx.recv_timeout(TICK) {
+                Ok(result) => {
+                    remaining -= 1;
+                    root_bytes[result.root] += result.total;
+                    root_pending[result.root] -= 1;
+                    let finished = root_pending[result.root] == 0;
+                    let progress = Progress::Scanned {
+                        root: result.root,
+                        path: result.path.clone(),
+                        root_bytes: root_bytes[result.root],
+                        remaining,
+                    };
+                    let root = result.root;
+                    results.push(result);
+                    match on_progress(progress) {
+                        Flow::Cancel => Flow::Cancel,
+                        Flow::Continue if finished => on_progress(Progress::RootDone { root }),
+                        flow => flow,
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => on_progress(Progress::Tick),
+                Err(RecvTimeoutError::Disconnected) => break Some(results),
+            };
+            if flow == Flow::Cancel {
+                cancel.store(true, Ordering::Relaxed);
+                break None;
+            }
+        }
+    })?;
+
+    Some(collect(roots, rules.len(), units.roots, results))
 }
 
 struct Job {
@@ -242,7 +393,7 @@ struct JobResult {
     total: u64,
     unattributed: u64,
     rule_sizes: Vec<u64>,
-    unreadable: Vec<PathBuf>,
+    unreadable: Vec<Unreadable>,
 }
 
 /// Everything measured while enumerating the roots themselves: their loose
@@ -255,7 +406,7 @@ struct Plan {
 struct RootSeed {
     loose_bytes: u64,
     rule_sizes: Vec<u64>,
-    unreadable: Vec<PathBuf>,
+    unreadable: Vec<Unreadable>,
 }
 
 fn plan(
@@ -281,7 +432,10 @@ fn plan(
         let inherited = by_path.get(root.path.as_path()).copied();
 
         match std::fs::read_dir(&root.path) {
-            Err(_) => seed.unreadable.push(root.path.clone()),
+            Err(e) => seed.unreadable.push(Unreadable {
+                path: root.path.clone(),
+                denial: Denial::of(&e),
+            }),
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -371,8 +525,6 @@ fn collect(
         root.unattributed
             .sort_by_key(|(_, size)| std::cmp::Reverse(*size));
     }
-    usage.sort_by_key(|r| std::cmp::Reverse(r.total));
-
     Sweep {
         roots: usage,
         rule_sizes,
@@ -383,9 +535,10 @@ struct Walker<'a> {
     rules: &'a HashMap<&'a Path, usize>,
     skip: &'a HashSet<&'a Path>,
     seen: &'a Mutex<HashSet<(u64, u64)>>,
+    cancel: &'a AtomicBool,
     dev: u64,
     rule_sizes: Vec<u64>,
-    unreadable: Vec<PathBuf>,
+    unreadable: Vec<Unreadable>,
 }
 
 impl Walker<'_> {
@@ -399,11 +552,20 @@ impl Walker<'_> {
 
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
-            Err(_) => {
-                self.unreadable.push(dir.to_path_buf());
+            Err(e) => {
+                self.unreadable.push(Unreadable {
+                    path: dir.to_path_buf(),
+                    denial: Denial::of(&e),
+                });
                 return total;
             }
         };
+
+        // Checked per directory rather than per file: cheap enough to be free
+        // at this rate, frequent enough that cancelling feels immediate.
+        if self.cancel.load(Ordering::Relaxed) {
+            return total;
+        }
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -608,7 +770,92 @@ mod tests {
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
 
         assert_eq!(sweep.unreadable_count(), 1);
-        assert_eq!(sweep.roots[0].unreadable, vec![locked]);
+        assert_eq!(sweep.roots[0].unreadable[0].path, locked);
+        // chmod 000 is a unix refusal, not a privacy one. Telling the user to
+        // grant Full Disk Access here would be advice that cannot work.
+        assert_eq!(sweep.roots[0].unreadable[0].denial, Denial::Forbidden);
+    }
+
+    #[test]
+    fn streaming_announces_roots_then_finishes_every_one() {
+        let dir = tempdir().unwrap();
+        for name in ["a", "b"] {
+            let sub = dir.path().join(name);
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("f.bin"), vec![0u8; 128 * 1024]).unwrap();
+        }
+
+        let mut events = Vec::new();
+        let result = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+            events.push(p);
+            Flow::Continue
+        });
+
+        let swept = result.expect("not cancelled");
+        assert!(matches!(events.first(), Some(Progress::Started { .. })));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Progress::RootDone { .. }))
+                .count(),
+            1,
+            "each root must be finished exactly once"
+        );
+        let scanned: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match e {
+                Progress::Scanned { root_bytes, .. } => Some(*root_bytes),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(scanned.len(), 2, "one event per immediate child");
+        assert!(
+            scanned.windows(2).all(|w| w[0] <= w[1]),
+            "the running total must only grow: {scanned:?}"
+        );
+        assert_eq!(*scanned.last().unwrap(), swept.total());
+    }
+
+    #[test]
+    fn a_root_with_no_subdirectories_is_finished_before_any_worker_runs() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("only.bin"), vec![0u8; 64 * 1024]).unwrap();
+
+        let mut events = Vec::new();
+        sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+            events.push(p);
+            Flow::Continue
+        })
+        .unwrap();
+
+        assert!(
+            matches!(events.get(1), Some(Progress::RootDone { root: 0 })),
+            "a root with only loose files never gets a job, so nothing else \
+             would ever mark it done: {events:?}"
+        );
+    }
+
+    #[test]
+    fn cancelling_stops_the_walk_and_returns_nothing() {
+        let dir = tempdir().unwrap();
+        for i in 0..8 {
+            let sub = dir.path().join(format!("sub{i}"));
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("f.bin"), vec![0u8; 64 * 1024]).unwrap();
+        }
+
+        let mut seen = 0;
+        let result = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+            if matches!(p, Progress::Scanned { .. }) {
+                seen += 1;
+                if seen == 1 {
+                    return Flow::Cancel;
+                }
+            }
+            Flow::Continue
+        });
+
+        assert!(result.is_none(), "a cancelled sweep has no result to give");
     }
 
     #[test]

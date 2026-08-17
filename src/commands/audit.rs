@@ -4,6 +4,7 @@ use console::style;
 use disk::audit::Audit;
 use disk::overview::{DiskOverview, disk_overview};
 use disk::report::{self, Report, Source};
+use disk::sweep::Denial;
 use disk::util::format_size;
 
 const RULE: usize = 58;
@@ -156,8 +157,8 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
             ))
             .dim()
         );
-        for path in audit.unreadable_examples(4) {
-            println!("  {}", style(format!("  {}", tilde(path))).dim());
+        for entry in audit.unreadable_examples(Denial::Protected, 4) {
+            println!("  {}", style(format!("  {}", tilde(&entry.path))).dim());
         }
         println!(
             "  {}",

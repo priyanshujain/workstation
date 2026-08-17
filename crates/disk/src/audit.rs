@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::platform;
-use crate::sweep::{self, Root, RootUsage, Rule};
+use crate::sweep::{self, Denial, Root, RootUsage, Rule, Unreadable};
 
 pub struct Category {
     pub name: String,
@@ -43,12 +43,23 @@ impl Audit {
 
     /// Sample of what could not be opened, so "grant Full Disk Access" is
     /// advice the user can act on rather than a shrug.
-    pub fn unreadable_examples(&self, limit: usize) -> Vec<&PathBuf> {
+    pub fn unreadable_examples(&self, denial: Denial, limit: usize) -> Vec<&Unreadable> {
         self.roots
             .iter()
             .flat_map(|r| r.unreadable.iter())
+            .filter(|u| u.denial == denial)
             .take(limit)
             .collect()
+    }
+
+    /// How many directories refused for each reason. Full Disk Access fixes
+    /// one of these numbers and not the other.
+    pub fn denied(&self, denial: Denial) -> usize {
+        self.roots
+            .iter()
+            .flat_map(|r| r.unreadable.iter())
+            .filter(|u| u.denial == denial)
+            .count()
     }
 
     /// Biggest unnamed directories anywhere, so the gap is actionable rather
@@ -73,9 +84,17 @@ pub fn scan() -> Audit {
 }
 
 pub fn scan_with(roots: &[Root], rules: &[Rule]) -> Audit {
-    let swept = sweep::sweep(roots, rules);
+    from_sweep(sweep::sweep(roots, rules), rules)
+}
+
+/// Sorting happens here rather than in the sweep: a streaming caller needs
+/// roots in the order they were announced, and only a finished report wants
+/// them biggest-first.
+pub fn from_sweep(swept: sweep::Sweep, rules: &[Rule]) -> Audit {
+    let mut roots = swept.roots;
+    roots.sort_by_key(|r| std::cmp::Reverse(r.total));
     Audit {
-        roots: swept.roots,
+        roots,
         categories: group(rules, &swept.rule_sizes),
     }
 }
