@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod audit;
 pub mod cleanup;
 pub mod liveness;
