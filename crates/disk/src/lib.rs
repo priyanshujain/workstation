@@ -4,5 +4,6 @@ pub mod liveness;
 pub mod overview;
 pub mod platform;
 pub mod projects;
+pub mod report;
 pub mod scan;
 pub mod util;
