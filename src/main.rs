@@ -48,13 +48,10 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Disk { sub } => match sub {
             DiskCommand::Audit { no_cache } => {
-                commands::audit::run_report(no_cache)?;
-            }
-            DiskCommand::Analyze => {
                 if std::io::stdout().is_terminal() {
-                    tui::analyze::run()?;
+                    tui::audit::run(no_cache)?;
                 } else {
-                    commands::audit::run_report(false)?;
+                    commands::audit::run_report(no_cache)?;
                 }
             }
             DiskCommand::Cleanup => {
