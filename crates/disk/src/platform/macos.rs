@@ -166,6 +166,44 @@ pub fn cleanup_targets() -> Vec<Target> {
                 vec!["simctl".into(), "delete".into(), "unavailable".into()],
             ),
         ));
+
+        // Runtimes are 15-20 GB each. 180 days rather than simctl's own
+        // shorter suggestions: a runtime kept for occasional back-compat
+        // testing is worth far more than the space it holds.
+        targets.push(Target::new(
+            "Simulator runtimes unused 180 days",
+            "Whole iOS/tvOS/watchOS runtime images nothing has booted",
+            0,
+            CleanAction::RunCommand(
+                "xcrun".into(),
+                vec![
+                    "simctl".into(),
+                    "runtime".into(),
+                    "delete".into(),
+                    "--notUsedSinceDays".into(),
+                    "180".into(),
+                ],
+            ),
+        ));
+    }
+
+    // Session scratch dirs from agent tooling. Cleaned per child, never as a
+    // whole: sessions still running keep working state in here.
+    if let Some(scratch) = claude_scratch_dir() {
+        const IDLE_DAYS: u64 = 7;
+        let reclaimable = crate::cleanup::idle_children(&scratch, IDLE_DAYS)
+            .iter()
+            .map(|(_, size)| size)
+            .sum();
+        targets.push(Target::new(
+            "Claude session scratchpads",
+            "Scratch dirs from sessions idle over a week, live ones kept",
+            reclaimable,
+            CleanAction::RemoveIdleChildren {
+                dir: scratch,
+                idle_days: IDLE_DAYS,
+            },
+        ));
     }
 
     if command_exists("docker") {
@@ -189,6 +227,16 @@ pub fn cleanup_targets() -> Vec<Target> {
     ));
 
     targets
+}
+
+fn claude_scratch_dir() -> Option<PathBuf> {
+    let out = Command::new("id").arg("-u").output().ok()?;
+    let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if uid.is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(format!("/private/tmp/claude-{uid}"));
+    dir.is_dir().then_some(dir)
 }
 
 fn go_cache_dir() -> Option<PathBuf> {
