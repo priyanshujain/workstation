@@ -7,4 +7,5 @@ pub mod platform;
 pub mod projects;
 pub mod report;
 pub mod scan;
+pub mod sweep;
 pub mod util;
