@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use disk::sweep::Root;
+use disk::sweep::{Denial, Root};
 use disk::util::allocated;
 
 /// Measured as smooth: fast enough to read as live, slow enough that drawing
@@ -26,14 +26,24 @@ pub struct Children {
     /// ignores this reports a directory as smaller than it is.
     pub loose_bytes: u64,
     pub loose_files: usize,
+    /// Why the directory would not open. `None` means it opened, whatever it
+    /// held: a refusal has to be told apart from an empty directory, or a
+    /// screen draws "(empty)" over bytes it was never allowed to see.
+    pub denied: Option<Denial>,
 }
 
 /// A symlink is a loose entry whatever it points at: walking one would bill
 /// this directory for bytes that live elsewhere, and bill them twice if the
 /// target is also on the volume.
 pub fn children_as_roots(dir: &Path) -> Children {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Children::default();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return Children {
+                denied: refusal(&e),
+                ..Children::default()
+            };
+        }
     };
 
     let mut children = Children::default();
@@ -59,6 +69,15 @@ pub fn children_as_roots(dir: &Path) -> Children {
     // stable order the first frame can have.
     children.roots.sort_by(|a, b| a.name.cmp(&b.name));
     children
+}
+
+/// Only a refusal is a refusal. `read_dir` fails the same way for a plain file
+/// (ENOTDIR) and for a path that is gone (ENOENT), and calling either of those
+/// a permission problem sends the user off to try sudo on something sudo cannot
+/// fix. The two kinds of genuine refusal are kept apart by
+/// [`Denial::of`]: only one of them is what Full Disk Access is for.
+fn refusal(error: &std::io::Error) -> Option<Denial> {
+    (error.kind() == std::io::ErrorKind::PermissionDenied).then(|| Denial::of(error))
 }
 
 /// How often a screen is allowed to repaint from inside a walk. Both screens
@@ -148,6 +167,22 @@ mod tests {
         assert_eq!(names(&children), vec!["sub".to_string()]);
         assert_eq!(children.roots[0].path, sub);
         assert_eq!(children.loose_files, 1);
+        assert_eq!(children.denied, None);
+    }
+
+    #[test]
+    fn an_empty_readable_directory_is_empty_rather_than_refused() {
+        let scratch = Scratch::new("empty");
+
+        let children = children_as_roots(scratch.path());
+
+        assert!(children.roots.is_empty());
+        assert_eq!(children.loose_files, 0);
+        assert_eq!(children.loose_bytes, 0);
+        assert_eq!(
+            children.denied, None,
+            "an empty directory opened fine and must not read as refused"
+        );
     }
 
     #[test]
@@ -249,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_directory_yields_nothing() {
+    fn an_unreadable_directory_reports_the_refusal_instead_of_reading_as_empty() {
         use std::os::unix::fs::PermissionsExt;
 
         let scratch = Scratch::new("locked");
@@ -263,19 +298,23 @@ mod tests {
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_bytes, 0);
         assert_eq!(children.loose_files, 0);
+        // chmod 000 is a unix refusal, not a privacy one, so the advice is sudo
+        // and not Full Disk Access.
+        assert_eq!(children.denied, Some(Denial::Forbidden));
     }
 
     #[test]
-    fn a_missing_directory_yields_nothing() {
+    fn a_missing_directory_is_not_a_refusal() {
         let children = children_as_roots(Path::new("/this/path/does/not/exist/xyz"));
 
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_bytes, 0);
         assert_eq!(children.loose_files, 0);
+        assert_eq!(children.denied, None, "a path that is gone was not refused");
     }
 
     #[test]
-    fn a_file_handed_in_as_a_directory_yields_nothing() {
+    fn a_file_handed_in_as_a_directory_is_not_a_refusal() {
         let scratch = Scratch::new("not-a-dir");
         let file = scratch.file("plain.bin", 8 * 1024);
 
@@ -283,6 +322,9 @@ mod tests {
 
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_files, 0);
+        // ENOTDIR. Reporting it as Forbidden would tell the user to try sudo on
+        // something sudo cannot fix.
+        assert_eq!(children.denied, None);
     }
 
     #[test]
