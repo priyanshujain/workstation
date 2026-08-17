@@ -62,6 +62,12 @@ pub enum Commands {
         sub: AppCommand,
     },
 
+    /// Keep the menu bar on a chosen monitor across dock reconnects
+    Display {
+        #[command(subcommand)]
+        sub: DisplayCommand,
+    },
+
     /// Manage the virtual audio devices and the echo-cancelling bridge
     Audio {
         #[command(subcommand)]
@@ -99,6 +105,34 @@ pub enum AppCommand {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum DisplayCommand {
+    /// Show connected displays and their keys
+    List,
+
+    /// Pin the panel that should always hold the menu bar (defaults to the current one)
+    Pin {
+        /// Display key as vendor:model:serial, from `wsctl display list`
+        key: Option<String>,
+    },
+
+    /// Move the menu bar back to the pinned panel now
+    Apply,
+
+    /// Show what is pinned and whether the watcher is running
+    Status,
+
+    /// Start watching for display changes in the background (launchd agent)
+    Enable,
+
+    /// Stop watching for display changes
+    Disable,
+
+    /// Run the watcher in the foreground (used by the launchd agent)
+    #[command(hide = true)]
+    Watch,
 }
 
 #[derive(Subcommand)]

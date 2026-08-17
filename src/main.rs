@@ -9,7 +9,10 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand, SelfCommand};
+use cli::{
+    AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand, DisplayCommand,
+    SelfCommand,
+};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -78,6 +81,15 @@ fn main() -> anyhow::Result<()> {
                     no_cache,
                 })?;
             }
+        },
+        Commands::Display { sub } => match sub {
+            DisplayCommand::List => commands::display::list()?,
+            DisplayCommand::Pin { key } => commands::display::pin(key)?,
+            DisplayCommand::Apply => commands::display::apply()?,
+            DisplayCommand::Status => commands::display::status()?,
+            DisplayCommand::Enable => commands::display::enable()?,
+            DisplayCommand::Disable => commands::display::disable()?,
+            DisplayCommand::Watch => commands::display::watch()?,
         },
         Commands::App { sub } => match sub {
             AppCommand::Remove {
