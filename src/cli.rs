@@ -238,7 +238,7 @@ pub enum DiskCommand {
         no_cache: bool,
     },
 
-    /// Interactive disk cleanup: audit + drill-down + delete in one TUI
+    /// Browse and delete what is safe to remove, sizes filling in as it measures
     Cleanup,
 
     /// Manage the scheduled refresh of the cached disk report
