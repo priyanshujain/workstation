@@ -161,7 +161,11 @@ pub enum AudioCommand {
 #[derive(Subcommand)]
 pub enum DiskCommand {
     /// Show disk usage by category (read-only summary)
-    Audit,
+    Audit {
+        /// Rescan instead of reading the cached report, and refresh the cache
+        #[arg(long)]
+        no_cache: bool,
+    },
 
     /// Interactive disk cleanup: audit + drill-down + delete in one TUI
     Cleanup,

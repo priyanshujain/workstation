@@ -1,9 +1,9 @@
 use console::style;
-use disk::audit::scan_categories;
 use disk::overview::disk_overview;
+use disk::report::{self, Source};
 use disk::util::format_size;
 
-pub fn run_report() -> anyhow::Result<()> {
+pub fn run_report(no_cache: bool) -> anyhow::Result<()> {
     println!();
     println!(
         "  {}",
@@ -37,16 +37,33 @@ pub fn run_report() -> anyhow::Result<()> {
         println!();
     }
 
-    println!("  {}", style("Usage by Category").bold());
+    if no_cache {
+        println!("  Scanning...");
+    }
+
+    let (report, source) = report::load_or_refresh(
+        &disk::projects::default_roots(),
+        disk::projects::MAX_DEPTH,
+        no_cache,
+    );
+    let categories = report.to_categories();
+
+    if no_cache {
+        // Clear "Scanning..." line
+        print!("\x1b[1A\x1b[2K");
+    }
+
+    let as_of = match source {
+        Source::Fresh => "fresh scan".to_string(),
+        Source::Cache { age } => report::humanize_age(age),
+    };
+    println!(
+        "  {}  {}",
+        style("Usage by Category").bold(),
+        style(format!("({as_of})")).dim()
+    );
     println!("  {}", style("─".repeat(50)).dim());
-
     println!();
-    println!("  Scanning...");
-
-    let categories = scan_categories();
-
-    // Clear "Scanning..." line
-    print!("\x1b[1A\x1b[2K");
 
     let mut total_accounted = 0u64;
 
@@ -75,6 +92,18 @@ pub fn run_report() -> anyhow::Result<()> {
         style(format_size(total_accounted)).green().bold(),
         style("total tracked").bold(),
     );
+
+    let stale = report.stale_paths();
+    if !stale.is_empty() {
+        println!(
+            "  {}",
+            style(format!(
+                "{} path(s) changed since the scan, run with --no-cache for exact numbers",
+                stale.len()
+            ))
+            .dim()
+        );
+    }
     println!();
 
     Ok(())
