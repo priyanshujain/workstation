@@ -1,5 +1,7 @@
+use std::collections::HashSet;
+use std::fs::Metadata;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::process::Command;
 use std::time::SystemTime;
 
 use walkdir::WalkDir;
@@ -43,22 +45,31 @@ pub fn idle_days(path: &Path, now: SystemTime) -> Option<u64> {
     )
 }
 
-/// On-disk size of `path` in bytes via `du -sk`. Returns 0 if missing or `du` fails.
-pub fn dir_size(path: &Path) -> u64 {
-    if !path.exists() {
+/// Bytes `meta` actually occupies, counting a hardlinked file only the first
+/// time it is seen. `seen` must be shared across everything being summed
+/// together or the same inode gets billed twice.
+///
+/// Block usage, not `len()`: a sparse or APFS-compressed file occupies far
+/// less than its apparent length, and `df` counts blocks. Mixing the two
+/// definitions is how a scan ends up disagreeing with the volume it scanned.
+pub fn allocated(meta: &Metadata, seen: &mut HashSet<(u64, u64)>) -> u64 {
+    if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
         return 0;
     }
-    let output = match Command::new("du").args(["-sk"]).arg(path).output() {
-        Ok(out) if out.status.success() => out,
-        _ => return 0,
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(|kb| kb * 1024)
-        .unwrap_or(0)
+    meta.blocks() * 512
+}
+
+/// On-disk size of everything under `path`, in bytes. Symlinks are counted but
+/// never followed. Unreadable entries are skipped.
+pub fn dir_size(path: &Path) -> u64 {
+    let mut seen = HashSet::new();
+    WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| allocated(&m, &mut seen))
+        .sum()
 }
 
 #[cfg(test)]
@@ -82,6 +93,37 @@ mod tests {
     #[test]
     fn dir_size_returns_zero_for_missing_path() {
         assert_eq!(dir_size(Path::new("/this/path/does/not/exist/xyz")), 0);
+    }
+
+    #[test]
+    fn dir_size_counts_a_hardlinked_file_once() {
+        // Two names, one inode. `df` charges the volume for one, so this must
+        // too, or every category holding a linked file overstates itself.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("original"), vec![0u8; 64 * 1024]).unwrap();
+        fs::hard_link(dir.path().join("original"), dir.path().join("clone")).unwrap();
+
+        let size = dir_size(dir.path());
+        assert!(
+            (64 * 1024..96 * 1024).contains(&size),
+            "hardlink counted twice: {size}"
+        );
+    }
+
+    #[test]
+    fn dir_size_reports_blocks_not_apparent_length() {
+        // A sparse file's length is a promise, not an allocation.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("sparse.bin");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(512 * 1024 * 1024).unwrap();
+        drop(file);
+
+        let size = dir_size(dir.path());
+        assert!(
+            size < 1024 * 1024,
+            "apparent length used instead of blocks: {size}"
+        );
     }
 
     #[test]
