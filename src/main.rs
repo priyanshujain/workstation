@@ -15,6 +15,10 @@ use cli::{
 };
 
 fn main() -> anyhow::Result<()> {
+    // Rust ignores SIGPIPE, so println! panics once a reader goes away and
+    // `wsctl disk audit | head` ends in a backtrace instead of quietly.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+
     let cli = Cli::parse();
 
     let filter = match cli.verbose {

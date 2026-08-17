@@ -86,3 +86,4 @@ ratatui.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
 time.workspace = true
+libc = "0.2"
