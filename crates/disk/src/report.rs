@@ -9,7 +9,7 @@ use crate::sweep::{RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -36,7 +36,9 @@ pub struct RootSnap {
     pub unattributed_total: u64,
     pub unattributed: Vec<(PathBuf, u64)>,
     pub unreadable: Vec<UnreadableSnap>,
-    pub unreadable_count: usize,
+    /// Exact counts, which the capped sample above cannot supply.
+    pub protected_count: usize,
+    pub forbidden_count: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -129,7 +131,10 @@ impl Report {
                         },
                     })
                     .collect(),
-                unreadable_count: r.unreadable_count,
+                denials: crate::sweep::Denials {
+                    protected: r.protected_count,
+                    forbidden: r.forbidden_count,
+                },
             })
             .collect()
     }
@@ -238,7 +243,8 @@ pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) ->
                     path: u.path,
                 })
                 .collect(),
-            unreadable_count: r.unreadable_count,
+            protected_count: r.denials.protected,
+            forbidden_count: r.denials.forbidden,
         })
         .collect();
     let categories = audit

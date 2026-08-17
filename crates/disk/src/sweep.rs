@@ -57,6 +57,41 @@ pub struct Unreadable {
     pub denial: Denial,
 }
 
+/// Exact counts, kept separately from the sample in [`RootUsage::unreadable`]
+/// because that sample is capped. Counting the sample instead would report a
+/// split of the twenty paths that happened to be retained, under a headline
+/// number describing all of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Denials {
+    pub protected: usize,
+    pub forbidden: usize,
+}
+
+impl Denials {
+    pub fn total(&self) -> usize {
+        self.protected + self.forbidden
+    }
+
+    pub fn of(&self, denial: Denial) -> usize {
+        match denial {
+            Denial::Protected => self.protected,
+            Denial::Forbidden => self.forbidden,
+        }
+    }
+
+    fn record(&mut self, denial: Denial) {
+        match denial {
+            Denial::Protected => self.protected += 1,
+            Denial::Forbidden => self.forbidden += 1,
+        }
+    }
+
+    fn merge(&mut self, other: Denials) {
+        self.protected += other.protected;
+        self.forbidden += other.forbidden;
+    }
+}
+
 /// What a sweep says while it is still running, so a caller can show rows
 /// filling in instead of a blank screen for two minutes.
 #[derive(Debug, Clone)]
@@ -112,12 +147,13 @@ pub struct RootUsage {
     pub unattributed_total: u64,
     /// Largest immediate children holding unattributed bytes, biggest first.
     pub unattributed: Vec<(PathBuf, u64)>,
-    /// Directories that could not be opened. Their contents are unknown, which
-    /// is a different claim from zero, and the old code made the wrong one:
-    /// `du` returns 0 for a TCC-protected directory and the category builder
-    /// then dropped the path for being empty.
+    /// A capped sample of the directories that could not be opened. Their
+    /// contents are unknown, which is a different claim from zero, and the old
+    /// code made the wrong one: `du` returns 0 for a TCC-protected directory
+    /// and the category builder then dropped the path for being empty.
     pub unreadable: Vec<Unreadable>,
-    pub unreadable_count: usize,
+    /// Exact, unlike the length of the sample above.
+    pub denials: Denials,
 }
 
 #[derive(Debug, Clone)]
@@ -136,16 +172,16 @@ impl Sweep {
         self.roots.iter().map(|r| r.unattributed_total).sum()
     }
 
-    pub fn unreadable_count(&self) -> usize {
-        self.roots.iter().map(|r| r.unreadable_count).sum()
+    pub fn denials(&self) -> Denials {
+        let mut total = Denials::default();
+        for root in &self.roots {
+            total.merge(root.denials);
+        }
+        total
     }
 
-    pub fn denied(&self, denial: Denial) -> usize {
-        self.roots
-            .iter()
-            .flat_map(|r| r.unreadable.iter())
-            .filter(|u| u.denial == denial)
-            .count()
+    pub fn unreadable_count(&self) -> usize {
+        self.denials().total()
     }
 }
 
@@ -495,7 +531,7 @@ fn collect(
                     .loose_bytes
                     .saturating_sub(seed.rule_sizes.iter().sum::<u64>()),
                 unattributed: Vec::new(),
-                unreadable_count: seed.unreadable.len(),
+                denials: count_denials(&seed.unreadable),
                 unreadable: seed.unreadable,
             }
         })
@@ -510,10 +546,10 @@ fn collect(
         if result.unattributed > 0 {
             root.unattributed.push((result.path, result.unattributed));
         }
-        root.unreadable_count += result.unreadable.len();
-        for path in result.unreadable {
+        root.denials.merge(count_denials(&result.unreadable));
+        for entry in result.unreadable {
             if root.unreadable.len() < MAX_UNREADABLE_LISTED {
-                root.unreadable.push(path);
+                root.unreadable.push(entry);
             }
         }
         for (i, bytes) in result.rule_sizes.iter().enumerate() {
@@ -529,6 +565,14 @@ fn collect(
         roots: usage,
         rule_sizes,
     }
+}
+
+fn count_denials(entries: &[Unreadable]) -> Denials {
+    let mut denials = Denials::default();
+    for entry in entries {
+        denials.record(entry.denial);
+    }
+    denials
 }
 
 struct Walker<'a> {
@@ -774,6 +818,38 @@ mod tests {
         // chmod 000 is a unix refusal, not a privacy one. Telling the user to
         // grant Full Disk Access here would be advice that cannot work.
         assert_eq!(sweep.roots[0].unreadable[0].denial, Denial::Forbidden);
+        assert_eq!(sweep.denials().forbidden, 1);
+        assert_eq!(sweep.denials().protected, 0);
+    }
+
+    #[test]
+    fn denial_counts_survive_the_sample_cap() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // The sample is capped so one bad tree cannot fill the report, which
+        // means counting the sample would understate the truth. Anything
+        // printed as a count has to come from the counters instead.
+        let dir = tempdir().unwrap();
+        let holder = dir.path().join("holder");
+        fs::create_dir(&holder).unwrap();
+        let locked_count = MAX_UNREADABLE_LISTED + 7;
+        for i in 0..locked_count {
+            let locked = holder.join(format!("locked{i}"));
+            fs::create_dir(&locked).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        let sweep = sweep(&[root("test", dir.path())], &[]);
+        for i in 0..locked_count {
+            let _ = fs::set_permissions(
+                holder.join(format!("locked{i}")),
+                fs::Permissions::from_mode(0o755),
+            );
+        }
+
+        assert_eq!(sweep.roots[0].unreadable.len(), MAX_UNREADABLE_LISTED);
+        assert_eq!(sweep.unreadable_count(), locked_count);
+        assert_eq!(sweep.denials().forbidden, locked_count);
     }
 
     #[test]

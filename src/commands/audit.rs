@@ -99,9 +99,9 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
     for root in audit
         .roots
         .iter()
-        .filter(|r| r.total >= ROOT_FLOOR || r.unreadable_count > 0)
+        .filter(|r| r.total >= ROOT_FLOOR || r.denials.total() > 0)
     {
-        let size = if root.total == 0 && root.unreadable_count > 0 {
+        let size = if root.total == 0 && root.denials.total() > 0 {
             style("unknown".to_string()).red().to_string()
         } else {
             style(format_size(root.total)).yellow().bold().to_string()

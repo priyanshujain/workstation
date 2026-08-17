@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::platform;
-use crate::sweep::{self, Denial, Root, RootUsage, Rule, Unreadable};
+use crate::sweep::{self, Denial, Denials, Root, RootUsage, Rule, Unreadable};
 
 pub struct Category {
     pub name: String,
@@ -38,7 +38,17 @@ impl Audit {
     }
 
     pub fn unreadable_count(&self) -> usize {
-        self.roots.iter().map(|r| r.unreadable_count).sum()
+        self.denials().total()
+    }
+
+    pub fn denials(&self) -> Denials {
+        self.roots
+            .iter()
+            .fold(Denials::default(), |mut total, root| {
+                total.protected += root.denials.protected;
+                total.forbidden += root.denials.forbidden;
+                total
+            })
     }
 
     /// Sample of what could not be opened, so "grant Full Disk Access" is
@@ -52,14 +62,10 @@ impl Audit {
             .collect()
     }
 
-    /// How many directories refused for each reason. Full Disk Access fixes
-    /// one of these numbers and not the other.
+    /// How many directories refused for this reason. Full Disk Access fixes
+    /// one of the two and not the other.
     pub fn denied(&self, denial: Denial) -> usize {
-        self.roots
-            .iter()
-            .flat_map(|r| r.unreadable.iter())
-            .filter(|u| u.denial == denial)
-            .count()
+        self.denials().of(denial)
     }
 
     /// Biggest unnamed directories anywhere, so the gap is actionable rather
