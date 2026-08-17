@@ -145,27 +145,76 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
         }
     }
 
-    let unreadable = audit.unreadable_count();
-    if unreadable > 0 {
-        println!();
-        println!(
-            "  {}",
-            style(format!(
-                "{unreadable} director{} could not be opened, so what they hold is \
-                 unknown rather than zero.",
-                if unreadable == 1 { "y" } else { "ies" }
-            ))
-            .dim()
-        );
-        for entry in audit.unreadable_examples(Denial::Protected, 4) {
-            println!("  {}", style(format!("  {}", tilde(&entry.path))).dim());
-        }
-        println!(
-            "  {}",
-            style("Give Terminal Full Disk Access in System Settings to measure them.").dim()
-        );
-    }
+    print_unreadable(audit);
     println!();
+}
+
+/// Two reasons a directory refuses to open, two different fixes. Telling a
+/// user to grant Full Disk Access for a root-owned directory is advice that
+/// cannot work, so each kind gets its own line.
+fn print_unreadable(audit: &Audit) {
+    let unreadable = audit.unreadable_count();
+    if unreadable == 0 {
+        return;
+    }
+
+    println!();
+    println!(
+        "  {}",
+        style(format!(
+            "{unreadable} director{} could not be opened, so what they hold is \
+             unknown rather than zero.",
+            if unreadable == 1 { "y" } else { "ies" }
+        ))
+        .dim()
+    );
+
+    let terminal = terminal_app_name(std::env::var("TERM_PROGRAM").ok().as_deref());
+    print_denial(
+        audit,
+        Denial::Protected,
+        &format!(
+            "macOS privacy holds these back. Give {terminal} Full Disk Access in System \
+             Settings to measure them:"
+        ),
+    );
+    print_denial(
+        audit,
+        Denial::Forbidden,
+        "Unix permissions hold these back. They need sudo, and Full Disk Access will not \
+         reach them:",
+    );
+}
+
+fn print_denial(audit: &Audit, denial: Denial, advice: &str) {
+    if audit.denied(denial) == 0 {
+        return;
+    }
+    println!("  {}", style(advice).dim());
+    for entry in audit.unreadable_examples(denial, 4) {
+        println!("  {}", style(format!("  {}", tilde(&entry.path))).dim());
+    }
+}
+
+/// Full Disk Access is granted to the terminal application rather than to
+/// `wsctl`, so the advice has to name the terminal this run is sitting in.
+fn terminal_app_name(term_program: Option<&str>) -> String {
+    let Some(name) = term_program.map(str::trim).filter(|n| !n.is_empty()) else {
+        return "your terminal app".to_string();
+    };
+    let name = name.strip_suffix(".app").unwrap_or(name);
+    match name {
+        "Apple_Terminal" => "Terminal".to_string(),
+        "vscode" => "VS Code".to_string(),
+        _ if name.chars().any(char::is_uppercase) => name.to_string(),
+        _ => {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => name.to_string(),
+            }
+        }
+    }
 }
 
 fn print_categories(audit: &Audit) {
@@ -280,6 +329,21 @@ mod tests {
         assert_eq!(clip("Home", 18), "Home");
         assert_eq!(clip(".PreviousSystemInformation", 18).chars().count(), 18);
         assert!(clip(".PreviousSystemInformation", 18).ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn the_terminal_named_in_the_advice_is_the_one_running_the_scan() {
+        assert_eq!(terminal_app_name(Some("ghostty")), "Ghostty");
+        assert_eq!(terminal_app_name(Some("Apple_Terminal")), "Terminal");
+        assert_eq!(terminal_app_name(Some("iTerm.app")), "iTerm");
+        assert_eq!(terminal_app_name(Some("vscode")), "VS Code");
+        assert_eq!(terminal_app_name(Some("WezTerm")), "WezTerm");
+    }
+
+    #[test]
+    fn advice_stays_generic_when_the_terminal_is_unknown() {
+        assert_eq!(terminal_app_name(None), "your terminal app");
+        assert_eq!(terminal_app_name(Some("   ")), "your terminal app");
     }
 
     #[test]
