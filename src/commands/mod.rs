@@ -4,4 +4,5 @@ pub mod audio;
 pub mod audit;
 pub mod diff;
 pub mod profiles;
+pub mod projects;
 pub mod self_cmd;

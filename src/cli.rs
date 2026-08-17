@@ -169,6 +169,37 @@ pub enum DiskCommand {
 
     /// Interactive disk cleanup: audit + drill-down + delete in one TUI
     Cleanup,
+
+    /// Build artifacts per project, with how long each has sat idle
+    Projects {
+        /// Where to look, repeatable (default: ~/Workspace and ~/go/src)
+        #[arg(long = "root")]
+        roots: Vec<std::path::PathBuf>,
+
+        /// Only clean projects whose sources have not changed in this many days
+        #[arg(long, default_value_t = 7)]
+        idle_days: u64,
+
+        /// Hide projects with less than this many MB of artifacts
+        #[arg(long, default_value_t = 50)]
+        min_size_mb: u64,
+
+        /// Remove the eligible artifacts instead of only listing them
+        #[arg(long)]
+        clean: bool,
+
+        /// With --clean, show what would go without removing anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Rescan instead of reading the cached report, and refresh the cache
+        #[arg(long)]
+        no_cache: bool,
+    },
 }
 
 #[derive(Subcommand)]

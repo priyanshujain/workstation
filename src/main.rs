@@ -54,6 +54,25 @@ fn main() -> anyhow::Result<()> {
                     commands::audit::run_report(false)?;
                 }
             }
+            DiskCommand::Projects {
+                roots,
+                idle_days,
+                min_size_mb,
+                clean,
+                dry_run,
+                yes,
+                no_cache,
+            } => {
+                commands::projects::run(commands::projects::Options {
+                    roots,
+                    idle_days,
+                    min_size_mb,
+                    clean,
+                    dry_run,
+                    yes,
+                    no_cache,
+                })?;
+            }
         },
         Commands::App { sub } => match sub {
             AppCommand::Remove {
