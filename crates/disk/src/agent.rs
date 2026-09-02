@@ -9,8 +9,11 @@ use wsctl_core::bundle;
 /// keeps the name it computed the first time it saw that label, even after
 /// the plist is deleted and written again, so the old `wsctl` name could only
 /// be shed by moving to a label macOS had never seen.
-pub const LABEL: &str = "com.priyanshujain.workstation.disk-report";
-const LEGACY_LABEL: &str = "com.priyanshujain.wsctl.disk-report";
+pub const LABEL: &str = "dev.pj.workstation.disk-report";
+const LEGACY_LABELS: [&str; 2] = [
+    "com.priyanshujain.workstation.disk-report",
+    "com.priyanshujain.wsctl.disk-report",
+];
 
 /// Hours at which the refresh runs. Fixed clock times rather than
 /// `StartInterval`: launchd fires a missed interval the moment the machine
@@ -23,8 +26,10 @@ pub fn plist_path() -> PathBuf {
     home().join(format!("Library/LaunchAgents/{LABEL}.plist"))
 }
 
-fn legacy_plist_path() -> PathBuf {
-    home().join(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
+fn legacy_plist_paths() -> impl Iterator<Item = PathBuf> {
+    LEGACY_LABELS
+        .iter()
+        .map(|label| home().join(format!("Library/LaunchAgents/{label}.plist")))
 }
 
 pub fn log_path() -> PathBuf {
@@ -171,8 +176,8 @@ fn uid() -> Result<String> {
 /// Unload the job from both domains it may sit in, under both labels it has
 /// had. A short-lived version bootstrapped it into `user/<uid>`; the job
 /// lives in `gui/<uid>`, and a copy left in the other domain would run its
-/// own schedule alongside. Older installs used `LEGACY_LABEL`, and that plist
-/// goes too.
+/// own schedule alongside. Older installs used `LEGACY_LABELS`, and those
+/// plists go too.
 ///
 /// Returns once the label is gone. Booting out a job that is mid-run tears
 /// it down asynchronously, and a bootstrap that lands before that finishes
@@ -182,7 +187,7 @@ fn bootout() {
         return;
     };
     for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
-        for label in [LABEL, LEGACY_LABEL] {
+        for label in std::iter::once(LABEL).chain(LEGACY_LABELS) {
             let target = format!("{domain}/{label}");
             let _ = Command::new("launchctl")
                 .args(["bootout", &target])
@@ -199,7 +204,9 @@ fn bootout() {
             }
         }
     }
-    let _ = std::fs::remove_file(legacy_plist_path());
+    for path in legacy_plist_paths() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn xml_escape(s: &str) -> String {
@@ -302,17 +309,17 @@ mod tests {
 
     #[test]
     fn label_does_not_collide_with_the_display_agent() {
-        assert_ne!(LABEL, "com.priyanshujain.workstation.display");
+        assert_ne!(LABEL, "dev.pj.workstation.display");
     }
 
     #[test]
     fn label_lives_under_the_bundle_id_and_retires_the_old_one() {
         // A label Login Items has never seen is the only way to drop the cached `wsctl` name.
         assert!(LABEL.starts_with(bundle::BUNDLE_ID), "{LABEL}");
-        assert_ne!(LABEL, LEGACY_LABEL);
-        assert!(
-            legacy_plist_path().ends_with(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
-        );
+        for (legacy, path) in LEGACY_LABELS.iter().zip(legacy_plist_paths()) {
+            assert_ne!(LABEL, *legacy);
+            assert!(path.ends_with(format!("Library/LaunchAgents/{legacy}.plist")));
+        }
     }
 
     #[test]
