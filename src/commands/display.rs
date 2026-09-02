@@ -192,6 +192,10 @@ pub fn enable() -> Result<()> {
     );
     println!("    {}", style(installed.plist.display()).dim());
     println!("    {}", style(agent::log_path().display()).dim());
+    println!(
+        "    {}",
+        style(format!("signed as {}", installed.signed_as)).dim()
+    );
     if !installed.approved {
         println!(
             "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",

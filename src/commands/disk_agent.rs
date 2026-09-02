@@ -26,6 +26,7 @@ pub fn enable() -> Result<()> {
         )
         .dim()
     );
+    println!("  signed   {}", style(&installed.signed_as).dim());
     if !installed.approved {
         println!(
             "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",
