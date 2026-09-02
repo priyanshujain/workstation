@@ -8,13 +8,13 @@
 //! rather than dropped.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::Metadata;
+use std::fs::{DirEntry, Metadata, ReadDir};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,12 @@ const MAX_UNREADABLE_LISTED: usize = 20;
 /// How often a caller hears from a sweep that has nothing new to report. Slow
 /// enough to cost nothing, fast enough that a UI stays responsive to keys.
 const TICK: Duration = Duration::from_millis(80);
+
+/// A single open or stat that takes this long is not a slow disk. It is macOS
+/// holding the call while it asks the user about the path, or a mount coming
+/// up. Both are invisible from a log otherwise, and the path is the one thing
+/// worth knowing about either.
+const SLOW_CALL: Duration = Duration::from_secs(2);
 
 /// Why a directory would not open. The two look identical through
 /// `io::ErrorKind::PermissionDenied` and have completely different fixes, so
@@ -256,6 +262,30 @@ impl Sweep {
     }
 }
 
+fn open_dir(dir: &Path) -> std::io::Result<ReadDir> {
+    let started = Instant::now();
+    let entries = std::fs::read_dir(dir);
+    note_if_slow("opening", dir, started.elapsed());
+    entries
+}
+
+fn stat(entry: &DirEntry) -> std::io::Result<Metadata> {
+    let started = Instant::now();
+    let meta = entry.metadata();
+    note_if_slow("reading", &entry.path(), started.elapsed());
+    meta
+}
+
+fn note_if_slow(what: &str, path: &Path, took: Duration) {
+    if took >= SLOW_CALL {
+        tracing::warn!(
+            "{what} {} took {}s: a permission dialog, or a mount coming up",
+            path.display(),
+            took.as_secs()
+        );
+    }
+}
+
 /// The volume's own top level, named. Anything unrecognised keeps its
 /// directory name rather than being left out, so a future macOS that adds a
 /// top-level directory still gets counted.
@@ -267,13 +297,10 @@ pub fn discover_roots() -> Vec<Root> {
     // opening a network-backed one from a process nobody is sitting at is a
     // permission dialog.
     let volume = std::fs::metadata(DATA_VOLUME).map(|m| m.dev()).ok();
-    if let Ok(entries) = std::fs::read_dir(DATA_VOLUME) {
+    if let Ok(entries) = open_dir(Path::new(DATA_VOLUME)) {
         let mut children: Vec<PathBuf> = entries
             .flatten()
-            .filter(|e| {
-                e.metadata()
-                    .is_ok_and(|m| m.is_dir() && Some(m.dev()) == volume)
-            })
+            .filter(|e| stat(e).is_ok_and(|m| m.is_dir() && Some(m.dev()) == volume))
             .map(|e| e.path())
             .collect();
         children.sort();
@@ -624,12 +651,12 @@ fn plan(
             continue;
         }
 
-        match std::fs::read_dir(&root.path) {
+        match open_dir(&root.path) {
             Err(e) => seed.unreadable.extend(refusal(&root.path, &e)),
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let Ok(meta) = entry.metadata() else { continue };
+                    let Ok(meta) = stat(&entry) else { continue };
                     if meta.dev() != dev {
                         continue;
                     }
@@ -786,7 +813,7 @@ impl Walker<'_> {
             return total;
         }
 
-        let entries = match std::fs::read_dir(dir) {
+        let entries = match open_dir(dir) {
             Ok(entries) => entries,
             Err(e) => {
                 self.unreadable.push(Unreadable {
@@ -805,7 +832,7 @@ impl Walker<'_> {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(meta) = stat(&entry) else { continue };
             if meta.dev() != self.dev {
                 continue;
             }
@@ -1192,6 +1219,17 @@ mod tests {
         assert_eq!(swept.total(), 0);
         assert_eq!(swept.denials().unattended, 1);
         assert_eq!(swept.roots[0].unreadable[0].denial, Denial::Unattended);
+    }
+
+    #[test]
+    fn the_timed_calls_answer_like_the_ones_they_wrap() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("f.bin"), vec![0u8; 4096]).unwrap();
+
+        let entries: Vec<DirEntry> = open_dir(dir.path()).unwrap().flatten().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(stat(&entries[0]).unwrap().is_file());
+        assert!(open_dir(&dir.path().join("missing")).is_err());
     }
 
     #[test]
