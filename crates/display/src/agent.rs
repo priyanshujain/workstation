@@ -8,8 +8,11 @@ use wsctl_core::bundle;
 /// on purpose: Login Items keys its record by label and keeps the name it computed the first
 /// time it saw that label, even after the plist is deleted and written again, so the old
 /// `wsctl` name could only be shed by moving to a label macOS had never seen.
-pub const LABEL: &str = "com.priyanshujain.workstation.display";
-const LEGACY_LABEL: &str = "com.priyanshujain.wsctl.display";
+pub const LABEL: &str = "dev.pj.workstation.display";
+const LEGACY_LABELS: [&str; 2] = [
+    "com.priyanshujain.workstation.display",
+    "com.priyanshujain.wsctl.display",
+];
 
 /// The WindowServer rewrites this file whenever the display layout changes, so launchd
 /// watching it gives an event-driven trigger with no resident process.
@@ -35,8 +38,10 @@ pub fn plist_path() -> PathBuf {
     home().join(format!("Library/LaunchAgents/{LABEL}.plist"))
 }
 
-fn legacy_plist_path() -> PathBuf {
-    home().join(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
+fn legacy_plist_paths() -> impl Iterator<Item = PathBuf> {
+    LEGACY_LABELS
+        .iter()
+        .map(|label| home().join(format!("Library/LaunchAgents/{label}.plist")))
 }
 
 pub fn log_path() -> PathBuf {
@@ -141,15 +146,17 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
     )
 }
 
-/// Unload the job under both labels it has had, and drop the plist an older install wrote
-/// under the previous one. Failure is ignored: on a first install nothing is loaded yet.
+/// Unload the job under every label it has had, and drop the plists older installs wrote
+/// under the previous ones. Failure is ignored: on a first install nothing is loaded yet.
 fn unload(domain: &str) {
-    for label in [LABEL, LEGACY_LABEL] {
+    for label in std::iter::once(LABEL).chain(LEGACY_LABELS) {
         let _ = Command::new("launchctl")
             .args(["bootout", &format!("{domain}/{label}")])
             .output();
     }
-    let _ = std::fs::remove_file(legacy_plist_path());
+    for path in legacy_plist_paths() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn home() -> PathBuf {
@@ -247,10 +254,10 @@ mod tests {
     fn label_lives_under_the_bundle_id_and_retires_the_old_one() {
         // A label Login Items has never seen is the only way to drop the cached `wsctl` name.
         assert!(LABEL.starts_with(bundle::BUNDLE_ID), "{LABEL}");
-        assert_ne!(LABEL, LEGACY_LABEL);
-        assert!(
-            legacy_plist_path().ends_with(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
-        );
+        for (legacy, path) in LEGACY_LABELS.iter().zip(legacy_plist_paths()) {
+            assert_ne!(LABEL, *legacy);
+            assert!(path.ends_with(format!("Library/LaunchAgents/{legacy}.plist")));
+        }
     }
 
     #[test]
