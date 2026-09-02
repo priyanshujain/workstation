@@ -1,24 +1,59 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2::{class, msg_send};
+use objc2_foundation::{NSError, NSString};
 
-/// The app bundle the launchd jobs run from.
+#[link(name = "ServiceManagement", kind = "framework")]
+unsafe extern "C" {}
+
+/// The app bundle the launchd jobs live in and run from.
 ///
-/// Login Items names a background job after the app bundle its executable
-/// lives in, and only when that bundle carries a code signature sealing its
-/// Info.plist. A bare binary, or an unsigned bundle, is listed as `wsctl`
-/// with no icon. So each agent installer copies the running binary into
-/// `~/Applications/Workstation.app`, signs it ad hoc, and points launchd at
-/// the copy. The copy is a different file from the one on PATH, so the bundle
-/// records which build it came from and `is_current` reports when a reinstall
-/// has left it behind.
+/// Login Items names a background job after its app and draws the app's icon
+/// only when the job is registered through the Service Management API from
+/// inside that app: the plist sits in `Contents/Library/LaunchAgents` and the
+/// bundled copy of wsctl asks `SMAppService` to register it. A plist in
+/// `~/Library/LaunchAgents` pointing at a signed bundle gets the bundle's
+/// name but the executable's generic icon, and a bare binary is listed as
+/// `wsctl`. So each agent installer rebuilds `~/Applications/Workstation.app`
+/// from the running binary, the icon and every enabled job's plist, signs it
+/// ad hoc, and registers the jobs from the copy inside.
+///
+/// A registration pins the signature of the bundle it was made against, and
+/// every rebuild changes that signature. Background Task Management keeps
+/// its record per label, so a label registered once never takes a new
+/// signature: unregistering, waiting, removing the plist and registering
+/// again all left the job dying at spawn with OS_REASON_CODESIGNING, while a
+/// label it had never seen worked every time. So a job's label carries the
+/// build it belongs to, `dev.pj.workstation.display.<millis>`, and a rebuild
+/// unregisters every old label and registers new ones.
 pub const BUNDLE_ID: &str = "dev.pj.workstation";
 pub const NAME: &str = "Workstation";
 
 const ICON: &[u8] = include_bytes!("../assets/Workstation.icns");
 const STAMP: &str = "Contents/Resources/source";
+const AGENTS: &str = "Contents/Library/LaunchAgents";
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+/// `SMAppServiceStatus` values: not registered, held until the user allows it
+/// in Login Items, and registered but the plist is gone.
+const NOT_REGISTERED: isize = 0;
+const REQUIRES_APPROVAL: isize = 2;
+const NOT_FOUND: isize = 3;
+
+/// Produces a job's plist for the tagged label it is given.
+type PlistFor<'a> = &'a dyn Fn(&str) -> String;
+
+/// What `install_agent` left behind.
+pub struct Installed {
+    pub plist: PathBuf,
+    /// False when macOS is holding the job until it is allowed in Login Items.
+    pub approved: bool,
+}
 
 pub fn app_path() -> PathBuf {
     home().join("Applications").join(format!("{NAME}.app"))
@@ -30,18 +65,74 @@ pub fn executable() -> PathBuf {
     executable_in(&app_path())
 }
 
-/// Copy `exe` into the bundle, sign it, and return the bundled path.
-/// Safe to call while a job is mid-run: the new bundle is built beside the
-/// old one and swapped in with a rename, so a running copy keeps its file.
-pub fn install(exe: &Path) -> Result<PathBuf> {
+/// The tagged label the bundle currently carries for a job, if any.
+pub fn agent_label(base: &str) -> Option<String> {
+    agent_label_in(&app_path(), base)
+}
+
+pub fn has_agent(base: &str) -> bool {
+    agent_label(base).is_some()
+}
+
+/// Put this job's plist in the bundle next to a copy of `exe`, keeping every
+/// other job, and make sure every job is registered. `plist` is given the
+/// tagged label to put in its `Label` key.
+///
+/// A rebuild unregisters every job first and registers them all under new
+/// labels after, for the reason given above; when nothing changed the bundle
+/// is left alone. Safe while a job is mid-run: the new contents are built
+/// beside the old and swapped in with a rename, so a running copy keeps its
+/// file.
+pub fn install_agent(exe: &Path, base: &str, plist: PlistFor) -> Result<Installed> {
     let app = app_path();
-    let target = install_in(exe, &app)?;
-    // Only the real install registers with LaunchServices. A registration
-    // outlives its directory, and stale ones under the same bundle id make
-    // LaunchServices resolve the id to paths that no longer exist, which is
-    // how bundles built by the test suite left Login Items showing `wsctl`.
-    let _ = Command::new(LSREGISTER).arg("-f").arg(&app).output();
-    Ok(target)
+    let unchanged = is_current_in(exe, &app)
+        && agent_label_in(&app, base).is_some_and(|label| {
+            std::fs::read_to_string(agent_plist_in(&app, &label))
+                .is_ok_and(|current| current == plist(&label))
+        });
+    if !unchanged {
+        unregister_all(&app);
+        install_agent_in(exe, &app, base, plist)?;
+        // Only the real install registers with LaunchServices. A registration
+        // outlives its directory, and stale ones under the same bundle id make
+        // LaunchServices resolve the id to paths that no longer exist, which is
+        // how bundles built by the test suite once left Login Items showing `wsctl`.
+        let _ = Command::new(LSREGISTER).arg("-f").arg(&app).output();
+    }
+    let approved = register_all(&app)?;
+    let label = agent_label_in(&app, base).context("the job did not land in the bundle")?;
+    Ok(Installed {
+        plist: agent_plist_in(&app, &label),
+        approved,
+    })
+}
+
+/// Unregister this job and rebuild the bundle without it, or delete the
+/// bundle when it was the last one. The other jobs come back under new
+/// labels, for the reason given above.
+pub fn remove_agent(base: &str) -> Result<()> {
+    let app = app_path();
+    if agent_label_in(&app, base).is_none() {
+        return Ok(());
+    }
+    if agents_in(&app).iter().all(|l| base_of(l) == base) {
+        return remove();
+    }
+    unregister_all(&app);
+    build_and_swap(&executable_in(&app), &app, None, Some(base))?;
+    register_all(&app)?;
+    Ok(())
+}
+
+/// Unregister every job and delete the bundle.
+pub fn remove() -> Result<()> {
+    let app = app_path();
+    if !app.exists() {
+        return Ok(());
+    }
+    unregister_all(&app);
+    let _ = Command::new(LSREGISTER).arg("-u").arg(&app).output();
+    std::fs::remove_dir_all(&app).with_context(|| format!("failed to remove {}", app.display()))
 }
 
 /// Whether the bundled copy was made from this build of `exe`.
@@ -49,45 +140,245 @@ pub fn is_current(exe: &Path) -> bool {
     is_current_in(exe, &app_path())
 }
 
-/// Delete the bundle once no launchd job points into it. Both agents share
-/// it, so each uninstall asks rather than removing outright.
-pub fn remove_if_unused() -> Result<()> {
-    remove_if_unused_in(&app_path(), &home().join("Library/LaunchAgents"))
+/// Boot out jobs that older versions loaded from `~/Library/LaunchAgents` and
+/// delete their plists. Only labels with a plist there are touched, so a job
+/// registered from the bundle under the same label is left alone. Waits until
+/// each is gone: bootout tears a running job down asynchronously, and a
+/// registration that lands before that finishes fails.
+pub fn retire_launch_agents(labels: &[&str]) {
+    let Ok(uid) = uid() else {
+        return;
+    };
+    let dir = home().join("Library/LaunchAgents");
+    for label in labels {
+        let plist = dir.join(format!("{label}.plist"));
+        if !plist.exists() {
+            continue;
+        }
+        for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
+            let _ = Command::new("launchctl")
+                .args(["bootout", &format!("{domain}/{label}")])
+                .output();
+        }
+        wait_until_unloaded(label);
+        let _ = std::fs::remove_file(&plist);
+    }
 }
 
-fn install_in(exe: &Path, app: &Path) -> Result<PathBuf> {
-    let target = executable_in(app);
-    if is_inside(exe, app) {
-        return Ok(target);
+/// Register a job of the app this process runs from. Only meaningful in the
+/// bundled copy: the Service Management API registers jobs of the caller's
+/// own bundle, which is why `install_agent` runs the copy inside the bundle
+/// to call this. Prints `requires approval` when macOS is holding the job
+/// for the user to allow.
+pub fn register_here(label: &str) -> Result<()> {
+    let service = service(label);
+    let result: Result<(), Retained<NSError>> =
+        unsafe { msg_send![&*service, registerAndReturnError: _] };
+    result.map_err(|e| anyhow!("{}", e.localizedDescription()))?;
+    let status: isize = unsafe { msg_send![&*service, status] };
+    if status == REQUIRES_APPROVAL {
+        println!("requires approval");
     }
+    Ok(())
+}
 
+pub fn unregister_here(label: &str) -> Result<()> {
+    let service = service(label);
+    let result: Result<(), Retained<NSError>> =
+        unsafe { msg_send![&*service, unregisterAndReturnError: _] };
+    result.map_err(|e| anyhow!("{}", e.localizedDescription()))
+}
+
+/// The job's `SMAppServiceStatus`, as the bundled copy sees it.
+pub fn status_here(label: &str) -> isize {
+    let service = service(label);
+    unsafe { msg_send![&*service, status] }
+}
+
+fn service(label: &str) -> Retained<AnyObject> {
+    let name = NSString::from_str(&format!("{label}.plist"));
+    unsafe { msg_send![class!(SMAppService), agentServiceWithPlistName: &*name] }
+}
+
+/// Register every job through the bundled copy, so the registrations are
+/// attributed to the app. Returns whether they are all allowed to run right
+/// away.
+fn register_all(app: &Path) -> Result<bool> {
+    let exe = executable_in(app);
+    let mut approved = true;
+    for label in agents_in(app) {
+        approved &= register(&exe, &label)?;
+    }
+    Ok(approved)
+}
+
+fn register(exe: &Path, label: &str) -> Result<bool> {
+    let out = Command::new(exe)
+        .args(["self", "register-agent", label])
+        .output()
+        .with_context(|| format!("failed to run {}", exe.display()))?;
+    if !out.status.success() {
+        bail!(
+            "could not register {label}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(!String::from_utf8_lossy(&out.stdout).contains("requires approval"))
+}
+
+/// Unregister every job the bundle carries. A job that was never registered,
+/// or whose copy is gone, is already in the state we want.
+fn unregister_all(app: &Path) {
+    let exe = executable_in(app);
+    if !exe.exists() {
+        return;
+    }
+    for label in agents_in(app) {
+        unregister(&exe, &label);
+    }
+}
+
+/// Unregister one job and wait until Background Task Management reports it
+/// gone and launchd has unloaded it, so the old and new copies of a job
+/// never run side by side. Failure is logged rather than returned.
+fn unregister(exe: &Path, label: &str) {
+    match Command::new(exe)
+        .args(["self", "unregister-agent", label])
+        .output()
+    {
+        Ok(out) if !out.status.success() => tracing::warn!(
+            "could not unregister {label}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => tracing::warn!("could not run {}: {e}", exe.display()),
+        Ok(_) => {}
+    }
+    for _ in 0..40 {
+        if matches!(status(exe, label), None | Some(NOT_REGISTERED | NOT_FOUND)) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    wait_until_unloaded(label);
+}
+
+fn status(exe: &Path, label: &str) -> Option<isize> {
+    let out = Command::new(exe)
+        .args(["self", "agent-status", label])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+fn wait_until_unloaded(label: &str) {
+    let Ok(uid) = uid() else {
+        return;
+    };
+    let target = format!("gui/{uid}/{label}");
+    for _ in 0..20 {
+        let gone = Command::new("launchctl")
+            .args(["print", &target])
+            .output()
+            .is_ok_and(|o| !o.status.success());
+        if gone {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn install_agent_in(exe: &Path, app: &Path, base: &str, plist: PlistFor) -> Result<()> {
+    let source = if is_inside(exe, app) {
+        executable_in(app)
+    } else {
+        exe.to_path_buf()
+    };
+    build_and_swap(&source, app, Some((base, plist)), None)
+}
+
+fn build_and_swap(
+    source: &Path,
+    app: &Path,
+    add: Option<(&str, PlistFor)>,
+    drop: Option<&str>,
+) -> Result<()> {
     let parent = app
         .parent()
         .context("bundle path has no parent directory")?;
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create {}", parent.display()))?;
-
     let staging = parent.join(format!(".{NAME}.app.staging"));
     let _ = std::fs::remove_dir_all(&staging);
-    build(exe, &staging)?;
+    build(source, app, &staging, add, drop)?;
     sign(&staging)?;
-    swap(&staging, app)?;
-    Ok(target)
+    swap(&staging, app)
 }
 
-fn build(exe: &Path, app: &Path) -> Result<()> {
-    let macos = app.join("Contents/MacOS");
-    let resources = app.join("Contents/Resources");
-    for dir in [&macos, &resources] {
+/// Lay out a fresh bundle in `staging` from `source` and the jobs `app`
+/// already carries, minus `drop`, plus `add`, every job under a label tagged
+/// with this build.
+fn build(
+    source: &Path,
+    app: &Path,
+    staging: &Path,
+    add: Option<(&str, PlistFor)>,
+    drop: Option<&str>,
+) -> Result<()> {
+    let macos = staging.join("Contents/MacOS");
+    let resources = staging.join("Contents/Resources");
+    let agents = staging.join(AGENTS);
+    for dir in [&macos, &resources, &agents] {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
     }
-    std::fs::copy(exe, macos.join(NAME))
-        .with_context(|| format!("failed to copy {}", exe.display()))?;
+    std::fs::copy(source, macos.join(NAME))
+        .with_context(|| format!("failed to copy {}", source.display()))?;
     std::fs::write(resources.join(format!("{NAME}.icns")), ICON)?;
-    std::fs::write(app.join(STAMP), stamp(exe)?)?;
-    std::fs::write(app.join("Contents/Info.plist"), info_plist())?;
+    let stamp = if is_inside(source, app) {
+        std::fs::read_to_string(app.join(STAMP)).unwrap_or_default()
+    } else {
+        stamp(source)?
+    };
+    std::fs::write(staging.join(STAMP), stamp)?;
+    std::fs::write(staging.join("Contents/Info.plist"), info_plist())?;
+    let tag = new_tag();
+    for old in agents_in(app) {
+        let base = base_of(&old);
+        if Some(base) == drop || add.is_some_and(|(b, _)| b == base) {
+            continue;
+        }
+        let new = format!("{base}.{tag}");
+        let text = std::fs::read_to_string(agent_plist_in(app, &old))?.replace(&old, &new);
+        std::fs::write(agent_plist_in(staging, &new), text)?;
+    }
+    if let Some((base, plist)) = add {
+        let label = format!("{base}.{tag}");
+        std::fs::write(agent_plist_in(staging, &label), plist(&label))?;
+    }
     Ok(())
+}
+
+/// Milliseconds since the epoch: unique per build, and it starts with a
+/// digit, which no segment of a base label does.
+fn new_tag() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .to_string()
+}
+
+/// The label without its build tag. A label that was never tagged, from an
+/// older install, is its own base.
+fn base_of(label: &str) -> &str {
+    match label.rsplit_once('.') {
+        Some((base, tag)) if !tag.is_empty() && tag.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => label,
+    }
+}
+
+fn agent_label_in(app: &Path, base: &str) -> Option<String> {
+    agents_in(app).into_iter().find(|l| base_of(l) == base)
 }
 
 fn sign(app: &Path) -> Result<()> {
@@ -105,18 +396,21 @@ fn sign(app: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Swap `Contents` rather than the whole `.app`, so the app directory itself
+/// keeps its identity for anything holding a reference to it.
 fn swap(staging: &Path, app: &Path) -> Result<()> {
-    let old = staging.with_extension("old");
-    let _ = std::fs::remove_dir_all(&old);
-    if app.exists() {
-        std::fs::rename(app, &old)
-            .with_context(|| format!("failed to move aside {}", app.display()))?;
+    std::fs::create_dir_all(app).with_context(|| format!("failed to create {}", app.display()))?;
+    let current = app.join("Contents");
+    let old = staging.join("Contents.old");
+    if current.exists() {
+        std::fs::rename(&current, &old)
+            .with_context(|| format!("failed to move aside {}", current.display()))?;
     }
-    if let Err(e) = std::fs::rename(staging, app) {
-        let _ = std::fs::rename(&old, app);
+    if let Err(e) = std::fs::rename(staging.join("Contents"), &current) {
+        let _ = std::fs::rename(&old, &current);
         return Err(e).with_context(|| format!("failed to install {}", app.display()));
     }
-    let _ = std::fs::remove_dir_all(&old);
+    let _ = std::fs::remove_dir_all(staging);
     Ok(())
 }
 
@@ -133,26 +427,26 @@ fn is_current_in(exe: &Path, app: &Path) -> bool {
     std::fs::read_to_string(app.join(STAMP)).is_ok_and(|s| s == expected)
 }
 
-fn remove_if_unused_in(app: &Path, agents: &Path) -> Result<()> {
-    if !app.exists() {
-        return Ok(());
-    }
-    let needle = xml_escape(&app.to_string_lossy());
-    let used = std::fs::read_dir(agents)
+/// Labels of the jobs the bundle carries, from their plist names.
+fn agents_in(app: &Path) -> Vec<String> {
+    let mut labels: Vec<String> = std::fs::read_dir(app.join(AGENTS))
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "plist"))
-        .any(|e| std::fs::read_to_string(e.path()).is_ok_and(|s| s.contains(&needle)));
-    if used {
-        return Ok(());
-    }
-    let _ = Command::new(LSREGISTER).arg("-u").arg(app).output();
-    std::fs::remove_dir_all(app).with_context(|| format!("failed to remove {}", app.display()))
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "plist"))
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    labels.sort();
+    labels
 }
 
 fn executable_in(app: &Path) -> PathBuf {
     app.join("Contents/MacOS").join(NAME)
+}
+
+fn agent_plist_in(app: &Path, label: &str) -> PathBuf {
+    app.join(AGENTS).join(format!("{label}.plist"))
 }
 
 fn is_inside(exe: &Path, app: &Path) -> bool {
@@ -214,10 +508,16 @@ fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+fn uid() -> Result<String> {
+    let out = Command::new("id")
+        .arg("-u")
+        .output()
+        .context("failed to determine current uid")?;
+    let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if uid.is_empty() {
+        bail!("could not determine current uid");
+    }
+    Ok(uid)
 }
 
 #[cfg(test)]
@@ -242,16 +542,31 @@ mod tests {
             .success()
     }
 
+    fn plist(label: &str) -> String {
+        format!("<plist><key>Label</key><string>{label}</string></plist>")
+    }
+
+    fn plist_of(app: &Path, label: &str) -> String {
+        std::fs::read_to_string(agent_plist_in(app, label)).unwrap()
+    }
+
+    fn tag_of(label: &str) -> &str {
+        label.rsplit_once('.').unwrap().1
+    }
+
     #[test]
-    fn install_builds_a_signed_bundle_around_the_binary() {
+    fn install_builds_a_signed_bundle_with_the_job_inside() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
 
-        let bundled = install_in(&exe, &app).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
 
-        assert_eq!(bundled, app.join("Contents/MacOS/Workstation"));
-        assert!(bundled.exists());
+        let label = agent_label_in(&app, "dev.pj.test.one").unwrap();
+        assert!(label.starts_with("dev.pj.test.one."), "{label}");
+        assert_eq!(base_of(&label), "dev.pj.test.one");
+        assert_eq!(plist_of(&app, &label), plist(&label));
+        assert!(app.join("Contents/MacOS/Workstation").exists());
         assert!(app.join("Contents/Info.plist").exists());
         assert!(app.join("Contents/Resources/Workstation.icns").exists());
         assert!(
@@ -263,18 +578,101 @@ mod tests {
     }
 
     #[test]
-    fn install_replaces_an_existing_bundle() {
+    fn a_rebuild_gives_every_job_a_new_label_from_the_same_build() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_in(&exe, &app).unwrap();
-        std::fs::write(app.join("Contents/Resources/leftover"), b"x").unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        let first = agent_label_in(&app, "dev.pj.test.one").unwrap();
 
-        install_in(&exe, &app).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        install_agent_in(&exe, &app, "dev.pj.test.two", &plist).unwrap();
 
-        assert!(!app.join("Contents/Resources/leftover").exists());
+        let one = agent_label_in(&app, "dev.pj.test.one").unwrap();
+        let two = agent_label_in(&app, "dev.pj.test.two").unwrap();
+        assert_ne!(one, first, "a registration pins the old signature");
+        assert_eq!(tag_of(&one), tag_of(&two));
+        assert_eq!(plist_of(&app, &one), plist(&one), "the Label key follows");
+        assert_eq!(agents_in(&app).len(), 2);
         assert!(signed(&app));
-        assert!(!dir.path().join(".Workstation.app.old").exists());
+        assert!(is_current_in(&exe, &app));
+    }
+
+    #[test]
+    fn a_reinstall_replaces_the_jobs_plist() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Workstation.app");
+        let exe = source(dir.path());
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+
+        let other = |label: &str| format!("<other>{label}</other>");
+        install_agent_in(&exe, &app, "dev.pj.test.one", &other).unwrap();
+
+        let label = agent_label_in(&app, "dev.pj.test.one").unwrap();
+        assert_eq!(plist_of(&app, &label), other(&label));
+        assert_eq!(agents_in(&app).len(), 1);
+    }
+
+    #[test]
+    fn dropping_a_job_keeps_the_others_and_the_build_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Workstation.app");
+        let exe = source(dir.path());
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.two", &plist).unwrap();
+
+        // What `remove_agent` does once the jobs are unregistered: rebuild from the copy.
+        build_and_swap(&executable_in(&app), &app, None, Some("dev.pj.test.one")).unwrap();
+
+        let bases: Vec<&str> = agents_in(&app)
+            .iter()
+            .map(|l| base_of(l))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+            .leak()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(bases, ["dev.pj.test.two"]);
+        assert!(signed(&app));
+        assert!(
+            is_current_in(&exe, &app),
+            "the stamp must survive a rebuild from the copy"
+        );
+    }
+
+    #[test]
+    fn an_untagged_label_from_an_older_install_gets_tagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Workstation.app");
+        let exe = source(dir.path());
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        std::fs::write(
+            agent_plist_in(&app, "dev.pj.test.legacy"),
+            plist("dev.pj.test.legacy"),
+        )
+        .unwrap();
+
+        build_and_swap(&executable_in(&app), &app, None, None).unwrap();
+
+        let label = agent_label_in(&app, "dev.pj.test.legacy").unwrap();
+        assert_ne!(label, "dev.pj.test.legacy");
+        assert_eq!(plist_of(&app, &label), plist(&label));
+        assert!(!agent_plist_in(&app, "dev.pj.test.legacy").exists());
+    }
+
+    #[test]
+    fn base_of_strips_only_a_numeric_tag() {
+        assert_eq!(
+            base_of("dev.pj.workstation.display.1756850700123"),
+            "dev.pj.workstation.display"
+        );
+        assert_eq!(
+            base_of("dev.pj.workstation.display"),
+            "dev.pj.workstation.display"
+        );
+        assert_eq!(base_of("dev.pj.workstation.t1"), "dev.pj.workstation.t1");
+        assert!(new_tag().bytes().all(|b| b.is_ascii_digit()));
     }
 
     #[test]
@@ -282,9 +680,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_in(&exe, &app).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
 
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
         std::fs::File::open(&exe)
             .unwrap()
             .set_modified(later)
@@ -301,46 +699,18 @@ mod tests {
     }
 
     #[test]
-    fn running_from_inside_the_bundle_installs_nothing() {
+    fn running_from_inside_the_bundle_rebuilds_from_the_copy() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
-        let inside = app.join("Contents/MacOS/Workstation");
-        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
-        std::fs::write(&inside, b"placeholder").unwrap();
+        let exe = source(dir.path());
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
 
-        assert_eq!(install_in(&inside, &app).unwrap(), inside);
-        assert!(!app.join("Contents/Info.plist").exists());
-        assert!(is_current_in(&inside, &app));
-    }
+        let inside = executable_in(&app);
+        install_agent_in(&inside, &app, "dev.pj.test.two", &plist).unwrap();
 
-    #[test]
-    fn the_bundle_stays_while_a_job_points_into_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("Workstation.app");
-        let agents = dir.path().join("LaunchAgents");
-        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::write(
-            agents.join("job.plist"),
-            format!(
-                "<string>{}/Contents/MacOS/Workstation</string>",
-                app.display()
-            ),
-        )
-        .unwrap();
-
-        remove_if_unused_in(&app, &agents).unwrap();
-        assert!(app.exists());
-
-        std::fs::remove_file(agents.join("job.plist")).unwrap();
-        remove_if_unused_in(&app, &agents).unwrap();
-        assert!(!app.exists());
-    }
-
-    #[test]
-    fn removing_an_absent_bundle_is_fine() {
-        let dir = tempfile::tempdir().unwrap();
-        remove_if_unused_in(&dir.path().join("nope.app"), dir.path()).unwrap();
+        assert_eq!(agents_in(&app).len(), 2);
+        assert!(signed(&app));
+        assert!(is_current_in(&exe, &app));
     }
 
     #[test]
