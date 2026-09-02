@@ -4,8 +4,12 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use wsctl_core::bundle;
 
-/// launchd label for the job that keeps the menu bar pinned.
-pub const LABEL: &str = "com.priyanshujain.wsctl.display";
+/// launchd label for the job that keeps the menu bar pinned. It lives under the bundle id
+/// on purpose: Login Items keys its record by label and keeps the name it computed the first
+/// time it saw that label, even after the plist is deleted and written again, so the old
+/// `wsctl` name could only be shed by moving to a label macOS had never seen.
+pub const LABEL: &str = "com.priyanshujain.workstation.display";
+const LEGACY_LABEL: &str = "com.priyanshujain.wsctl.display";
 
 /// The WindowServer rewrites this file whenever the display layout changes, so launchd
 /// watching it gives an event-driven trigger with no resident process.
@@ -29,6 +33,10 @@ pub const POLL_SECONDS: u32 = 5;
 
 pub fn plist_path() -> PathBuf {
     home().join(format!("Library/LaunchAgents/{LABEL}.plist"))
+}
+
+fn legacy_plist_path() -> PathBuf {
+    home().join(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
 }
 
 pub fn log_path() -> PathBuf {
@@ -67,10 +75,7 @@ pub fn install(exe: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     let domain = gui_domain()?;
-    // Ignore failure: the job is usually not loaded yet on a first install.
-    let _ = Command::new("launchctl")
-        .args(["bootout", &format!("{domain}/{LABEL}")])
-        .output();
+    unload(&domain);
 
     let out = Command::new("launchctl")
         .args(["bootstrap", &domain, &path.to_string_lossy()])
@@ -88,9 +93,7 @@ pub fn install(exe: &Path) -> Result<PathBuf> {
 /// Unload the job and delete its plist.
 pub fn uninstall() -> Result<()> {
     if let Ok(domain) = gui_domain() {
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("{domain}/{LABEL}")])
-            .output();
+        unload(&domain);
     }
 
     let path = plist_path();
@@ -136,6 +139,17 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
 </plist>
 "#
     )
+}
+
+/// Unload the job under both labels it has had, and drop the plist an older install wrote
+/// under the previous one. Failure is ignored: on a first install nothing is loaded yet.
+fn unload(domain: &str) {
+    for label in [LABEL, LEGACY_LABEL] {
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("{domain}/{label}")])
+            .output();
+    }
+    let _ = std::fs::remove_file(legacy_plist_path());
 }
 
 fn home() -> PathBuf {
@@ -227,6 +241,16 @@ mod tests {
     fn paths_land_in_the_expected_locations() {
         assert!(plist_path().ends_with(format!("Library/LaunchAgents/{LABEL}.plist")));
         assert!(log_path().ends_with("Library/Logs/wsctl-display.log"));
+    }
+
+    #[test]
+    fn label_lives_under_the_bundle_id_and_retires_the_old_one() {
+        // A label Login Items has never seen is the only way to drop the cached `wsctl` name.
+        assert!(LABEL.starts_with(bundle::BUNDLE_ID), "{LABEL}");
+        assert_ne!(LABEL, LEGACY_LABEL);
+        assert!(
+            legacy_plist_path().ends_with(format!("Library/LaunchAgents/{LEGACY_LABEL}.plist"))
+        );
     }
 
     #[test]
