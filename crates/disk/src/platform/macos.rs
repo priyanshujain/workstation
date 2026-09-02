@@ -448,7 +448,12 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
         "Library/Application Support/AddressBook",
         "Library/Calendars",
         "Library/Reminders",
-        "Pictures/Photos Library.photoslibrary",
+        // The Photos and media libraries are asked about as Photos and as
+        // Media Library. Their bundle names vary by version and by what is set
+        // up, so the folders holding them stay closed as a whole.
+        "Pictures",
+        "Music",
+        "Movies",
     ]
     .iter()
     .map(|p| home.join(p))
@@ -504,7 +509,14 @@ mod tests {
     fn the_folders_everyone_is_asked_about_are_listed() {
         let home = dirs::home_dir().unwrap();
         let paths = consent_gated_paths();
-        for folder in ["Desktop", "Documents", "Downloads"] {
+        for folder in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Pictures",
+            "Music",
+            "Movies",
+        ] {
             assert!(paths.contains(&home.join(folder)), "{folder} missing");
         }
     }
