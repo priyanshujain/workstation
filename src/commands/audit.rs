@@ -162,9 +162,9 @@ fn print_unreadable(audit: &Audit) {
     println!(
         "  {}",
         style(format!(
-            "{unreadable} director{} could not be opened, so what they hold is \
-             unknown rather than zero.",
-            if unreadable == 1 { "y" } else { "ies" }
+            "{unreadable} director{} not opened, so what they hold is unknown \
+             rather than zero.",
+            if unreadable == 1 { "y was" } else { "ies were" }
         ))
         .dim()
     );
@@ -183,6 +183,13 @@ fn print_unreadable(audit: &Audit) {
         Denial::Forbidden,
         "Unix permissions hold these back. They need sudo, and Full Disk Access will not \
          reach them:",
+    );
+    print_denial(
+        audit,
+        Denial::Unattended,
+        "The scheduled refresh leaves these closed: macOS asks before an app opens them, \
+         and nobody was there to answer. wsctl disk audit --no-cache from a terminal \
+         measures them:",
     );
 }
 
