@@ -422,6 +422,39 @@ pub fn cleanup_targets() -> Vec<Target> {
     targets
 }
 
+/// Directories macOS asks the user about before it lets a process open them.
+///
+/// The grant that covers all of these at once is Full Disk Access, and it
+/// attaches to the terminal application, never to `wsctl`. Run from anywhere
+/// but a granted terminal, the first open of each directory here puts a dialog
+/// on the screen and blocks until somebody answers it. Everything else macOS
+/// protects refuses silently with EPERM and needs no list: the walk simply
+/// records the refusal.
+pub fn consent_gated_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    [
+        "Desktop",
+        "Documents",
+        "Downloads",
+        // iCloud Drive, and the Google Drive, Dropbox and OneDrive mounts.
+        "Library/Mobile Documents",
+        "Library/CloudStorage",
+        // Other apps' data, asked about since macOS 15.
+        "Library/Containers",
+        "Library/Group Containers",
+        // Contacts, Calendars and Reminders, asked about as those, not as folders.
+        "Library/Application Support/AddressBook",
+        "Library/Calendars",
+        "Library/Reminders",
+        "Pictures/Photos Library.photoslibrary",
+    ]
+    .iter()
+    .map(|p| home.join(p))
+    .collect()
+}
+
 fn claude_scratch_dir() -> Option<PathBuf> {
     let out = Command::new("id").arg("-u").output().ok()?;
     let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -448,4 +481,31 @@ fn command_exists(cmd: &str) -> bool {
         .arg(cmd)
         .output()
         .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_consent_gated_path_is_absolute_and_inside_home() {
+        // These are compared to walked paths by equality, so a relative one
+        // would never match and its dialog would come straight back.
+        let home = dirs::home_dir().unwrap();
+        let paths = consent_gated_paths();
+        assert!(!paths.is_empty());
+        for path in &paths {
+            assert!(path.is_absolute(), "{}", path.display());
+            assert!(path.starts_with(&home), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn the_folders_everyone_is_asked_about_are_listed() {
+        let home = dirs::home_dir().unwrap();
+        let paths = consent_gated_paths();
+        for folder in ["Desktop", "Documents", "Downloads"] {
+            assert!(paths.contains(&home.join(folder)), "{folder} missing");
+        }
+    }
 }

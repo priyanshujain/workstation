@@ -34,3 +34,13 @@ pub fn cleanup_targets() -> Vec<Target> {
 pub fn cleanup_targets() -> Vec<Target> {
     Vec::new()
 }
+
+#[cfg(target_os = "macos")]
+pub fn consent_gated_paths() -> Vec<PathBuf> {
+    macos::consent_gated_paths()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn consent_gated_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
