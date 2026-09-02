@@ -9,11 +9,11 @@ use disk::util::format_size;
 
 pub fn enable() -> Result<()> {
     let exe = std::env::current_exe().context("could not resolve the running wsctl binary")?;
-    let path = agent::install(&exe)?;
+    let installed = agent::install(&exe)?;
 
     println!();
     println!("  {}", style("Disk report refresh enabled").bold().green());
-    println!("  plist    {}", style(path.display()).dim());
+    println!("  plist    {}", style(installed.plist.display()).dim());
     println!("  log      {}", style(agent::log_path().display()).dim());
     println!(
         "  runs at  {}",
@@ -26,6 +26,12 @@ pub fn enable() -> Result<()> {
         )
         .dim()
     );
+    if !installed.approved {
+        println!(
+            "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",
+            style("!").yellow()
+        );
+    }
     println!();
     Ok(())
 }

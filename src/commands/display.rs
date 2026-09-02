@@ -184,14 +184,20 @@ pub fn enable() -> Result<()> {
         );
     }
 
-    let plist = agent::install(&exe)?;
+    let installed = agent::install(&exe)?;
 
     println!(
         "  {} Armed. launchd will re-apply the pin whenever the display layout changes.",
         style("✓").green()
     );
-    println!("    {}", style(plist.display()).dim());
+    println!("    {}", style(installed.plist.display()).dim());
     println!("    {}", style(agent::log_path().display()).dim());
+    if !installed.approved {
+        println!(
+            "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",
+            style("!").yellow()
+        );
+    }
     Ok(())
 }
 
