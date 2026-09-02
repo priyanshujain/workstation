@@ -454,6 +454,8 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
         "Pictures",
         "Music",
         "Movies",
+        // The Shared with You library, a photo library outside ~/Pictures.
+        "Library/Photos",
     ]
     .iter()
     .map(|p| home.join(p))
