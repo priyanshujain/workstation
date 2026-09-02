@@ -372,7 +372,18 @@ fn same_inode(a: &Path, b: &Path) -> bool {
 
 /// Walk every root once, charging each byte to at most one rule.
 pub fn sweep(roots: &[Root], rules: &[Rule]) -> Sweep {
-    sweep_streaming(roots, rules, &mut |_| Flow::Continue)
+    sweep_unattended(roots, rules, &[])
+}
+
+/// The same walk with `closed` left unopened, each recorded as
+/// [`Denial::Unattended`] so its bytes read as unknown rather than zero.
+///
+/// This is the walk for a scan nobody is sitting at. Opening a directory
+/// macOS asks about first puts a dialog on the screen and blocks the open
+/// until somebody answers, so a scheduled scan that tries is a scan that
+/// nags, then hangs.
+pub fn sweep_unattended(roots: &[Root], rules: &[Rule], closed: &[PathBuf]) -> Sweep {
+    sweep_unattended_streaming(roots, rules, closed, &mut |_| Flow::Continue)
         .expect("a sweep that is never cancelled always finishes")
 }
 
@@ -385,15 +396,25 @@ pub fn sweep_streaming(
     rules: &[Rule],
     on_progress: &mut dyn FnMut(Progress) -> Flow,
 ) -> Option<Sweep> {
+    sweep_unattended_streaming(roots, rules, &[], on_progress)
+}
+
+pub fn sweep_unattended_streaming(
+    roots: &[Root],
+    rules: &[Rule],
+    closed: &[PathBuf],
+    on_progress: &mut dyn FnMut(Progress) -> Flow,
+) -> Option<Sweep> {
     let by_path: HashMap<&Path, usize> = rules
         .iter()
         .enumerate()
         .map(|(i, r)| (r.path.as_path(), i))
         .collect();
     let skip: HashSet<&Path> = roots.iter().map(|r| r.path.as_path()).collect();
+    let closed: HashSet<&Path> = closed.iter().map(PathBuf::as_path).collect();
     let seen = Mutex::new(HashSet::new());
 
-    let units = plan(roots, &by_path, &seen);
+    let units = plan(roots, &by_path, &closed, &seen);
 
     // Loose files are already measured, so a root with nothing but files is
     // final before a single worker starts.
@@ -441,7 +462,7 @@ pub fn sweep_streaming(
             let tx = tx.clone();
             let queue = &queue;
             let cancel = &cancel;
-            let (by_path, skip, seen) = (&by_path, &skip, &seen);
+            let (by_path, skip, closed, seen) = (&by_path, &skip, &closed, &seen);
             scope.spawn(move || {
                 while !cancel.load(Ordering::Relaxed) {
                     let Some(job) = queue.lock().unwrap().pop() else {
@@ -450,6 +471,7 @@ pub fn sweep_streaming(
                     let mut walker = Walker {
                         rules: by_path,
                         skip,
+                        closed,
                         seen,
                         cancel,
                         dev: job.dev,
@@ -557,6 +579,7 @@ struct RootSeed {
 fn plan(
     roots: &[Root],
     by_path: &HashMap<&Path, usize>,
+    closed: &HashSet<&Path>,
     seen: &Mutex<HashSet<(u64, u64)>>,
 ) -> Plan {
     let mut jobs = Vec::new();
@@ -583,6 +606,12 @@ fn plan(
         };
         let dev = meta.dev();
         let inherited = by_path.get(root.path.as_path()).copied();
+
+        if closed.contains(root.path.as_path()) {
+            seed.unreadable.push(unattended(&root.path));
+            seeds.push(seed);
+            continue;
+        }
 
         match std::fs::read_dir(&root.path) {
             Err(e) => seed.unreadable.extend(refusal(&root.path, &e)),
@@ -704,6 +733,13 @@ fn refusal(path: &Path, error: &std::io::Error) -> Option<Unreadable> {
     })
 }
 
+fn unattended(path: &Path) -> Unreadable {
+    Unreadable {
+        path: path.to_path_buf(),
+        denial: Denial::Unattended,
+    }
+}
+
 fn count_denials(entries: &[Unreadable]) -> Denials {
     let mut denials = Denials::default();
     for entry in entries {
@@ -715,6 +751,9 @@ fn count_denials(entries: &[Unreadable]) -> Denials {
 struct Walker<'a> {
     rules: &'a HashMap<&'a Path, usize>,
     skip: &'a HashSet<&'a Path>,
+    /// Never opened. Checked before every `read_dir`, because the dialog is
+    /// raised by the open itself and nothing after it can take it back.
+    closed: &'a HashSet<&'a Path>,
     seen: &'a Mutex<HashSet<(u64, u64)>>,
     cancel: &'a AtomicBool,
     dev: u64,
@@ -730,6 +769,11 @@ impl Walker<'_> {
             Ok(meta) => self.charge_to(&meta, rule),
             Err(_) => 0,
         };
+
+        if self.closed.contains(dir) {
+            self.unreadable.push(unattended(dir));
+            return total;
+        }
 
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -1059,6 +1103,91 @@ mod tests {
         assert_eq!(usage.children.len(), 1);
         assert!(usage.children[0].1 >= 64 * 1024);
         assert_eq!(sweep.denials().forbidden, 1, "still reported as a refusal");
+    }
+
+    #[test]
+    fn a_closed_directory_is_left_unopened_and_reads_as_unknown() {
+        // The dialog is raised by the open, so the only way to not raise it is
+        // to not open. Nothing inside gets counted, and the row says why.
+        let dir = tempdir().unwrap();
+        let gated = dir.path().join("Documents");
+        let open = dir.path().join("open");
+        fs::create_dir(&gated).unwrap();
+        fs::create_dir(&open).unwrap();
+        fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
+        fs::write(open.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
+
+        let swept = sweep_unattended(&[root("test", dir.path())], &[], &[gated.clone()]);
+
+        let usage = &swept.roots[0];
+        assert!(
+            swept.total() < 256 * 1024,
+            "the closed directory was opened: {}",
+            swept.total()
+        );
+        assert!(swept.total() >= 64 * 1024, "the open one was not measured");
+        assert_eq!(usage.refused_children.len(), 1);
+        assert_eq!(usage.refused_children[0].path, gated);
+        assert_eq!(usage.refused_children[0].denial, Denial::Unattended);
+        assert_eq!(
+            swept.denials(),
+            Denials {
+                unattended: 1,
+                ..Denials::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_directory_deeper_down_is_left_unopened_too() {
+        // The check is per open, not per root child, or a gated directory
+        // two levels down would still raise its dialog.
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("child");
+        let gated = child.join("Photos Library.photoslibrary");
+        fs::create_dir_all(&gated).unwrap();
+        fs::write(child.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
+        fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
+
+        let swept = sweep_unattended(&[root("test", dir.path())], &[], &[gated.clone()]);
+
+        let usage = &swept.roots[0];
+        assert!(swept.total() < 256 * 1024, "{}", swept.total());
+        assert!(usage.refused_children.is_empty(), "the child itself opened");
+        assert_eq!(usage.unreadable.len(), 1);
+        assert_eq!(usage.unreadable[0].path, gated);
+        assert_eq!(usage.unreadable[0].denial, Denial::Unattended);
+    }
+
+    #[test]
+    fn a_closed_root_is_unknown_not_empty() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("f.bin"), vec![0u8; 64 * 1024]).unwrap();
+
+        let swept = sweep_unattended(
+            &[root("gated", dir.path())],
+            &[],
+            &[dir.path().to_path_buf()],
+        );
+
+        assert_eq!(swept.total(), 0);
+        assert_eq!(swept.denials().unattended, 1);
+        assert_eq!(swept.roots[0].unreadable[0].denial, Denial::Unattended);
+    }
+
+    #[test]
+    fn an_attended_sweep_opens_everything() {
+        // The list is the only thing that closes a directory. With nobody
+        // handing one in, the walk is the walk it always was.
+        let dir = tempdir().unwrap();
+        let gated = dir.path().join("Documents");
+        fs::create_dir(&gated).unwrap();
+        fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
+
+        let swept = sweep(&[root("test", dir.path())], &[]);
+
+        assert!(swept.total() >= 256 * 1024, "{}", swept.total());
+        assert_eq!(swept.denials().total(), 0);
     }
 
     #[test]
