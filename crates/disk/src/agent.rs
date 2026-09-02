@@ -90,16 +90,12 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
         .collect();
 
     // `disk agent refresh` rather than `disk audit --no-cache`. The audit
-    // opens everything, and from a process no terminal owns each directory
-    // macOS asks about first is a dialog on the screen, four times a day,
-    // with the scan hung behind it until somebody clicks. The refresh leaves
-    // the well-known ones closed and the cache says so.
-    //
-    // The session type is the guarantee behind that. Apple's list of asked-
-    // about paths is long, undocumented and includes caches, so a list alone
-    // is always one macOS release behind. A process in the background
-    // session has no graphics access and cannot be asked anything: macOS
-    // denies instead, quietly, and the directory reads as protected.
+    // opens everything, and a logged-in user's tccd will put a dialog on the
+    // screen for the directories macOS gates, four times a day, with the scan
+    // hung behind it until somebody clicks. Neither the background domain nor
+    // a session-type limit stops that while the user is logged in, which is
+    // exactly when the refresh runs; the only thing that does is not opening
+    // those directories. The refresh leaves them closed and the cache says so.
     //
     // RunAtLoad is false on purpose. The scan takes minutes, and running it at
     // every login is exactly the cost this cache exists to avoid.
@@ -117,8 +113,6 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
         <string>agent</string>
         <string>refresh</string>
     </array>
-    <key>LimitLoadToSessionType</key>
-    <string>Background</string>
     <key>RunAtLoad</key>
     <false/>
     <key>StartCalendarInterval</key>
@@ -144,9 +138,9 @@ fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// The per-user background domain, not the GUI one: see [`plist_contents`].
+/// The GUI session domain, where a logged-in user's agents live.
 fn domain() -> Result<String> {
-    Ok(format!("user/{}", uid()?))
+    Ok(format!("gui/{}", uid()?))
 }
 
 fn uid() -> Result<String> {
@@ -161,9 +155,9 @@ fn uid() -> Result<String> {
     Ok(uid)
 }
 
-/// Unload the job wherever an earlier version put it. Before the background
-/// session it lived in the GUI domain, and a copy left there would go on
-/// raising dialogs next to the new one.
+/// Unload the job from both domains it may sit in. A short-lived version
+/// bootstrapped it into `user/<uid>`; the job lives in `gui/<uid>`, and a
+/// copy left in the other domain would run its own schedule alongside.
 ///
 /// Returns once the label is gone. Booting out a job that is mid-run tears
 /// it down asynchronously, and a bootstrap that lands before that finishes
@@ -172,7 +166,7 @@ fn bootout() {
     let Ok(uid) = uid() else {
         return;
     };
-    for domain in [format!("user/{uid}"), format!("gui/{uid}")] {
+    for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
         let target = format!("{domain}/{LABEL}");
         let _ = Command::new("launchctl")
             .args(["bootout", &target])
@@ -221,22 +215,13 @@ mod tests {
     }
 
     #[test]
-    fn plist_keeps_the_job_out_of_the_gui_session() {
-        // Without this, launchd loads the plist into the Aqua session at the
-        // next login regardless of where `enable` bootstrapped it, and a
-        // process there can be asked about directories, so it is.
-        let plist = contents();
-        assert!(
-            plist.contains("<key>LimitLoadToSessionType</key>\n    <string>Background</string>"),
-            "the job must live where macOS cannot put a dialog in front of it"
-        );
-    }
-
-    #[test]
-    fn the_job_is_bootstrapped_into_the_background_domain() {
+    fn a_logged_in_agent_lives_in_the_gui_domain() {
+        // A background-domain or session-type agent either does not run while
+        // the user is logged in, or still prompts when it does. Neither helps,
+        // so the job lives in the ordinary GUI domain and the closed list is
+        // what keeps it from prompting.
         let domain = domain().unwrap();
-        assert!(domain.starts_with("user/"), "{domain}");
-        assert!(!domain.starts_with("gui/"), "{domain}");
+        assert!(domain.starts_with("gui/"), "{domain}");
     }
 
     #[test]
