@@ -1565,6 +1565,12 @@ mod tests {
     /// application the grant attaches to, not which one this machine reports.
     const TERMINAL: &str = "Ghostty";
 
+    fn blank(overview: Option<DiskOverview>) -> App {
+        let mut app = App::new(overview);
+        app.terminal = TERMINAL.to_string();
+        app
+    }
+
     fn protected(count: usize) -> Denials {
         Denials {
             protected: count,
@@ -1613,7 +1619,7 @@ mod tests {
     }
 
     fn started(names: &[&str]) -> App {
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.begin_scan(&[]);
         app.apply_top(&Progress::Started {
             roots: names.iter().copied().map(root).collect(),
@@ -1640,7 +1646,7 @@ mod tests {
     }
 
     fn cached(roots: Vec<RootUsage>) -> App {
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.load_cached(&audit_of(roots), Duration::from_secs(4 * 3600));
         app
     }
@@ -1683,7 +1689,7 @@ mod tests {
             categories: vec![category("Rust", 200 * GB), category("Xcode", 72 * GB)],
         };
 
-        let mut app = App::new(Some(container(other_volumes)));
+        let mut app = blank(Some(container(other_volumes)));
         app.load_cached(&audit, Duration::ZERO);
         app
     }
@@ -2320,7 +2326,7 @@ mod tests {
         root.unattributed_total = 2 * GB;
         root.unattributed = vec![(PathBuf::from("/tmp/one"), 512 * MB)];
 
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.load_cached(&audit_of(vec![root]), Duration::ZERO);
         app.toggle();
         assert_eq!(names(&app), vec![UNNAMED.to_string()]);
@@ -2481,7 +2487,7 @@ mod tests {
         let audit = audit::scan_with(&roots, &rules);
         let measured = audit.measured();
 
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.load_cached(&audit, Duration::ZERO);
 
         assert_eq!(app.listed(), measured, "the partition");
@@ -2516,7 +2522,7 @@ mod tests {
             }],
         };
 
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.load_cached(&audit, Duration::ZERO);
         app.toggle();
         assert_eq!(
@@ -2538,7 +2544,7 @@ mod tests {
     #[test]
     fn the_naming_view_has_its_rows_before_a_walk_can_size_them() {
         let rules = attribution_rules();
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.begin_scan(&rules);
         app.toggle();
 
@@ -2610,7 +2616,7 @@ mod tests {
                 paths: Vec::new(),
             }],
         };
-        let mut app = App::new(None);
+        let mut app = blank(None);
         app.load_cached(&audit, Duration::ZERO);
 
         app.pane_mut().move_down();
