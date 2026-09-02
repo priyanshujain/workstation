@@ -992,6 +992,13 @@ fn denial_notes(denials: Denials, terminal: &str) -> Vec<String> {
             directories(denials.forbidden)
         ));
     }
+    if denials.unattended > 0 {
+        notes.push(format!(
+            "  {} left closed: the scheduled refresh does not open what macOS asks \
+             about first. Press r to measure them now.",
+            directories(denials.unattended)
+        ));
+    }
     notes
 }
 
@@ -1977,6 +1984,65 @@ mod tests {
             "one fix cannot stand in for the other"
         );
         assert!(denial_notes(Denials::default(), TERMINAL).is_empty());
+    }
+
+    #[test]
+    fn a_directory_the_refresh_left_closed_is_fixed_by_a_keypress_not_a_grant() {
+        // Nothing refused it: the scheduled scan chose not to ask. So the note
+        // must send the user to the key that measures it, and must not send
+        // them to System Settings for a grant that would change nothing.
+        let notes = denial_notes(
+            Denials {
+                unattended: 3,
+                ..Denials::default()
+            },
+            TERMINAL,
+        );
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("3 directories"), "{notes:?}");
+        assert!(notes[0].contains("Press r"), "{notes:?}");
+        assert!(!notes[0].contains("Full Disk Access"), "{notes:?}");
+        assert!(!notes[0].contains("sudo"), "{notes:?}");
+    }
+
+    #[test]
+    fn a_child_the_refresh_left_closed_reads_as_unknown_with_its_own_note() {
+        // The cache is what the scheduled refresh wrote, so this is the row the
+        // user sees for ~/Documents every time they open the screen.
+        let scratch = Scratch::new("closed");
+        let documents = scratch.dir("Documents");
+        let plain = scratch.dir("plain");
+        fs::write(plain.join("f.bin"), vec![0u8; 32 * 1024]).unwrap();
+
+        let mut root = usage(
+            "Home",
+            32 * 1024,
+            Denials {
+                unattended: 1,
+                ..Denials::default()
+            },
+        );
+        root.path = scratch.path().to_path_buf();
+        root.children = vec![(plain, 32 * 1024), (documents.clone(), 0)];
+        root.refused_children = vec![Unreadable {
+            path: documents,
+            denial: Denial::Unattended,
+        }];
+        let mut app = cached(vec![root]);
+        app.pane_mut().enter();
+
+        assert_eq!(
+            labels(&app),
+            vec![
+                ("plain".to_string(), "33 KB".to_string()),
+                ("Documents".to_string(), "unknown".to_string()),
+            ]
+        );
+        let denials = app.denials();
+        assert_eq!(denials.unattended, 1);
+        let notes = denial_notes(denials, TERMINAL);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("Press r"), "{notes:?}");
     }
 
     #[test]
