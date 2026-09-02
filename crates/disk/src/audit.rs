@@ -92,6 +92,17 @@ pub fn scan_with(roots: &[Root], rules: &[Rule]) -> Audit {
     from_sweep(sweep::sweep(roots, rules), rules)
 }
 
+/// The same walk for a scan nobody is sitting at. The directories macOS asks
+/// about before opening are left closed and reported as such, because from a
+/// process no terminal owns each one is a dialog on the screen, and the scan
+/// hangs behind it until somebody answers.
+pub fn scan_unattended() -> Audit {
+    let rules = attribution_rules();
+    let roots = sweep::discover_roots();
+    let closed = platform::consent_gated_paths();
+    from_sweep(sweep::sweep_unattended(&roots, &rules, &closed), &rules)
+}
+
 /// Sorting happens here rather than in the sweep: a streaming caller needs
 /// roots in the order they were announced, and only a finished report wants
 /// them biggest-first.

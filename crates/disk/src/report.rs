@@ -447,9 +447,29 @@ fn give_back(path: &Path, handback: Option<&Handback>) {
 }
 
 /// Walk the disk and build a fresh report. This is the slow path, tens of
-/// seconds, and is what the scheduled refresh runs.
+/// seconds.
 pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report {
     from_audit(crate::audit::scan(), project_roots, max_depth, now)
+}
+
+/// What the scheduled refresh runs. The walk leaves closed whatever macOS
+/// would ask about, and the cache written back says which directories those
+/// were, so a reader knows they are unmeasured rather than empty.
+pub fn refresh_unattended(project_roots: &[PathBuf], max_depth: usize) -> Report {
+    let report = from_audit(
+        crate::audit::scan_unattended(),
+        project_roots,
+        max_depth,
+        SystemTime::now(),
+    );
+    write_back(&report);
+    report
+}
+
+fn write_back(report: &Report) {
+    if let Err(e) = save(report) {
+        tracing::warn!("could not write disk report cache: {e}");
+    }
 }
 
 /// The same report from a measurement that has already been taken, so a caller
@@ -546,9 +566,7 @@ pub fn load_or_refresh(
     }
 
     let report = generate(project_roots, max_depth, now);
-    if let Err(e) = save(&report) {
-        tracing::warn!("could not write disk report cache: {e}");
-    }
+    write_back(&report);
     (report, Source::Fresh)
 }
 
