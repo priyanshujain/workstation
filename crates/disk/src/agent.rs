@@ -28,7 +28,7 @@ pub fn is_installed() -> bool {
 /// Whether launchd has the job loaded. The job is one-shot, so this reports
 /// that the schedule is armed, not that a process is alive.
 pub fn is_loaded() -> bool {
-    let Ok(domain) = gui_domain() else {
+    let Ok(domain) = domain() else {
         return false;
     };
     Command::new("launchctl")
@@ -50,10 +50,8 @@ pub fn install(exe: &Path) -> Result<PathBuf> {
     std::fs::write(&path, plist_contents(exe, &log_path()))
         .with_context(|| format!("failed to write {}", path.display()))?;
 
-    let domain = gui_domain()?;
-    let _ = Command::new("launchctl")
-        .args(["bootout", &format!("{domain}/{LABEL}")])
-        .output();
+    let domain = domain()?;
+    bootout();
 
     let out = Command::new("launchctl")
         .args(["bootstrap", &domain, &path.to_string_lossy()])
@@ -69,11 +67,7 @@ pub fn install(exe: &Path) -> Result<PathBuf> {
 }
 
 pub fn uninstall() -> Result<()> {
-    if let Ok(domain) = gui_domain() {
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("{domain}/{LABEL}")])
-            .output();
-    }
+    bootout();
 
     let path = plist_path();
     if path.exists() {
@@ -99,7 +93,13 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
     // opens everything, and from a process no terminal owns each directory
     // macOS asks about first is a dialog on the screen, four times a day,
     // with the scan hung behind it until somebody clicks. The refresh leaves
-    // those closed and the cache says so.
+    // the well-known ones closed and the cache says so.
+    //
+    // The session type is the guarantee behind that. Apple's list of asked-
+    // about paths is long, undocumented and includes caches, so a list alone
+    // is always one macOS release behind. A process in the background
+    // session has no graphics access and cannot be asked anything: macOS
+    // denies instead, quietly, and the directory reads as protected.
     //
     // RunAtLoad is false on purpose. The scan takes minutes, and running it at
     // every login is exactly the cost this cache exists to avoid.
@@ -117,6 +117,8 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
         <string>agent</string>
         <string>refresh</string>
     </array>
+    <key>LimitLoadToSessionType</key>
+    <string>Background</string>
     <key>RunAtLoad</key>
     <false/>
     <key>StartCalendarInterval</key>
@@ -142,7 +144,12 @@ fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn gui_domain() -> Result<String> {
+/// The per-user background domain, not the GUI one: see [`plist_contents`].
+fn domain() -> Result<String> {
+    Ok(format!("user/{}", uid()?))
+}
+
+fn uid() -> Result<String> {
     let out = Command::new("id")
         .arg("-u")
         .output()
@@ -151,7 +158,21 @@ fn gui_domain() -> Result<String> {
     if uid.is_empty() {
         bail!("could not determine current uid");
     }
-    Ok(format!("gui/{uid}"))
+    Ok(uid)
+}
+
+/// Unload the job wherever an earlier version put it. Before the background
+/// session it lived in the GUI domain, and a copy left there would go on
+/// raising dialogs next to the new one.
+fn bootout() {
+    let Ok(uid) = uid() else {
+        return;
+    };
+    for domain in [format!("user/{uid}"), format!("gui/{uid}")] {
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("{domain}/{LABEL}")])
+            .output();
+    }
 }
 
 fn xml_escape(s: &str) -> String {
@@ -182,6 +203,25 @@ mod tests {
             "the audit opens every directory, and from launchd that is a \
              permission dialog per protected folder, four times a day"
         );
+    }
+
+    #[test]
+    fn plist_keeps_the_job_out_of_the_gui_session() {
+        // Without this, launchd loads the plist into the Aqua session at the
+        // next login regardless of where `enable` bootstrapped it, and a
+        // process there can be asked about directories, so it is.
+        let plist = contents();
+        assert!(
+            plist.contains("<key>LimitLoadToSessionType</key>\n    <string>Background</string>"),
+            "the job must live where macOS cannot put a dialog in front of it"
+        );
+    }
+
+    #[test]
+    fn the_job_is_bootstrapped_into_the_background_domain() {
+        let domain = domain().unwrap();
+        assert!(domain.starts_with("user/"), "{domain}");
+        assert!(!domain.starts_with("gui/"), "{domain}");
     }
 
     #[test]
