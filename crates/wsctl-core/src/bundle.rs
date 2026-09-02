@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 /// the copy. The copy is a different file from the one on PATH, so the bundle
 /// records which build it came from and `is_current` reports when a reinstall
 /// has left it behind.
-pub const BUNDLE_ID: &str = "com.priyanshujain.workstation";
+pub const BUNDLE_ID: &str = "dev.pj.workstation";
 pub const NAME: &str = "Workstation";
 
 const ICON: &[u8] = include_bytes!("../assets/Workstation.icns");
@@ -24,7 +24,8 @@ pub fn app_path() -> PathBuf {
     home().join("Applications").join(format!("{NAME}.app"))
 }
 
-/// The copy of wsctl that launchd runs.
+/// The copy of wsctl that launchd runs, named after the app as bundles
+/// conventionally are.
 pub fn executable() -> PathBuf {
     executable_in(&app_path())
 }
@@ -33,7 +34,14 @@ pub fn executable() -> PathBuf {
 /// Safe to call while a job is mid-run: the new bundle is built beside the
 /// old one and swapped in with a rename, so a running copy keeps its file.
 pub fn install(exe: &Path) -> Result<PathBuf> {
-    install_in(exe, &app_path())
+    let app = app_path();
+    let target = install_in(exe, &app)?;
+    // Only the real install registers with LaunchServices. A registration
+    // outlives its directory, and stale ones under the same bundle id make
+    // LaunchServices resolve the id to paths that no longer exist, which is
+    // how bundles built by the test suite left Login Items showing `wsctl`.
+    let _ = Command::new(LSREGISTER).arg("-f").arg(&app).output();
+    Ok(target)
 }
 
 /// Whether the bundled copy was made from this build of `exe`.
@@ -64,8 +72,6 @@ fn install_in(exe: &Path, app: &Path) -> Result<PathBuf> {
     build(exe, &staging)?;
     sign(&staging)?;
     swap(&staging, app)?;
-
-    let _ = Command::new(LSREGISTER).arg("-f").arg(app).output();
     Ok(target)
 }
 
@@ -76,7 +82,7 @@ fn build(exe: &Path, app: &Path) -> Result<()> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
     }
-    std::fs::copy(exe, macos.join("wsctl"))
+    std::fs::copy(exe, macos.join(NAME))
         .with_context(|| format!("failed to copy {}", exe.display()))?;
     std::fs::write(resources.join(format!("{NAME}.icns")), ICON)?;
     std::fs::write(app.join(STAMP), stamp(exe)?)?;
@@ -146,7 +152,7 @@ fn remove_if_unused_in(app: &Path, agents: &Path) -> Result<()> {
 }
 
 fn executable_in(app: &Path) -> PathBuf {
-    app.join("Contents/MacOS/wsctl")
+    app.join("Contents/MacOS").join(NAME)
 }
 
 fn is_inside(exe: &Path, app: &Path) -> bool {
@@ -181,7 +187,7 @@ fn info_plist() -> String {
     <key>CFBundleDisplayName</key>
     <string>{NAME}</string>
     <key>CFBundleExecutable</key>
-    <string>wsctl</string>
+    <string>{NAME}</string>
     <key>CFBundleIconFile</key>
     <string>{NAME}</string>
     <key>CFBundlePackageType</key>
@@ -244,7 +250,7 @@ mod tests {
 
         let bundled = install_in(&exe, &app).unwrap();
 
-        assert_eq!(bundled, app.join("Contents/MacOS/wsctl"));
+        assert_eq!(bundled, app.join("Contents/MacOS/Workstation"));
         assert!(bundled.exists());
         assert!(app.join("Contents/Info.plist").exists());
         assert!(app.join("Contents/Resources/Workstation.icns").exists());
@@ -298,7 +304,7 @@ mod tests {
     fn running_from_inside_the_bundle_installs_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
-        let inside = app.join("Contents/MacOS/wsctl");
+        let inside = app.join("Contents/MacOS/Workstation");
         std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
         std::fs::write(&inside, b"placeholder").unwrap();
 
@@ -316,7 +322,10 @@ mod tests {
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::write(
             agents.join("job.plist"),
-            format!("<string>{}/Contents/MacOS/wsctl</string>", app.display()),
+            format!(
+                "<string>{}/Contents/MacOS/Workstation</string>",
+                app.display()
+            ),
         )
         .unwrap();
 
@@ -352,8 +361,9 @@ mod tests {
 
         let plist = info_plist();
         assert!(plist.contains("<string>Workstation</string>"));
-        assert!(plist.contains("<string>com.priyanshujain.workstation</string>"));
+        assert!(plist.contains("<string>dev.pj.workstation</string>"));
         assert!(plist.contains("<key>CFBundleIconFile</key>\n    <string>Workstation</string>"));
+        assert!(plist.contains("<key>CFBundleExecutable</key>\n    <string>Workstation</string>"));
         assert!(
             plist.contains("<key>LSUIElement</key>\n    <true/>"),
             "a Dock icon would flash on every run"
@@ -363,6 +373,6 @@ mod tests {
     #[test]
     fn paths_land_in_the_user_applications_folder() {
         assert!(app_path().ends_with("Applications/Workstation.app"));
-        assert!(executable().ends_with("Workstation.app/Contents/MacOS/wsctl"));
+        assert!(executable().ends_with("Workstation.app/Contents/MacOS/Workstation"));
     }
 }
