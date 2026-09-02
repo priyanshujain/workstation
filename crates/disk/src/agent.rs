@@ -95,8 +95,11 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
         })
         .collect();
 
-    // `--no-cache` is the whole job: it forces the walk and writes the result
-    // back, so there is no separate refresh flag to keep in sync.
+    // `disk agent refresh` rather than `disk audit --no-cache`. The audit
+    // opens everything, and from a process no terminal owns each directory
+    // macOS asks about first is a dialog on the screen, four times a day,
+    // with the scan hung behind it until somebody clicks. The refresh leaves
+    // those closed and the cache says so.
     //
     // RunAtLoad is false on purpose. The scan takes minutes, and running it at
     // every login is exactly the cost this cache exists to avoid.
@@ -111,8 +114,8 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
     <array>
         <string>{exe}</string>
         <string>disk</string>
-        <string>audit</string>
-        <string>--no-cache</string>
+        <string>agent</string>
+        <string>refresh</string>
     </array>
     <key>RunAtLoad</key>
     <false/>
@@ -169,13 +172,15 @@ mod tests {
     }
 
     #[test]
-    fn plist_runs_the_refreshing_form_of_the_command() {
+    fn plist_runs_the_unattended_refresh() {
         let plist = contents();
         assert!(plist.contains("<string>disk</string>"));
-        assert!(plist.contains("<string>audit</string>"));
+        assert!(plist.contains("<string>agent</string>"));
+        assert!(plist.contains("<string>refresh</string>"));
         assert!(
-            plist.contains("<string>--no-cache</string>"),
-            "without --no-cache the job would read the cache it exists to write"
+            !plist.contains("<string>audit</string>") && !plist.contains("--no-cache"),
+            "the audit opens every directory, and from launchd that is a \
+             permission dialog per protected folder, four times a day"
         );
     }
 
