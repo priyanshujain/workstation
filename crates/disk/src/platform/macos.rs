@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cleanup::{CleanAction, Measure, Target};
@@ -434,7 +434,7 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    [
+    let folders = [
         "Desktop",
         "Documents",
         "Downloads",
@@ -456,10 +456,48 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
         "Movies",
         // The Shared with You library, a photo library outside ~/Pictures.
         "Library/Photos",
-    ]
-    .iter()
-    .map(|p| home.join(p))
-    .collect()
+    ];
+    let mut paths: Vec<PathBuf> = folders.iter().map(|p| home.join(p)).collect();
+    paths.extend(media_agent_dirs(&home));
+    paths
+}
+
+/// The Music and TV apps keep working state under `~/Library/Caches` and
+/// `~/Library/Application Support`, and opening one of those bundle directories
+/// raises the Media Library dialog even though it is nowhere near `~/Music`.
+/// The bundle names drift between releases and grow new siblings, so rather
+/// than list them this reads the two parents, which is itself never gated, and
+/// closes every child whose name starts a media agent's bundle id. A new one
+/// next release is caught without a code change.
+fn media_agent_dirs(home: &Path) -> Vec<PathBuf> {
+    const PREFIXES: [&str; 8] = [
+        "com.apple.Music",
+        "com.apple.TV",
+        "com.apple.iTunes",
+        "com.apple.AMP",
+        "com.apple.MediaPlaybackCore",
+        "com.apple.MediaPlayer",
+        "com.apple.AppleMediaServices",
+        "com.apple.mediaanalysisd",
+    ];
+    let parents = [
+        home.join("Library/Caches"),
+        home.join("Library/Application Support"),
+    ];
+    let mut dirs = Vec::new();
+    for parent in parents {
+        let Ok(entries) = std::fs::read_dir(&parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if PREFIXES.iter().any(|p| name.starts_with(p)) {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs
 }
 
 fn claude_scratch_dir() -> Option<PathBuf> {
@@ -505,6 +543,37 @@ mod tests {
             assert!(path.is_absolute(), "{}", path.display());
             assert!(path.starts_with(&home), "{}", path.display());
         }
+    }
+
+    #[test]
+    fn a_media_agent_cache_directory_is_closed_by_prefix() {
+        // ~/Library/Caches/com.apple.Music raises the Media Library dialog and
+        // is nowhere near ~/Music, so it has to be caught here or the prompt
+        // comes back on the next scan.
+        let home = tempfile::tempdir().unwrap();
+        let caches = home.path().join("Library/Caches");
+        std::fs::create_dir_all(&caches).unwrap();
+        for name in [
+            "com.apple.Music",
+            "com.apple.AMPLibraryAgent",
+            "com.example.app",
+        ] {
+            std::fs::create_dir(caches.join(name)).unwrap();
+        }
+
+        let closed = media_agent_dirs(home.path());
+        assert!(
+            closed.contains(&caches.join("com.apple.Music")),
+            "{closed:?}"
+        );
+        assert!(
+            closed.contains(&caches.join("com.apple.AMPLibraryAgent")),
+            "{closed:?}"
+        );
+        assert!(
+            !closed.contains(&caches.join("com.example.app")),
+            "a third-party cache is not media and must stay open: {closed:?}"
+        );
     }
 
     #[test]
