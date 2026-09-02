@@ -310,5 +310,9 @@ pub enum SelfCommand {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Also remove the launchd jobs, the Workstation app, logs, caches and config
+        #[arg(long)]
+        purge: bool,
     },
 }

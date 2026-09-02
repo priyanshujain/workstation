@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
-            SelfCommand::Uninstall { yes } => commands::self_cmd::uninstall(yes)?,
+            SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
         },
     }
 
