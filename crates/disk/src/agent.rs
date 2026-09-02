@@ -164,14 +164,29 @@ fn uid() -> Result<String> {
 /// Unload the job wherever an earlier version put it. Before the background
 /// session it lived in the GUI domain, and a copy left there would go on
 /// raising dialogs next to the new one.
+///
+/// Returns once the label is gone. Booting out a job that is mid-run tears
+/// it down asynchronously, and a bootstrap that lands before that finishes
+/// fails with a bare I/O error.
 fn bootout() {
     let Ok(uid) = uid() else {
         return;
     };
     for domain in [format!("user/{uid}"), format!("gui/{uid}")] {
+        let target = format!("{domain}/{LABEL}");
         let _ = Command::new("launchctl")
-            .args(["bootout", &format!("{domain}/{LABEL}")])
+            .args(["bootout", &target])
             .output();
+        for _ in 0..20 {
+            let gone = Command::new("launchctl")
+                .args(["print", &target])
+                .output()
+                .is_ok_and(|o| !o.status.success());
+            if gone {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }
 
