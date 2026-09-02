@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod command;
 pub mod context;
 pub mod error;
