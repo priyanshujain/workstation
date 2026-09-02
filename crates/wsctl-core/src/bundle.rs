@@ -37,6 +37,7 @@ pub const NAME: &str = "Workstation";
 const ICON: &[u8] = include_bytes!("../assets/Workstation.icns");
 const STAMP: &str = "Contents/Resources/source";
 const AGENTS: &str = "Contents/Library/LaunchAgents";
+const AD_HOC: &str = "-";
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 /// `SMAppServiceStatus` values: not registered, held until the user allows it
@@ -53,6 +54,45 @@ pub struct Installed {
     pub plist: PathBuf,
     /// False when macOS is holding the job until it is allowed in Login Items.
     pub approved: bool,
+    /// What the bundle is signed as: a Developer ID, or `ad hoc`.
+    pub signed_as: String,
+}
+
+/// The codesign identity to sign the bundle with. A Developer ID Application
+/// identity in the keychain is used when there is exactly one, which is what
+/// puts a developer name under the entry in Login Items instead of
+/// "unidentified developer"; otherwise the bundle is signed ad hoc, which
+/// works everywhere else. Two candidates are ambiguous, and picking one would
+/// sign with a team that may not be the user's, so that falls back too.
+pub fn signing_identity() -> String {
+    let out = Command::new("security")
+        .args(["find-identity", "-v", "-p", "codesigning"])
+        .output();
+    let Ok(out) = out else {
+        return AD_HOC.to_string();
+    };
+    let mut found: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains("\"Developer ID Application:"))
+        .filter_map(|l| {
+            let start = l.find('"')? + 1;
+            let end = l.rfind('"')?;
+            (start < end).then(|| l[start..end].to_string())
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    match found.as_slice() {
+        [one] => one.clone(),
+        [] => AD_HOC.to_string(),
+        many => {
+            tracing::warn!(
+                "{} Developer ID identities in the keychain, signing ad hoc",
+                many.len()
+            );
+            AD_HOC.to_string()
+        }
+    }
 }
 
 pub fn app_path() -> PathBuf {
@@ -90,9 +130,10 @@ pub fn install_agent(exe: &Path, base: &str, plist: PlistFor) -> Result<Installe
             std::fs::read_to_string(agent_plist_in(&app, &label))
                 .is_ok_and(|current| current == plist(&label))
         });
+    let identity = signing_identity();
     if !unchanged {
         unregister_all(&app);
-        install_agent_in(exe, &app, base, plist)?;
+        install_agent_in(exe, &app, base, plist, &identity)?;
         // Only the real install registers with LaunchServices. A registration
         // outlives its directory, and stale ones under the same bundle id make
         // LaunchServices resolve the id to paths that no longer exist, which is
@@ -104,6 +145,11 @@ pub fn install_agent(exe: &Path, base: &str, plist: PlistFor) -> Result<Installe
     Ok(Installed {
         plist: agent_plist_in(&app, &label),
         approved,
+        signed_as: if identity == AD_HOC {
+            "ad hoc".to_string()
+        } else {
+            identity
+        },
     })
 }
 
@@ -119,7 +165,13 @@ pub fn remove_agent(base: &str) -> Result<()> {
         return remove();
     }
     unregister_all(&app);
-    build_and_swap(&executable_in(&app), &app, None, Some(base))?;
+    build_and_swap(
+        &executable_in(&app),
+        &app,
+        None,
+        Some(base),
+        &signing_identity(),
+    )?;
     register_all(&app)?;
     Ok(())
 }
@@ -287,13 +339,19 @@ fn wait_until_unloaded(label: &str) {
     }
 }
 
-fn install_agent_in(exe: &Path, app: &Path, base: &str, plist: PlistFor) -> Result<()> {
+fn install_agent_in(
+    exe: &Path,
+    app: &Path,
+    base: &str,
+    plist: PlistFor,
+    identity: &str,
+) -> Result<()> {
     let source = if is_inside(exe, app) {
         executable_in(app)
     } else {
         exe.to_path_buf()
     };
-    build_and_swap(&source, app, Some((base, plist)), None)
+    build_and_swap(&source, app, Some((base, plist)), None, identity)
 }
 
 fn build_and_swap(
@@ -301,6 +359,7 @@ fn build_and_swap(
     app: &Path,
     add: Option<(&str, PlistFor)>,
     drop: Option<&str>,
+    identity: &str,
 ) -> Result<()> {
     let parent = app
         .parent()
@@ -310,7 +369,7 @@ fn build_and_swap(
     let staging = parent.join(format!(".{NAME}.app.staging"));
     let _ = std::fs::remove_dir_all(&staging);
     build(source, app, &staging, add, drop)?;
-    sign(&staging)?;
+    sign(&staging, identity)?;
     swap(&staging, app)
 }
 
@@ -381,9 +440,11 @@ fn agent_label_in(app: &Path, base: &str) -> Option<String> {
     agents_in(app).into_iter().find(|l| base_of(l) == base)
 }
 
-fn sign(app: &Path) -> Result<()> {
+/// No timestamp: that needs Apple's timestamp server, and the bundle only
+/// ever runs on this machine.
+fn sign(app: &Path, identity: &str) -> Result<()> {
     let out = Command::new("codesign")
-        .args(["--force", "--sign", "-"])
+        .args(["--force", "--timestamp=none", "--sign", identity])
         .arg(app)
         .output()
         .context("failed to run codesign")?;
@@ -560,7 +621,7 @@ mod tests {
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
 
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
 
         let label = agent_label_in(&app, "dev.pj.test.one").unwrap();
         assert!(label.starts_with("dev.pj.test.one."), "{label}");
@@ -582,11 +643,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
         let first = agent_label_in(&app, "dev.pj.test.one").unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        install_agent_in(&exe, &app, "dev.pj.test.two", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.two", &plist, AD_HOC).unwrap();
 
         let one = agent_label_in(&app, "dev.pj.test.one").unwrap();
         let two = agent_label_in(&app, "dev.pj.test.two").unwrap();
@@ -603,10 +664,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
 
         let other = |label: &str| format!("<other>{label}</other>");
-        install_agent_in(&exe, &app, "dev.pj.test.one", &other).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &other, AD_HOC).unwrap();
 
         let label = agent_label_in(&app, "dev.pj.test.one").unwrap();
         assert_eq!(plist_of(&app, &label), other(&label));
@@ -618,11 +679,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
-        install_agent_in(&exe, &app, "dev.pj.test.two", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.two", &plist, AD_HOC).unwrap();
 
         // What `remove_agent` does once the jobs are unregistered: rebuild from the copy.
-        build_and_swap(&executable_in(&app), &app, None, Some("dev.pj.test.one")).unwrap();
+        build_and_swap(
+            &executable_in(&app),
+            &app,
+            None,
+            Some("dev.pj.test.one"),
+            AD_HOC,
+        )
+        .unwrap();
 
         let bases: Vec<&str> = agents_in(&app)
             .iter()
@@ -646,14 +714,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
         std::fs::write(
             agent_plist_in(&app, "dev.pj.test.legacy"),
             plist("dev.pj.test.legacy"),
         )
         .unwrap();
 
-        build_and_swap(&executable_in(&app), &app, None, None).unwrap();
+        build_and_swap(&executable_in(&app), &app, None, None, AD_HOC).unwrap();
 
         let label = agent_label_in(&app, "dev.pj.test.legacy").unwrap();
         assert_ne!(label, "dev.pj.test.legacy");
@@ -680,7 +748,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
 
         let later = std::time::SystemTime::now() + Duration::from_secs(60);
         std::fs::File::open(&exe)
@@ -703,10 +771,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Workstation.app");
         let exe = source(dir.path());
-        install_agent_in(&exe, &app, "dev.pj.test.one", &plist).unwrap();
+        install_agent_in(&exe, &app, "dev.pj.test.one", &plist, AD_HOC).unwrap();
 
         let inside = executable_in(&app);
-        install_agent_in(&inside, &app, "dev.pj.test.two", &plist).unwrap();
+        install_agent_in(&inside, &app, "dev.pj.test.two", &plist, AD_HOC).unwrap();
 
         assert_eq!(agents_in(&app).len(), 2);
         assert!(signed(&app));
@@ -737,6 +805,15 @@ mod tests {
         assert!(
             plist.contains("<key>LSUIElement</key>\n    <true/>"),
             "a Dock icon would flash on every run"
+        );
+    }
+
+    #[test]
+    fn signing_identity_is_a_developer_id_or_ad_hoc() {
+        let identity = signing_identity();
+        assert!(
+            identity == AD_HOC || identity.starts_with("Developer ID Application:"),
+            "{identity}"
         );
     }
 
