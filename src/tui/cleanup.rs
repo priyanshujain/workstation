@@ -440,7 +440,9 @@ fn denial_advice(denial: Denial) -> &'static str {
     match denial {
         Denial::Protected => "Grant the terminal Full Disk Access to read it",
         Denial::Forbidden => "Unix permissions deny it, reading it needs sudo",
-        Denial::Unattended => "Left closed: macOS asks before an app opens it, so measure it from here",
+        Denial::Unattended => {
+            "Left closed: macOS asks before an app opens it, so measure it from here"
+        }
     }
 }
 
@@ -1751,9 +1753,13 @@ mod tests {
     fn advice_for_a_refusal_names_the_fix_that_works() {
         let tcc = denial_advice(Denial::Protected);
         let unix = denial_advice(Denial::Forbidden);
+        let closed = denial_advice(Denial::Unattended);
         assert!(tcc.contains("Full Disk Access"), "{tcc}");
         assert!(unix.contains("sudo"), "{unix}");
+        assert!(closed.contains("closed"), "{closed}");
+        assert!(!closed.contains("Full Disk Access"), "{closed}");
         assert_ne!(tcc, unix);
+        assert_ne!(closed, tcc);
     }
 
     #[test]
@@ -1939,7 +1945,7 @@ mod tests {
         // One level deeper, the same lie: `(empty)` over bytes the scan was
         // never allowed to see. And there is nothing here to offer a delete on,
         // since nothing could enumerate what would go.
-        for denial in [Denial::Protected, Denial::Forbidden] {
+        for denial in [Denial::Protected, Denial::Forbidden, Denial::Unattended] {
             let listed = listing(Vec::new(), 0, Some(denial));
 
             match dir_body(&listed) {
