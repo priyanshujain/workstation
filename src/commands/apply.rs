@@ -50,7 +50,7 @@ pub fn run(
             "  {} {} {}",
             symbol,
             style(&resource.id.kind).cyan(),
-            &resource.id.name
+            resource.id.name
         );
     }
 
@@ -105,7 +105,7 @@ pub fn run(
                     "  {} {} {}",
                     style("✓").green(),
                     style(&planned.id.kind).cyan(),
-                    &planned.id.name
+                    planned.id.name
                 ));
             }
             Err(e) => {
@@ -114,7 +114,7 @@ pub fn run(
                     "  {} {} {} - {}",
                     style("✗").red(),
                     style(&planned.id.kind).cyan(),
-                    &planned.id.name,
+                    planned.id.name,
                     style(e).red()
                 ));
             }

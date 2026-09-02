@@ -111,7 +111,7 @@ pub fn run(workstation: &Workstation, profile: &str, json: bool) -> anyhow::Resu
             "  {} {} {}",
             styled_symbol,
             style(&resource.id.kind).cyan(),
-            &resource.id.name
+            resource.id.name
         );
 
         if let Change::Update(details) = &resource.change {
