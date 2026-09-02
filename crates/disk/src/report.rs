@@ -132,6 +132,7 @@ impl Report {
                 denials: Denials {
                     protected: r.protected_count,
                     forbidden: r.forbidden_count,
+                    ..Denials::default()
                 },
             })
             .collect()
@@ -720,7 +721,8 @@ mod tests {
             root.denials,
             Denials {
                 protected: 1,
-                forbidden: 1
+                forbidden: 1,
+                ..Denials::default()
             }
         );
         assert_eq!(

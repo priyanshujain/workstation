@@ -440,6 +440,7 @@ fn denial_advice(denial: Denial) -> &'static str {
     match denial {
         Denial::Protected => "Grant the terminal Full Disk Access to read it",
         Denial::Forbidden => "Unix permissions deny it, reading it needs sudo",
+        Denial::Unattended => "Left closed: macOS asks before an app opens it, so measure it from here",
     }
 }
 
@@ -539,9 +540,7 @@ fn listing_total(listing: &Listing) -> Size {
     let mut unknown = false;
     for entry in &listing.entries {
         bytes += entry.size.bytes();
-        let d = entry.size.denials();
-        denials.protected += d.protected;
-        denials.forbidden += d.forbidden;
+        denials.merge(entry.size.denials());
         match entry.size {
             Size::Counting(_) => counting = true,
             Size::Unknown(_) => unknown = true,
@@ -566,16 +565,7 @@ fn listing_measured(listing: &Listing) -> bool {
 }
 
 fn one(denial: Denial) -> Denials {
-    match denial {
-        Denial::Protected => Denials {
-            protected: 1,
-            forbidden: 0,
-        },
-        Denial::Forbidden => Denials {
-            protected: 0,
-            forbidden: 1,
-        },
-    }
+    Denials::one(denial)
 }
 
 struct TopRow {
@@ -1639,14 +1629,14 @@ mod tests {
     fn protected(n: usize) -> Denials {
         Denials {
             protected: n,
-            forbidden: 0,
+            ..Denials::default()
         }
     }
 
     fn forbidden(n: usize) -> Denials {
         Denials {
-            protected: 0,
             forbidden: n,
+            ..Denials::default()
         }
     }
 
@@ -1734,6 +1724,7 @@ mod tests {
                 denials: Denials {
                     protected: 1,
                     forbidden: 2,
+                    ..Denials::default()
                 },
             },
             "a description",

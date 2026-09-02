@@ -581,7 +581,7 @@ mod tests {
             bytes: 8192,
             denials: Denials {
                 protected: 1,
-                forbidden: 0,
+                ..Denials::default()
             },
         };
         assert_eq!(refused.total(), None);

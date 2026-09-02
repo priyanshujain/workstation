@@ -45,8 +45,7 @@ impl Audit {
         self.roots
             .iter()
             .fold(Denials::default(), |mut total, root| {
-                total.protected += root.denials.protected;
-                total.forbidden += root.denials.forbidden;
+                total.merge(root.denials);
                 total
             })
     }

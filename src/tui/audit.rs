@@ -895,18 +895,9 @@ fn child_item(name: &str, path: &Path, below: &Level) -> Item {
 }
 
 /// One refusal as a count, so a row carries its own reason into the advice
-/// underneath it. The two kinds have different fixes.
+/// underneath it. Each kind has a different fix.
 fn one_refusal(denial: Denial) -> Denials {
-    match denial {
-        Denial::Protected => Denials {
-            protected: 1,
-            forbidden: 0,
-        },
-        Denial::Forbidden => Denials {
-            protected: 0,
-            forbidden: 1,
-        },
-    }
+    Denials::one(denial)
 }
 
 /// The directory's own files, as one row. A walk reports one child per
@@ -971,14 +962,11 @@ fn file_name(path: &Path) -> String {
 /// kept.
 fn denials_in(items: &[Item], denied: Option<Denial>) -> Denials {
     let mut total = items.iter().fold(Denials::default(), |mut total, item| {
-        total.protected += item.denials.protected;
-        total.forbidden += item.denials.forbidden;
+        total.merge(item.denials);
         total
     });
-    match denied {
-        Some(Denial::Protected) => total.protected += 1,
-        Some(Denial::Forbidden) => total.forbidden += 1,
-        None => {}
+    if let Some(denial) = denied {
+        total.record(denial);
     }
     total
 }
@@ -1573,14 +1561,14 @@ mod tests {
     fn protected(count: usize) -> Denials {
         Denials {
             protected: count,
-            forbidden: 0,
+            ..Denials::default()
         }
     }
 
     fn forbidden(count: usize) -> Denials {
         Denials {
-            protected: 0,
             forbidden: count,
+            ..Denials::default()
         }
     }
 
@@ -1980,6 +1968,7 @@ mod tests {
                 Denials {
                     protected: 1,
                     forbidden: 1,
+                    ..Denials::default()
                 },
                 TERMINAL,
             )
@@ -2119,6 +2108,7 @@ mod tests {
             Denials {
                 protected: 1,
                 forbidden: 1,
+                ..Denials::default()
             },
         );
         root.path = scratch.path().to_path_buf();

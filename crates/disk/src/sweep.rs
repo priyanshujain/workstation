@@ -40,6 +40,11 @@ pub enum Denial {
     /// EACCES. Ordinary unix permissions: needs sudo, and no amount of Full
     /// Disk Access will help.
     Forbidden,
+    /// Never tried. macOS puts a dialog on the screen before it lets a process
+    /// open this directory, and a scan nobody is sitting at has nobody to
+    /// answer it, so the walk left it closed. A scan somebody is present for
+    /// measures it.
+    Unattended,
 }
 
 impl Denial {
@@ -96,30 +101,40 @@ fn app_name(term_program: Option<&str>) -> String {
 pub struct Denials {
     pub protected: usize,
     pub forbidden: usize,
+    pub unattended: usize,
 }
 
 impl Denials {
+    pub fn one(denial: Denial) -> Self {
+        let mut one = Self::default();
+        one.record(denial);
+        one
+    }
+
     pub fn total(&self) -> usize {
-        self.protected + self.forbidden
+        self.protected + self.forbidden + self.unattended
     }
 
     pub fn of(&self, denial: Denial) -> usize {
         match denial {
             Denial::Protected => self.protected,
             Denial::Forbidden => self.forbidden,
+            Denial::Unattended => self.unattended,
         }
     }
 
-    fn record(&mut self, denial: Denial) {
+    pub fn record(&mut self, denial: Denial) {
         match denial {
             Denial::Protected => self.protected += 1,
             Denial::Forbidden => self.forbidden += 1,
+            Denial::Unattended => self.unattended += 1,
         }
     }
 
-    fn merge(&mut self, other: Denials) {
+    pub fn merge(&mut self, other: Denials) {
         self.protected += other.protected;
         self.forbidden += other.forbidden;
+        self.unattended += other.unattended;
     }
 }
 
