@@ -11,7 +11,7 @@ use crate::sweep::{Denial, Denials, RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 5;
+pub const SCHEMA: u32 = 6;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -46,14 +46,13 @@ pub struct RootSnap {
     /// Exact counts, which the capped sample above cannot supply.
     pub protected_count: usize,
     pub forbidden_count: usize,
+    pub unattended_count: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct UnreadableSnap {
     pub path: PathBuf,
-    /// Serialised as a bool because there are exactly two kinds and a bare
-    /// enum in the cache would need a migration the first time a third shows up.
-    pub protected: bool,
+    pub denial: Denial,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -132,7 +131,7 @@ impl Report {
                 denials: Denials {
                     protected: r.protected_count,
                     forbidden: r.forbidden_count,
-                    ..Denials::default()
+                    unattended: r.unattended_count,
                 },
             })
             .collect()
@@ -182,11 +181,7 @@ fn refusals(entries: &[UnreadableSnap]) -> Vec<Unreadable> {
         .iter()
         .map(|u| Unreadable {
             path: u.path.clone(),
-            denial: if u.protected {
-                Denial::Protected
-            } else {
-                Denial::Forbidden
-            },
+            denial: u.denial,
         })
         .collect()
 }
@@ -195,8 +190,8 @@ fn snapshot(entries: Vec<Unreadable>) -> Vec<UnreadableSnap> {
     entries
         .into_iter()
         .map(|u| UnreadableSnap {
-            protected: u.denial == Denial::Protected,
             path: u.path,
+            denial: u.denial,
         })
         .collect()
 }
@@ -480,6 +475,7 @@ pub fn from_audit(
             unreadable: snapshot(r.unreadable),
             protected_count: r.denials.protected,
             forbidden_count: r.denials.forbidden,
+            unattended_count: r.denials.unattended,
         })
         .collect();
     let categories = audit
@@ -679,9 +675,9 @@ mod tests {
 
     #[test]
     fn a_cache_at_the_previous_schema_is_rejected() {
-        // The refused children were added at schema 5. A cache written before
-        // them has no way to say that a child is unknown rather than zero, so it
-        // is discarded rather than read with the field defaulted away.
+        // Schema 6 added the refusals nobody tried, and changed how a refusal
+        // says which kind it is. A cache written before that cannot name them,
+        // so it is discarded rather than read with the field defaulted away.
         let mut report = report_at(60);
         report.schema = SCHEMA - 1;
         assert!(!usable(&report, SystemTime::now()));
@@ -695,18 +691,25 @@ mod tests {
             path: PathBuf::from("/Users/x"),
             total: 8192,
             children: vec![(PathBuf::from("/Users/x/.Trash"), 0)],
-            refused_children: vec![UnreadableSnap {
-                path: PathBuf::from("/Users/x/.Trash"),
-                protected: true,
-            }],
+            refused_children: vec![
+                UnreadableSnap {
+                    path: PathBuf::from("/Users/x/.Trash"),
+                    denial: Denial::Protected,
+                },
+                UnreadableSnap {
+                    path: PathBuf::from("/Users/x/Documents"),
+                    denial: Denial::Unattended,
+                },
+            ],
             unattributed_total: 0,
             unattributed: Vec::new(),
             unreadable: vec![UnreadableSnap {
                 path: PathBuf::from("/Users/x/deep/locked"),
-                protected: false,
+                denial: Denial::Forbidden,
             }],
             protected_count: 1,
             forbidden_count: 1,
+            unattended_count: 1,
         }];
 
         let json = serde_json::to_vec(&report).unwrap();
@@ -714,15 +717,16 @@ mod tests {
         assert!(usable(&back, SystemTime::now()));
 
         let root = &back.to_roots()[0];
-        assert_eq!(root.refused_children.len(), 1);
+        assert_eq!(root.refused_children.len(), 2);
         assert_eq!(root.refused_children[0].denial, Denial::Protected);
+        assert_eq!(root.refused_children[1].denial, Denial::Unattended);
         assert_eq!(root.unreadable[0].denial, Denial::Forbidden);
         assert_eq!(
             root.denials,
             Denials {
                 protected: 1,
                 forbidden: 1,
-                ..Denials::default()
+                unattended: 1,
             }
         );
         assert_eq!(

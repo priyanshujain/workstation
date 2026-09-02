@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Everything `df` counts for the data volume hangs off here, firmlinks
 /// included. Walking `/` instead would cross into the read-only system volume
 /// and count bytes that are not on this volume at all.
@@ -32,7 +34,8 @@ const TICK: Duration = Duration::from_millis(80);
 /// `io::ErrorKind::PermissionDenied` and have completely different fixes, so
 /// telling a user to grant Full Disk Access for a root-owned directory is
 /// advice that cannot work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Denial {
     /// EPERM. macOS privacy policy: Full Disk Access for the terminal app
     /// running the scan lifts it.
