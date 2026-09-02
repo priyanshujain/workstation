@@ -315,4 +315,17 @@ pub enum SelfCommand {
         #[arg(long)]
         purge: bool,
     },
+
+    /// Register a job of the Workstation bundle with launchd. Run by the bundled copy:
+    /// the Service Management API registers jobs of the calling app only.
+    #[command(hide = true)]
+    RegisterAgent { label: String },
+
+    /// Unregister a job of the Workstation bundle. Run by the bundled copy.
+    #[command(hide = true)]
+    UnregisterAgent { label: String },
+
+    /// Print the SMAppService status of a job of the Workstation bundle. Run by the bundled copy.
+    #[command(hide = true)]
+    AgentStatus { label: String },
 }

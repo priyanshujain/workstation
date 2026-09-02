@@ -41,7 +41,7 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     // Jobs first: with the binary gone they would keep running the bundled copy.
     display::agent::uninstall()?;
     disk::agent::uninstall()?;
-    remove_paths(&[bundle::app_path()])?;
+    bundle::remove()?;
     if purge {
         remove_paths(&data)?;
     }

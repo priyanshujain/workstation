@@ -147,6 +147,11 @@ fn main() -> anyhow::Result<()> {
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
             SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
+            SelfCommand::RegisterAgent { label } => wsctl_core::bundle::register_here(&label)?,
+            SelfCommand::UnregisterAgent { label } => wsctl_core::bundle::unregister_here(&label)?,
+            SelfCommand::AgentStatus { label } => {
+                println!("{}", wsctl_core::bundle::status_here(&label))
+            }
         },
     }
 
