@@ -262,10 +262,18 @@ impl Sweep {
 pub fn discover_roots() -> Vec<Root> {
     let mut roots = Vec::new();
 
+    // Only this volume. A top-level mount point, the autofs `home` for one,
+    // is another file system: its bytes are not what `df` counts here, and
+    // opening a network-backed one from a process nobody is sitting at is a
+    // permission dialog.
+    let volume = std::fs::metadata(DATA_VOLUME).map(|m| m.dev()).ok();
     if let Ok(entries) = std::fs::read_dir(DATA_VOLUME) {
         let mut children: Vec<PathBuf> = entries
             .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| {
+                e.metadata()
+                    .is_ok_and(|m| m.is_dir() && Some(m.dev()) == volume)
+            })
             .map(|e| e.path())
             .collect();
         children.sort();
@@ -1456,6 +1464,26 @@ mod tests {
         let apps = roots.iter().find(|r| r.name == "Applications");
         if let Some(apps) = apps {
             assert_eq!(apps.path, Path::new("/Applications"));
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn every_root_is_on_the_data_volume() {
+        // `/System/Volumes/Data/home` is an autofs mount. Listed as a root it
+        // is opened on every scan, and from launchd that open is a "network
+        // volumes" dialog. Nothing on another device belongs in this partition.
+        let volume = fs::metadata(DATA_VOLUME).unwrap().dev();
+        for root in discover_roots() {
+            let Ok(meta) = fs::metadata(&root.path) else {
+                continue;
+            };
+            assert_eq!(
+                meta.dev(),
+                volume,
+                "{} is a mount point, not part of this volume",
+                root.path.display()
+            );
         }
     }
 
