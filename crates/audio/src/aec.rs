@@ -24,10 +24,12 @@
 //! between runs. A wired control microphone holds to a third of a millisecond
 //! across the same test, so this is the device, not the measurement.
 //!
-//! aec3's adaptive filter spans 52 ms, so a supplied delay survives being about
-//! 35 ms out and collapses beyond that. Measured on synthetic audio with the
-//! echo at 320 ms: told 320 ms it reaches 23.2 dB, told 286 ms still 24.5 dB,
-//! told 250 ms only 10.0 dB. A figure stored in a file therefore stops working
+//! aec3's adaptive filter spans 52 ms, of which the 14 ms of look-back set
+//! below is spent behind the alignment and 38 ms runs in front of it. So a
+//! supplied delay survives being about 35 ms out and collapses beyond that.
+//! Measured on synthetic audio with the echo at 320 ms: told 320 ms it reaches
+//! 23.2 dB, told 286 ms still 24.5 dB, told 250 ms only 10.0 dB. A figure
+//! stored in a file therefore stops working
 //! somewhere around the second or third time the device is opened, which is
 //! exactly what the live bridge showed: 12.7 dB on a fresh measurement, 4.0 dB
 //! on a stored one.
@@ -70,6 +72,65 @@
 //! survive that and it saturates the capture instead, which blinds the
 //! estimator for the reason given at the top of this file. Speech aligns
 //! inside a second either way.
+//!
+//! # Holding the alignment still
+//!
+//! A Philips MMS2625B over A2DP does not hold its echo where it put it. Four
+//! opens against the same microphone aligned over 348..372, 364..384, 360..380
+//! and 348..364 ms, moving three to nine times inside a single run, where the
+//! built-in speaker sits still. Every one of those moves is expensive: aec3
+//! treats a change of alignment as a new echo path and throws away both
+//! adaptive filters, the ERLE estimator and the reverb model, so the trace goes
+//! 7 dB, 0.2 dB, and spends four to six seconds climbing back. Averaged over
+//! four opens that left linear ERLE at 3.1 dB against the built-in's 12.8.
+//!
+//! Two settings hold it still, and they cover opposite sides of the same band:
+//!
+//! - `hysteresis_limit_blocks`, 1 block (4 ms) by default, now 10 (40 ms). It
+//!   blocks upward moves and nothing else, so the alignment ratchets to the
+//!   earliest delay the estimator has seen and stays there while the echo
+//!   wanders later. Moves bigger than the limit still pass, so a path that
+//!   genuinely changes is still followed, which is what
+//!   `a_delay_that_moves_mid_call_is_followed` holds it to.
+//! - `delay_headroom_samples`, 32 samples (2 ms) by default, now 224 (14 ms).
+//!   The taps run forward from the alignment, so an arrival earlier than it
+//!   would need non-causal taps and cannot be modelled at all. This is the only
+//!   look-back there is.
+//!
+//! Over four opens each, that took the Philips from 3.1 dB of linear ERLE
+//! (2.9 to 3.6) to 4.6 (4.4 to 4.9), cut the alignment moves per run from three
+//! to nine down to two or three, and dropped the worst half second reaching the
+//! far end from -29.5 to -32.7 dBFS. The built-in control moved the same way
+//! rather than paying for it: 6.1 dB (4.1 to 8.0) to 7.9 (5.7 to 8.9), moves
+//! from five-to-eight down to one-to-three, and total attenuation 44.2 to
+//! 45.8 dB.
+//!
+//! # What this does not fix
+//!
+//! The Philips still only reaches about 21 dB of total attenuation, against 46
+//! for the built-in, and that is not the alignment any more. Held perfectly
+//! still for a whole run the linear filter converges to 5 to 8 dB and stops,
+//! where the built-in reaches 12 to 14. Whatever is left is not something an
+//! FIR can reach, and it is not the amplifier being driven too hard: dropping
+//! the far end 20 dB, so the echo arrives at -41.3 dBFS instead of -22.2, left
+//! ERLE at 6.6 to 7.7 dB and total attenuation at 18.7. Codec noise and the
+//! speaker's own 44.1 kHz clock are the remaining suspects, and neither is
+//! configuration.
+//!
+//! Lengthening the filter is not the answer either, however tempting a longer
+//! reach looks against a wandering echo. Taking `main.length_blocks` from 13 to
+//! 20, so 52 ms of span becomes 80, left linear ERLE where it was (5.0 dB) and
+//! cut total attenuation from 21.6 to 13.0, because the far taps never converge
+//! and the residual echo estimator is built on them. The synthetic sweep says
+//! the same at every length from 16 blocks up.
+//!
+//! Core Audio cannot help. The output IO proc is handed a timestamp per
+//! callback, and for the Philips those fit a straight line to within 0.0001 ms
+//! over twenty seconds, with the presentation offset holding 11.60 ms to a
+//! standard deviation of 0.016 ms and the clock reported half a part per
+//! million off nominal. The HAL is extrapolating a nominal clock rather than
+//! measuring the speaker, so the A2DP buffering is invisible from there and
+//! there is nothing to correct the reference against.
 
 use aec3::api::EchoCanceller3Config;
 use aec3::graph::{NodeControlState, NodeId};
@@ -101,8 +162,13 @@ impl Canceller {
         // Set out loud rather than left to the default, because this is the one
         // line that decides whether the module documentation above holds.
         config.delay.use_external_delay_estimator = false;
+        // 40 ms of hysteresis and 14 ms of look-back, against a Bluetooth
+        // speaker whose echo will not hold still. See "Holding the alignment
+        // still" above.
+        config.delay.hysteresis_limit_blocks = 10;
+        config.delay.delay_headroom_samples = 224;
         if !config.validate() {
-            bail!("aec3 rejected its own default configuration");
+            bail!("aec3 rejected its configuration");
         }
 
         let pipeline = linear::builder(render, capture)
@@ -233,6 +299,51 @@ mod tests {
         out
     }
 
+    /// A room where the echo will not hold still: the delay steps between
+    /// `delay` and `delay + band` every `period` milliseconds, the way a
+    /// Bluetooth speaker's buffering does.
+    fn wandering_echo(
+        render: &[f32],
+        delay: usize,
+        band: usize,
+        period: usize,
+        gain: f32,
+    ) -> Vec<f32> {
+        let mut out = vec![0.0; render.len()];
+        let period = period * RATE as usize / 1000;
+        for i in 0..render.len() {
+            let far = if (i / period).is_multiple_of(2) {
+                delay
+            } else {
+                delay + band
+            };
+            let d = far * RATE as usize / 1000;
+            if i >= d {
+                out[i] = render[i - d] * gain;
+            }
+        }
+        out
+    }
+
+    /// A room with a pre-echo: the loud arrival the estimator locks onto is at
+    /// `delay`, and a quieter one gets there `early` milliseconds sooner. The
+    /// taps run forward from the alignment, so the early arrival can only be
+    /// modelled if the alignment sits at least `early` behind the loud one.
+    fn pre_echo(render: &[f32], delay: usize, early: usize, gain: f32) -> Vec<f32> {
+        let mut out = vec![0.0; render.len()];
+        let late = delay * RATE as usize / 1000;
+        let soon = (delay - early) * RATE as usize / 1000;
+        for i in 0..render.len() {
+            if i >= late {
+                out[i] += render[i - late] * gain;
+            }
+            if i >= soon {
+                out[i] += render[i - soon] * gain * 0.6;
+            }
+        }
+        out
+    }
+
     fn noise(len: usize) -> Vec<f32> {
         let mut state = 0x9e3779b9u32;
         (0..len)
@@ -283,6 +394,55 @@ mod tests {
     /// A steady echo at `delay_ms` for `seconds`, told to start at `hint_ms`.
     fn steady(hint_ms: i32, seconds: usize, delay_ms: usize) -> Run {
         run(hint_ms, seconds, delay_ms, delay_ms)
+    }
+
+    /// Linear ERLE against a room built by `make`, over the second half of the
+    /// run once the filter has settled.
+    fn against(seconds: usize, make: impl Fn(&[f32]) -> Vec<f32>) -> f64 {
+        let samples = RATE as usize * seconds;
+        let render = noise(samples);
+        let capture = make(&render);
+
+        let mut canceller = Canceller::new(RATE, RATE, 100).unwrap();
+        let mut out = vec![0.0; FRAME];
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for (i, (r, c)) in render.chunks(FRAME).zip(capture.chunks(FRAME)).enumerate() {
+            canceller.render(r).unwrap();
+            if canceller.capture(c, &mut out).unwrap() && i > seconds * 100 / 2 {
+                before.extend_from_slice(c);
+                after.extend_from_slice(&out);
+            }
+        }
+        10.0 * (power(&before) / power(&after).max(1e-20)).log10()
+    }
+
+    /// Plays noise at a canceller whose echo steps back and forth across
+    /// `band_ms`, and counts how often the alignment moved once it had
+    /// settled. Every move throws away both adaptive filters, so this is the
+    /// number that decides whether the filter ever gets to converge.
+    fn alignment_moves(seconds: usize, delay_ms: usize, band_ms: usize, period_ms: usize) -> usize {
+        let samples = RATE as usize * seconds;
+        let render = noise(samples);
+        let capture = wandering_echo(&render, delay_ms, band_ms, period_ms, 0.5);
+
+        let mut canceller = Canceller::new(RATE, RATE, delay_ms as i32).unwrap();
+        let mut out = vec![0.0; FRAME];
+        let (mut moves, mut last) = (0, 0);
+
+        for (i, (r, c)) in render.chunks(FRAME).zip(capture.chunks(FRAME)).enumerate() {
+            canceller.render(r).unwrap();
+            canceller.capture(c, &mut out).unwrap();
+            // The first couple of seconds are the estimator finding the echo
+            // at all, which is not the wander this is counting.
+            let found = canceller.found_delay_ms();
+            if i > 200 && found != 0 {
+                if last != 0 && found != last {
+                    moves += 1;
+                }
+                last = found;
+            }
+        }
+        moves
     }
 
     // End to end: audio goes in and comes out quieter than it went in. Worth
@@ -339,6 +499,10 @@ mod tests {
     // every time its stream is opened, so a delay that was right at the start
     // of a call is wrong by the middle of one, and the canceller has to follow
     // it without being told.
+    //
+    // It is also the other half of `an_echo_that_will_not_hold_still_is_not_chased`:
+    // hysteresis blocks upward moves and nothing else, so raising the limit
+    // until it swallows a real change of path fails here.
     #[test]
     fn a_delay_that_moves_mid_call_is_followed() {
         let run = run(280, 10, 280, 380);
@@ -346,6 +510,39 @@ mod tests {
             (run.found_ms - 380).abs() <= 24,
             "the echo moved to 380 ms and the canceller stayed at {} ms",
             run.found_ms
+        );
+    }
+
+    // The Philips over Bluetooth, in miniature. Its echo moves 16 to 32 ms
+    // within a single run, and at the stock 4 ms of hysteresis the estimator
+    // chases every step, resetting both filters each time and holding linear
+    // ERLE near zero. Forty milliseconds of hysteresis makes the alignment
+    // ratchet to the earliest delay it has seen and stay there, which is what
+    // this counts. It fails if `hysteresis_limit_blocks` goes back to the
+    // default: the same run measures 6 moves at 1 block and 0 at 10.
+    #[test]
+    fn an_echo_that_will_not_hold_still_is_not_chased() {
+        let moves = alignment_moves(20, 300, 24, 3000);
+        assert!(
+            moves <= 2,
+            "the alignment moved {moves} times, so nothing converges"
+        );
+    }
+
+    // The other knob. `delay_headroom_samples` is the only look-back there is:
+    // the taps run forward from the alignment, so an arrival earlier than that
+    // needs non-causal taps and cannot be modelled at all. Twelve milliseconds
+    // of pre-echo reads 89 dB with 14 ms of headroom and 77 dB with the stock
+    // 2 ms, and it is the gap that means something rather than either figure,
+    // for the reason given on `the_echo_comes_out_quieter_than_it_went_in`.
+    // Twenty milliseconds of pre-echo falls back to 75 dB either way, which is
+    // the headroom running out exactly where it should.
+    #[test]
+    fn an_echo_that_arrives_early_is_still_modelled() {
+        let erle = against(8, |r| pre_echo(r, 320, 12, 0.5));
+        assert!(
+            erle > 85.0,
+            "only cancelled {erle:.1} dB of a 12 ms pre-echo"
         );
     }
 
