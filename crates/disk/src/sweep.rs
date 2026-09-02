@@ -1120,7 +1120,11 @@ mod tests {
         fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
         fs::write(open.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
 
-        let swept = sweep_unattended(&[root("test", dir.path())], &[], &[gated.clone()]);
+        let swept = sweep_unattended(
+            &[root("test", dir.path())],
+            &[],
+            std::slice::from_ref(&gated),
+        );
 
         let usage = &swept.roots[0];
         assert!(
@@ -1152,7 +1156,11 @@ mod tests {
         fs::write(child.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
         fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
 
-        let swept = sweep_unattended(&[root("test", dir.path())], &[], &[gated.clone()]);
+        let swept = sweep_unattended(
+            &[root("test", dir.path())],
+            &[],
+            std::slice::from_ref(&gated),
+        );
 
         let usage = &swept.roots[0];
         assert!(swept.total() < 256 * 1024, "{}", swept.total());
