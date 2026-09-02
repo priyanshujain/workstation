@@ -7,6 +7,7 @@ license.workspace = true
 description = "Disk overview, audit, and cleanup helpers for wsctl"
 
 [dependencies]
+wsctl-core.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
 tracing.workspace = true

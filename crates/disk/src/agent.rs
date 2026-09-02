@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use wsctl_core::bundle;
 
 /// launchd label for the job that refreshes the cached disk report.
 pub const LABEL: &str = "com.priyanshujain.wsctl.disk-report";
@@ -38,8 +39,11 @@ pub fn is_loaded() -> bool {
 }
 
 /// Write the plist and load it, replacing any previously loaded copy so this
-/// is safe to re-run after the binary moves.
+/// is safe to re-run after the binary moves. The job runs the copy of `exe`
+/// inside the Workstation app bundle, which is what gives it a name and an
+/// icon in Login Items.
 pub fn install(exe: &Path) -> Result<PathBuf> {
+    let exe = bundle::install(exe)?;
     let path = plist_path();
     let parent = path
         .parent()
@@ -47,7 +51,7 @@ pub fn install(exe: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create {}", parent.display()))?;
 
-    std::fs::write(&path, plist_contents(exe, &log_path()))
+    std::fs::write(&path, plist_contents(&exe, &log_path()))
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     let domain = domain()?;
@@ -74,7 +78,7 @@ pub fn uninstall() -> Result<()> {
         std::fs::remove_file(&path)
             .with_context(|| format!("failed to remove {}", path.display()))?;
     }
-    Ok(())
+    bundle::remove_if_unused()
 }
 
 pub fn plist_contents(exe: &Path, log: &Path) -> String {
