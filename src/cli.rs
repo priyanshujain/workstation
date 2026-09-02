@@ -305,13 +305,13 @@ pub enum SelfCommand {
         yes: bool,
     },
 
-    /// Uninstall the wsctl binary
+    /// Uninstall the wsctl binary, its launchd jobs and the Workstation app
     Uninstall {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Also remove the launchd jobs, the Workstation app, logs, caches and config
+        /// Also remove logs, caches and config
         #[arg(long)]
         purge: bool,
     },

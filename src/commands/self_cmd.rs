@@ -12,11 +12,12 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = path.canonicalize().unwrap_or(path);
 
     println!(
-        "{} This will remove the {} binary at:",
+        "{} This will remove the {} binary, its launchd jobs and the Workstation app:",
         style("→").cyan(),
         style("wsctl").bold()
     );
     println!("    {}", style(path.display()).dim());
+    println!("    {}", style(bundle::app_path().display()).dim());
 
     let data: Vec<PathBuf> = purge
         .then(purge_paths)
@@ -25,7 +26,7 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
         .filter(|p| p.exists())
         .collect();
     if purge {
-        println!("  and, with --purge, both launchd jobs plus:");
+        println!("  and, with --purge, its logs, caches and config:");
         for p in &data {
             println!("    {}", style(p.display()).dim());
         }
@@ -37,9 +38,11 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Jobs first: with the binary gone they would keep running the bundled copy.
+    display::agent::uninstall()?;
+    disk::agent::uninstall()?;
+    remove_paths(&[bundle::app_path()])?;
     if purge {
-        display::agent::uninstall()?;
-        disk::agent::uninstall()?;
         remove_paths(&data)?;
     }
     delete_binary(&path)?;
@@ -99,15 +102,10 @@ fn delete_binary(path: &Path) -> Result<()> {
     std::fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))
 }
 
-/// Everything wsctl writes outside its own binary and the launchd plists: the app bundle
-/// the jobs run from, their logs, the disk report and audio state in Application Support,
-/// and the display pin in ~/.config.
+/// The data wsctl leaves behind once the binary, jobs and bundle are gone: the job logs,
+/// the disk report and audio state in Application Support, and the display pin in ~/.config.
 fn purge_paths() -> Vec<PathBuf> {
-    let mut paths = vec![
-        bundle::app_path(),
-        display::agent::log_path(),
-        disk::agent::log_path(),
-    ];
+    let mut paths = vec![display::agent::log_path(), disk::agent::log_path()];
     if let Some(dir) = display::config::config_path().parent() {
         paths.push(dir.to_path_buf());
     }
@@ -158,10 +156,9 @@ mod tests {
     }
 
     #[test]
-    fn purge_covers_the_bundle_logs_config_and_data() {
+    fn purge_covers_logs_config_and_data() {
         let paths = purge_paths();
         let has = |suffix: &str| paths.iter().any(|p| p.ends_with(suffix));
-        assert!(has("Applications/Workstation.app"));
         assert!(has("Library/Logs/wsctl-display.log"));
         assert!(has("Library/Logs/wsctl-disk-report.log"));
         assert!(has(".config/wsctl"));

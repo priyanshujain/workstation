@@ -29,7 +29,7 @@ ci: fmt-check lint test build
 install:
     cargo install --path .
 
-# Uninstall wsctl; `just uninstall --purge` also wipes its launchd jobs, app bundle, logs, caches and config
+# Uninstall wsctl, its launchd jobs and the Workstation app; `just uninstall --purge` also wipes logs, caches and config
 uninstall *FLAGS:
     wsctl self uninstall {{FLAGS}}
 
