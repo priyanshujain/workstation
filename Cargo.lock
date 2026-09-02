@@ -2967,6 +2967,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dirs",
+ "objc2",
+ "objc2-foundation",
  "petgraph",
  "serde",
  "serde_json",
