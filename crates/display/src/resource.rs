@@ -1,3 +1,4 @@
+use wsctl_core::bundle;
 use wsctl_core::{Change, Context, Error, Resource, ResourceId, ResourceState, Result};
 
 use crate::key::DisplayKey;
@@ -29,9 +30,11 @@ impl Resource for MainDisplay {
             message: format!("{e:#}"),
         })?;
 
-        // Both halves matter: the recorded pin survives reboots, the agent survives
-        // reconnects. Missing either means this is not fully set up.
-        if prefs.preferred_main == Some(self.key) && agent::is_installed() {
+        // All three matter: the recorded pin survives reboots, the agent survives
+        // reconnects, and the bundled copy of wsctl is what the agent actually runs,
+        // so a reinstalled binary leaves it stale until the next apply.
+        let bundled = std::env::current_exe().is_ok_and(|exe| bundle::is_current(&exe));
+        if prefs.preferred_main == Some(self.key) && agent::is_installed() && bundled {
             Ok(ResourceState::present())
         } else {
             Ok(ResourceState::Absent)
