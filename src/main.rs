@@ -75,6 +75,7 @@ fn main() -> anyhow::Result<()> {
                     DiskAgentCommand::Enable => commands::disk_agent::enable()?,
                     DiskAgentCommand::Disable => commands::disk_agent::disable()?,
                     DiskAgentCommand::Status => commands::disk_agent::status()?,
+                    DiskAgentCommand::Refresh => commands::disk_agent::refresh()?,
                 },
                 DiskCommand::Projects {
                     roots,

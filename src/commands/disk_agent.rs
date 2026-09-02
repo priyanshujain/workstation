@@ -1,7 +1,11 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use console::style;
 use disk::agent;
+use disk::projects;
 use disk::report;
+use disk::util::format_size;
 
 pub fn enable() -> Result<()> {
     let exe = std::env::current_exe().context("could not resolve the running wsctl binary")?;
@@ -24,6 +28,32 @@ pub fn enable() -> Result<()> {
     );
     println!();
     Ok(())
+}
+
+/// What the launchd job runs. One line per run is all it prints, so the log
+/// says when each happened, how long it took, and what it left closed.
+pub fn refresh() -> Result<()> {
+    let started = Instant::now();
+    let report = report::refresh_unattended(&projects::default_roots(), projects::MAX_DEPTH);
+    let audit = report.to_audit();
+    let denials = audit.denials();
+    println!(
+        "{} refreshed in {}s: {} measured, {} left closed for a scan someone is present for, {} refused",
+        stamp(),
+        started.elapsed().as_secs(),
+        format_size(audit.measured()),
+        denials.unattended,
+        denials.protected + denials.forbidden,
+    );
+    Ok(())
+}
+
+fn stamp() -> String {
+    let format =
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]Z");
+    time::OffsetDateTime::now_utc()
+        .format(&format)
+        .unwrap_or_default()
 }
 
 pub fn disable() -> Result<()> {

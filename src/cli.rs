@@ -289,6 +289,11 @@ pub enum DiskAgentCommand {
 
     /// Show cache age and whether the refresh is armed
     Status,
+
+    /// Rebuild the cache without opening anything macOS would ask about
+    /// (what the launchd job runs)
+    #[command(hide = true)]
+    Refresh,
 }
 
 #[derive(Subcommand)]
