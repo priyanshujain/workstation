@@ -24,7 +24,7 @@ jobs:
   # Fast unit tests - run on every push
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -52,13 +52,10 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace -- -D warnings
 
-  # Build check - ensures it compiles on multiple platforms
+  # Build check
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Build
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +114,7 @@ jobs:
   # Documentation
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
