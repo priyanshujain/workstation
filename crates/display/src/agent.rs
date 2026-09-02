@@ -2,14 +2,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use wsctl_core::bundle;
+use wsctl_core::bundle::{self, Installed};
 
-/// launchd label for the job that keeps the menu bar pinned. It lives under the bundle id
-/// on purpose: Login Items keys its record by label and keeps the name it computed the first
-/// time it saw that label, even after the plist is deleted and written again, so the old
-/// `wsctl` name could only be shed by moving to a label macOS had never seen.
+/// launchd label for the job that keeps the menu bar pinned, and the name of its plist
+/// inside the Workstation bundle. It lives under the bundle id on purpose: Login Items keys
+/// its record by label and keeps the first name it computed for it, so the old `wsctl` name
+/// could only be shed by moving to a label macOS had never seen.
 pub const LABEL: &str = "dev.pj.workstation.display";
-const LEGACY_LABELS: [&str; 2] = [
+
+/// Labels earlier versions loaded from `~/Library/LaunchAgents`. The current one is among
+/// them because it first shipped that way too.
+const LEGACY_LABELS: [&str; 3] = [
+    LABEL,
     "com.priyanshujain.workstation.display",
     "com.priyanshujain.wsctl.display",
 ];
@@ -19,8 +23,7 @@ const LEGACY_LABELS: [&str; 2] = [
 ///
 /// This is an implementation detail rather than documented API. The supported alternative,
 /// `CGDisplayRegisterReconfigurationCallback`, does not deliver to a plain binary even after
-/// a successful `NSApplicationLoad`, and would mean shipping an `.app` bundle instead of the
-/// single CLI binary this repo installs. See docs/displays.md.
+/// a successful `NSApplicationLoad`, and would mean a resident process. See docs/displays.md.
 pub const WATCHED_PATH: &str = "/Library/Preferences/com.apple.windowserver.displays.plist";
 
 /// launchd also re-runs the check on this interval, and that is what actually makes this
@@ -34,83 +37,42 @@ pub const WATCHED_PATH: &str = "/Library/Preferences/com.apple.windowserver.disp
 /// trusting a notification. One run costs about 10ms and no measurable CPU.
 pub const POLL_SECONDS: u32 = 5;
 
-pub fn plist_path() -> PathBuf {
-    home().join(format!("Library/LaunchAgents/{LABEL}.plist"))
-}
-
-fn legacy_plist_paths() -> impl Iterator<Item = PathBuf> {
-    LEGACY_LABELS
-        .iter()
-        .map(|label| home().join(format!("Library/LaunchAgents/{label}.plist")))
-}
-
 pub fn log_path() -> PathBuf {
     home().join("Library/Logs/wsctl-display.log")
 }
 
 pub fn is_installed() -> bool {
-    plist_path().exists()
+    bundle::has_agent(LABEL)
 }
 
 /// Whether launchd currently has the job loaded. The job is one-shot, so this reports that
 /// the trigger is armed, not that a process is alive.
 pub fn is_loaded() -> bool {
-    let Ok(domain) = gui_domain() else {
+    let (Ok(domain), Some(label)) = (gui_domain(), bundle::agent_label(LABEL)) else {
         return false;
     };
     Command::new("launchctl")
-        .args(["print", &format!("{domain}/{LABEL}")])
+        .args(["print", &format!("{domain}/{label}")])
         .output()
         .is_ok_and(|o| o.status.success())
 }
 
-/// Write the launchd plist and load it. Replaces any previously loaded copy so this is
-/// safe to re-run after the binary moves. The job runs the copy of `exe` inside the
-/// Workstation app bundle, which is what gives it a name and an icon in Login Items.
-pub fn install(exe: &Path) -> Result<PathBuf> {
-    let exe = bundle::install(exe)?;
-    let path = plist_path();
-    let parent = path
-        .parent()
-        .context("could not determine LaunchAgents directory")?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create {}", parent.display()))?;
-
-    std::fs::write(&path, plist_contents(&exe, &log_path()))
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
-    let domain = gui_domain()?;
-    unload(&domain);
-
-    let out = Command::new("launchctl")
-        .args(["bootstrap", &domain, &path.to_string_lossy()])
-        .output()
-        .context("failed to run launchctl bootstrap")?;
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        bail!("launchctl bootstrap failed: {}", stderr.trim());
-    }
-
-    Ok(path)
+/// Put the job in the Workstation bundle next to a copy of `exe` and register it, replacing
+/// any previous copy so this is safe to re-run after the binary changes. The job runs the
+/// bundled copy, which is what gives it a name and an icon in Login Items.
+pub fn install(exe: &Path) -> Result<Installed> {
+    bundle::retire_launch_agents(&LEGACY_LABELS);
+    bundle::install_agent(exe, LABEL, &|label| plist_contents(label, &log_path()))
 }
 
-/// Unload the job and delete its plist.
+/// Unregister the job and drop it from the bundle.
 pub fn uninstall() -> Result<()> {
-    if let Ok(domain) = gui_domain() {
-        unload(&domain);
-    }
-
-    let path = plist_path();
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| format!("failed to remove {}", path.display()))?;
-    }
-    bundle::remove_if_unused()
+    bundle::retire_launch_agents(&LEGACY_LABELS);
+    bundle::remove_agent(LABEL)
 }
 
-pub fn plist_contents(exe: &Path, log: &Path) -> String {
-    let exe = xml_escape(&exe.to_string_lossy());
+/// `label` is the build-tagged label the bundle assigns; see `wsctl_core::bundle`.
+pub fn plist_contents(label: &str, log: &Path) -> String {
     let log = xml_escape(&log.to_string_lossy());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -118,10 +80,12 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{LABEL}</string>
+    <string>{label}</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/{name}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{exe}</string>
+        <string>{name}</string>
         <string>-v</string>
         <string>display</string>
         <string>apply</string>
@@ -142,21 +106,9 @@ pub fn plist_contents(exe: &Path, log: &Path) -> String {
     <string>{log}</string>
 </dict>
 </plist>
-"#
+"#,
+        name = bundle::NAME
     )
-}
-
-/// Unload the job under every label it has had, and drop the plists older installs wrote
-/// under the previous ones. Failure is ignored: on a first install nothing is loaded yet.
-fn unload(domain: &str) {
-    for label in std::iter::once(LABEL).chain(LEGACY_LABELS) {
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("{domain}/{label}")])
-            .output();
-    }
-    for path in legacy_plist_paths() {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 fn home() -> PathBuf {
@@ -185,28 +137,32 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn contents() -> String {
+        plist_contents("dev.pj.workstation.display.1", Path::new("/tmp/w.log"))
+    }
+
     #[test]
-    fn plist_runs_the_one_shot_apply() {
-        let plist = plist_contents(
-            Path::new("/Users/pj/.local/bin/wsctl"),
-            Path::new("/Users/pj/Library/Logs/wsctl-display.log"),
+    fn plist_runs_the_one_shot_apply_from_the_bundled_copy() {
+        let plist = contents();
+        assert!(
+            plist.contains(
+                "<key>BundleProgram</key>\n    <string>Contents/MacOS/Workstation</string>"
+            )
         );
-        assert!(plist.contains("<string>/Users/pj/.local/bin/wsctl</string>"));
         assert!(plist.contains("<string>display</string>"));
         assert!(plist.contains("<string>apply</string>"));
-        assert!(plist.contains(LABEL));
+        assert!(plist.contains("<string>dev.pj.workstation.display.1</string>"));
     }
 
     #[test]
     fn plist_raises_verbosity_so_the_log_is_not_empty() {
         // Without this the job runs at `warn` and a working trigger writes nothing.
-        let plist = plist_contents(Path::new("/bin/wsctl"), Path::new("/tmp/w.log"));
-        assert!(plist.contains("<string>-v</string>"));
+        assert!(contents().contains("<string>-v</string>"));
     }
 
     #[test]
     fn plist_is_triggered_by_the_windowserver_layout_file() {
-        let plist = plist_contents(Path::new("/bin/wsctl"), Path::new("/tmp/w.log"));
+        let plist = contents();
         assert!(plist.contains("<key>WatchPaths</key>"));
         assert!(plist.contains(WATCHED_PATH));
     }
@@ -214,14 +170,14 @@ mod tests {
     #[test]
     fn plist_also_polls_on_a_timer() {
         // WatchPaths alone misses session-only layout changes, which never write the file.
-        let plist = plist_contents(Path::new("/bin/wsctl"), Path::new("/tmp/w.log"));
+        let plist = contents();
         assert!(plist.contains("<key>StartInterval</key>"));
         assert!(plist.contains(&format!("<integer>{POLL_SECONDS}</integer>")));
     }
 
     #[test]
     fn plist_runs_at_login_but_does_not_stay_resident() {
-        let plist = plist_contents(Path::new("/bin/wsctl"), Path::new("/tmp/w.log"));
+        let plist = contents();
         assert!(plist.contains("<key>RunAtLoad</key>\n    <true/>"));
         // KeepAlive would restart the one-shot job forever.
         assert!(
@@ -232,32 +188,48 @@ mod tests {
 
     #[test]
     fn plist_escapes_special_characters_in_paths() {
-        let plist = plist_contents(Path::new("/tmp/a&b<c>/wsctl"), Path::new("/tmp/w.log"));
-        assert!(plist.contains("/tmp/a&amp;b&lt;c&gt;/wsctl"));
+        let plist = plist_contents(LABEL, Path::new("/tmp/a&b<c>/w.log"));
+        assert!(plist.contains("/tmp/a&amp;b&lt;c&gt;/w.log"));
         assert!(!plist.contains("a&b"));
     }
 
     #[test]
     fn plist_uses_absolute_log_path() {
         // launchd does not expand `~`, so a relative path would silently drop logs.
-        let plist = plist_contents(Path::new("/bin/wsctl"), &log_path());
+        let plist = plist_contents(LABEL, &log_path());
         assert!(!plist.contains("<string>~"));
     }
 
     #[test]
+    fn plist_is_well_formed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.plist");
+        std::fs::write(&path, contents()).unwrap();
+        let out = Command::new("plutil")
+            .arg("-lint")
+            .arg(&path)
+            .output()
+            .expect("plutil should exist on macOS");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
     fn paths_land_in_the_expected_locations() {
-        assert!(plist_path().ends_with(format!("Library/LaunchAgents/{LABEL}.plist")));
         assert!(log_path().ends_with("Library/Logs/wsctl-display.log"));
     }
 
     #[test]
-    fn label_lives_under_the_bundle_id_and_retires_the_old_one() {
-        // A label Login Items has never seen is the only way to drop the cached `wsctl` name.
+    fn label_lives_under_the_bundle_id_and_the_old_ones_are_retired() {
         assert!(LABEL.starts_with(bundle::BUNDLE_ID), "{LABEL}");
-        for (legacy, path) in LEGACY_LABELS.iter().zip(legacy_plist_paths()) {
-            assert_ne!(LABEL, *legacy);
-            assert!(path.ends_with(format!("Library/LaunchAgents/{legacy}.plist")));
-        }
+        assert!(
+            LEGACY_LABELS.contains(&LABEL),
+            "the label first shipped in ~/Library/LaunchAgents"
+        );
+        assert!(LEGACY_LABELS.contains(&"com.priyanshujain.wsctl.display"));
     }
 
     #[test]
