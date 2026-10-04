@@ -256,8 +256,12 @@ pub fn status() -> Result<()> {
     }
 
     let spaces = match spaces::separate_spaces_enabled() {
-        Ok(true) => style("separate per display".to_string()).green(),
-        Ok(false) => style("shared across displays, a swipe moves both".to_string()).red(),
+        Ok(true) => {
+            style("saved: separate per display (takes effect at login)".to_string()).green()
+        }
+        Ok(false) => {
+            style("saved: shared across displays (takes effect at login)".to_string()).red()
+        }
         Err(e) => style(format!("unknown ({e})")).dim(),
     };
     println!("  {}  {}", style("spaces ").dim(), spaces);

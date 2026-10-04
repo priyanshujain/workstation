@@ -30,7 +30,16 @@ fn read(domain: &str) -> Result<bool> {
 
     // A missing key or domain exits non-zero, and absent is the macOS default: separate.
     if !out.status.success() {
-        return Ok(true);
+        let error = String::from_utf8_lossy(&out.stderr);
+        if error.lines().any(|line| {
+            let line = line.trim();
+            line == format!("Error: Domain '{domain}' not found.")
+                || line == format!("Error: Could not find key '{KEY}' in domain '{domain}'.")
+                || line == format!("The domain/default pair of ({domain}, {KEY}) does not exist")
+        }) {
+            return Ok(true);
+        }
+        bail!("`defaults read {domain} {KEY}` failed: {}", error.trim());
     }
 
     Ok(!spans(&String::from_utf8_lossy(&out.stdout)))

@@ -34,7 +34,11 @@ impl Resource for MainDisplay {
         // reconnects, and the bundled copy of wsctl is what the agent actually runs,
         // so a reinstalled binary leaves it stale until the next apply.
         let bundled = std::env::current_exe().is_ok_and(|exe| bundle::is_current(&exe));
-        if prefs.preferred_main == Some(self.key) && agent::is_installed() && bundled {
+        if prefs.preferred_main == Some(self.key)
+            && agent::is_installed()
+            && agent::is_loaded()
+            && bundled
+        {
             Ok(ResourceState::present())
         } else {
             Ok(ResourceState::Absent)
@@ -70,7 +74,14 @@ impl Resource for MainDisplay {
             resource: self.id(),
             message: format!("could not locate the wsctl binary: {e}"),
         })?;
-        agent::install(&exe).map_err(&failed)?;
+        let installed = agent::install(&exe).map_err(&failed)?;
+        if !installed.approved {
+            return Err(Error::ApplyFailed {
+                resource: self.id(),
+                message: "allow Workstation under System Settings > Login Items to enable display enforcement"
+                    .to_string(),
+            });
+        }
 
         Ok(())
     }

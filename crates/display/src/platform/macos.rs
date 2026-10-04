@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 
-use crate::arrange::{DisplayInfo, Move, layout_changed};
+use crate::arrange::{DisplayInfo, Move};
 use crate::key::DisplayKey;
 
 type CGDirectDisplayID = u32;
@@ -120,7 +120,7 @@ pub fn apply_moves(moves: &[Move]) -> Result<()> {
     Ok(())
 }
 
-/// Run `handler` at startup and again whenever the layout changes. Never returns.
+/// Run `handler` at startup and on every polling interval. Never returns.
 ///
 /// This polls rather than using `CGDisplayRegisterReconfigurationCallback`. That callback
 /// registers successfully in a plain command-line process but is never delivered, because
@@ -128,18 +128,8 @@ pub fn apply_moves(moves: &[Move]) -> Result<()> {
 /// Verified against a real mirror toggle: zero callbacks. Polling a handful of CoreGraphics
 /// getters costs nothing and works under launchd, which is where this actually runs.
 pub fn watch(interval: Duration, mut handler: impl FnMut()) -> Result<()> {
-    let mut previous: Option<Vec<DisplayInfo>> = None;
-
     loop {
-        let current = list_displays().unwrap_or_default();
-
-        if layout_changed(previous.as_deref(), &current) {
-            handler();
-            // Record the layout the handler left behind, so its own change does not read
-            // back as a fresh one on the next tick.
-            previous = Some(list_displays().unwrap_or(current));
-        }
-
+        handler();
         std::thread::sleep(interval);
     }
 }
