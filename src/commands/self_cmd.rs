@@ -12,7 +12,7 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = path.canonicalize().unwrap_or(path);
 
     println!(
-        "{} This will remove the {} binary, its launchd jobs and the Workstation app:",
+        "{} This will remove the {} binary, its launchd jobs and the Margin Workstation app:",
         style("→").cyan(),
         style("wsctl").bold()
     );

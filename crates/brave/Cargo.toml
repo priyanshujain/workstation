@@ -1,0 +1,10 @@
+[package]
+name = "brave"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Generate a Brave Browser policy profile for macOS"
+
+[dependencies]
+anyhow.workspace = true

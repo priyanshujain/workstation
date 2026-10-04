@@ -8,12 +8,13 @@ use wsctl_core::bundle::{self, Installed};
 /// inside the Workstation bundle. It lives under the bundle id on purpose: Login Items keys
 /// its record by label and keeps the first name it computed for it, so the old `wsctl` name
 /// could only be shed by moving to a label macOS had never seen.
-pub const LABEL: &str = "dev.pj.workstation.display";
+pub const LABEL: &str = "studio.margin.workstation.display";
 
 /// Labels earlier versions loaded from `~/Library/LaunchAgents`. The current one is among
 /// them because it first shipped that way too.
-const LEGACY_LABELS: [&str; 3] = [
+const LEGACY_LABELS: [&str; 4] = [
     LABEL,
+    "dev.pj.workstation.display",
     "com.priyanshujain.workstation.display",
     "com.priyanshujain.wsctl.display",
 ];

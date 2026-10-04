@@ -29,7 +29,7 @@ pub fn enable() -> Result<()> {
     println!("  signed   {}", style(&installed.signed_as).dim());
     if !installed.approved {
         println!(
-            "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",
+            "  {} macOS is holding it until Margin Workstation is allowed under System Settings > Login Items.",
             style("!").yellow()
         );
     }

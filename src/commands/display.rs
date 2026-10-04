@@ -198,7 +198,7 @@ pub fn enable() -> Result<()> {
     );
     if !installed.approved {
         println!(
-            "  {} macOS is holding it until Workstation is allowed under System Settings > Login Items.",
+            "  {} macOS is holding it until Margin Workstation is allowed under System Settings > Login Items.",
             style("!").yellow()
         );
     }

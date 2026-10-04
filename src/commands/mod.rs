@@ -3,6 +3,7 @@ pub mod app;
 pub mod apply;
 pub mod audio;
 pub mod audit;
+pub mod brave;
 pub mod diff;
 pub mod disk_agent;
 pub mod display;

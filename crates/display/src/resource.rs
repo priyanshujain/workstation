@@ -78,7 +78,7 @@ impl Resource for MainDisplay {
         if !installed.approved {
             return Err(Error::ApplyFailed {
                 resource: self.id(),
-                message: "allow Workstation under System Settings > Login Items to enable display enforcement"
+                message: "allow Margin Workstation under System Settings > Login Items to enable display enforcement"
                     .to_string(),
             });
         }

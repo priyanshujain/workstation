@@ -10,6 +10,7 @@ members = [
     "crates/apps",
     "crates/audio",
     "crates/audio-ui",
+    "crates/brave",
 ]
 
 [workspace.package]
@@ -53,6 +54,7 @@ display = { path = "crates/display" }
 android = { path = "crates/android" }
 apps = { path = "crates/apps" }
 audio = { path = "crates/audio" }
+brave = { path = "crates/brave" }
 
 [package]
 name = "wsctl"
@@ -60,7 +62,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Workstation controller, manage macOS setup declaratively"
+description = "Margin Workstation: developer control over desktop configuration"
 
 [[bin]]
 name = "wsctl"
@@ -71,6 +73,7 @@ wsctl-core.workspace = true
 android.workspace = true
 apps.workspace = true
 audio.workspace = true
+brave.workspace = true
 packages.workspace = true
 disk.workspace = true
 display.workspace = true

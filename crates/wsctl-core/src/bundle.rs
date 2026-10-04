@@ -31,8 +31,9 @@ unsafe extern "C" {}
 /// label it had never seen worked every time. So a job's label carries the
 /// build it belongs to, `dev.pj.workstation.display.<millis>`, and a rebuild
 /// unregisters every old label and registers new ones.
-pub const BUNDLE_ID: &str = "dev.pj.workstation";
+pub const BUNDLE_ID: &str = "studio.margin.workstation";
 pub const NAME: &str = "Workstation";
+pub const DISPLAY_NAME: &str = "Margin Workstation";
 
 const ICON: &[u8] = include_bytes!("../assets/Workstation.icns");
 const STAMP: &str = "Contents/Resources/source";
@@ -96,7 +97,9 @@ pub fn signing_identity() -> String {
 }
 
 pub fn app_path() -> PathBuf {
-    home().join("Applications").join(format!("{NAME}.app"))
+    home()
+        .join("Applications")
+        .join(format!("{DISPLAY_NAME}.app"))
 }
 
 /// The copy of wsctl that launchd runs, named after the app as bundles
@@ -366,7 +369,7 @@ fn build_and_swap(
         .context("bundle path has no parent directory")?;
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create {}", parent.display()))?;
-    let staging = parent.join(format!(".{NAME}.app.staging"));
+    let staging = parent.join(format!(".{DISPLAY_NAME}.app.staging"));
     let _ = std::fs::remove_dir_all(&staging);
     build(source, app, &staging, add, drop)?;
     sign(&staging, identity)?;
@@ -538,9 +541,9 @@ fn info_plist() -> String {
     <key>CFBundleIdentifier</key>
     <string>{BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>{NAME}</string>
+    <string>{DISPLAY_NAME}</string>
     <key>CFBundleDisplayName</key>
-    <string>{NAME}</string>
+    <string>{DISPLAY_NAME}</string>
     <key>CFBundleExecutable</key>
     <string>{NAME}</string>
     <key>CFBundleIconFile</key>

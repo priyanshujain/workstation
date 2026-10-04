@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "wsctl")]
-#[command(about = "Workstation controller, manage macOS setup declaratively")]
+#[command(about = "Margin Workstation: developer control over desktop configuration")]
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
@@ -78,6 +78,12 @@ pub enum Commands {
     Audio {
         #[command(subcommand)]
         sub: AudioCommand,
+    },
+
+    #[command(about = "Generate a Brave policy profile")]
+    Brave {
+        #[command(subcommand)]
+        sub: BraveCommand,
     },
 
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
@@ -229,6 +235,15 @@ pub enum AudioCommand {
 }
 
 #[derive(Subcommand)]
+pub enum BraveCommand {
+    #[command(about = "Write an Origin-like debloat profile for manual installation")]
+    Debloat {
+        #[arg(help = "Destination for the .mobileconfig file")]
+        path: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum DiskCommand {
     /// Where the space went: a read-only TUI that fills in as it measures,
     /// or the plain text report when piped
@@ -305,7 +320,7 @@ pub enum SelfCommand {
         yes: bool,
     },
 
-    /// Uninstall the wsctl binary, its launchd jobs and the Workstation app
+    /// Uninstall the wsctl binary, its launchd jobs and the Margin Workstation app
     Uninstall {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]

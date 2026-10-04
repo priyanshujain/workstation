@@ -10,8 +10,8 @@ use tracing_subscriber::EnvFilter;
 use std::io::IsTerminal;
 
 use cli::{
-    AndroidCommand, AppCommand, AudioCommand, Cli, Commands, DiskAgentCommand, DiskCommand,
-    DisplayCommand, SelfCommand,
+    AndroidCommand, AppCommand, AudioCommand, BraveCommand, Cli, Commands, DiskAgentCommand,
+    DiskCommand, DisplayCommand, SelfCommand,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -140,6 +140,9 @@ fn main() -> anyhow::Result<()> {
                 probes,
                 dry_run,
             } => commands::audio::calibrate(&input, &output, probes, dry_run)?,
+        },
+        Commands::Brave { sub } => match sub {
+            BraveCommand::Debloat { path } => commands::brave::debloat(&path)?,
         },
         Commands::Packages => {
             tui::packages::run()?;

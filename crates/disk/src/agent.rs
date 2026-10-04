@@ -9,12 +9,13 @@ use wsctl_core::bundle::{self, Installed};
 /// id on purpose: Login Items keys its record by label and keeps the first
 /// name it computed for it, so the old `wsctl` name could only be shed by
 /// moving to a label macOS had never seen.
-pub const LABEL: &str = "dev.pj.workstation.disk-report";
+pub const LABEL: &str = "studio.margin.workstation.disk-report";
 
 /// Labels earlier versions loaded from `~/Library/LaunchAgents`. The current
 /// one is among them because it first shipped that way too.
-const LEGACY_LABELS: [&str; 3] = [
+const LEGACY_LABELS: [&str; 4] = [
     LABEL,
+    "dev.pj.workstation.disk-report",
     "com.priyanshujain.workstation.disk-report",
     "com.priyanshujain.wsctl.disk-report",
 ];
