@@ -28,6 +28,11 @@ pub enum Outcome {
 
 /// Put the pinned panel back at (0,0) if it is connected and not already there.
 pub fn enforce() -> Result<Outcome> {
+    if !spaces::separate_spaces_enabled()? {
+        spaces::set_separate_spaces(true)?;
+        tracing::warn!("separate Spaces restored; log out and back in for it to take effect");
+    }
+
     let Some(target) = config::load()?.preferred_main else {
         return Ok(Outcome::NotConfigured);
     };
