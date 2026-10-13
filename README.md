@@ -2,9 +2,7 @@
 
 Part of the Margin family of software. A personal desktop manager for developers who want control over their machines and workspace configuration.
 
-`wsctl` is its Rust CLI, currently focused on macOS: declarative setup, packages, apps, displays, audio, disk tools, and connected Android devices.
-
-Brave setup: [debloat guide](crates/brave/guide.md).
+`wsctl` is its Rust CLI, currently focused on macOS: declarative setup, packages, apps, displays and disk tools. Audio and Android moved to [audioctl](https://github.com/priyanshujain/audioctl) and [android-mux](https://github.com/priyanshujain/android-mux).
 
 ## Install
 
