@@ -63,18 +63,18 @@ impl Resource for MainDisplay {
             message: format!("{e:#}"),
         };
 
-        let mut prefs = config::load().map_err(&failed)?;
+        let mut prefs = config::load().map_err(failed)?;
         prefs.preferred_main = Some(self.key);
-        config::save(&prefs).map_err(&failed)?;
+        config::save(&prefs).map_err(failed)?;
 
         // Correct the layout now rather than waiting for the next reconnect.
-        crate::enforce().map_err(&failed)?;
+        crate::enforce().map_err(failed)?;
 
         let exe = std::env::current_exe().map_err(|e| Error::ApplyFailed {
             resource: self.id(),
             message: format!("could not locate the wsctl binary: {e}"),
         })?;
-        let installed = agent::install(&exe).map_err(&failed)?;
+        let installed = agent::install(&exe).map_err(failed)?;
         if !installed.approved {
             return Err(Error::ApplyFailed {
                 resource: self.id(),
