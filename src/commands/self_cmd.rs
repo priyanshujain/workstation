@@ -48,12 +48,6 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     delete_binary(&path)?;
 
     println!("{} Removed {}", style("✓").green(), path.display());
-    if purge {
-        println!(
-            "{} Audio drivers under /Library/Audio/Plug-Ins/HAL need sudo and are left alone; `wsctl audio uninstall` removes them.",
-            style("i").blue()
-        );
-    }
     println!(
         "{} If you added the install dir to PATH manually, you may want to remove that line too.",
         style("i").blue()
@@ -103,7 +97,7 @@ fn delete_binary(path: &Path) -> Result<()> {
 }
 
 /// The data wsctl leaves behind once the binary, jobs and bundle are gone: the job logs,
-/// the disk report and audio state in Application Support, and the display pin in ~/.config.
+/// the disk report in Application Support, and the display pin in ~/.config.
 fn purge_paths() -> Vec<PathBuf> {
     let mut paths = vec![display::agent::log_path(), disk::agent::log_path()];
     if let Some(dir) = display::config::config_path().parent() {

@@ -9,10 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{
-    AndroidCommand, AppCommand, AudioCommand, BraveCommand, Cli, Commands, DiskAgentCommand,
-    DiskCommand, DisplayCommand, SelfCommand,
-};
+use cli::{AppCommand, Cli, Commands, DiskAgentCommand, DiskCommand, DisplayCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     // Rust ignores SIGPIPE, so println! panics once a reader goes away and
@@ -98,12 +95,6 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Android { sub } => match sub {
-            AndroidCommand::List => commands::android::list()?,
-            AndroidCommand::Clip { device } => commands::android::clip(device)?,
-            AndroidCommand::Mirror { device } => commands::android::mirror(device)?,
-            AndroidCommand::Paste { device, text } => commands::android::paste(device, text)?,
-        },
         Commands::Display { sub } => match sub {
             DisplayCommand::List => commands::display::list()?,
             DisplayCommand::Pin { key } => commands::display::pin(key)?,
@@ -121,28 +112,6 @@ fn main() -> anyhow::Result<()> {
                 include_likely,
                 yes,
             } => commands::app::remove(name, dry_run, purge, include_likely, yes)?,
-        },
-        Commands::Audio { sub } => match sub {
-            AudioCommand::Install => commands::audio::install()?,
-            AudioCommand::Uninstall => commands::audio::uninstall()?,
-            AudioCommand::Status => commands::audio::status()?,
-            AudioCommand::Devices => commands::audio::devices()?,
-            AudioCommand::Bridge {
-                input,
-                output,
-                seconds,
-                denoise,
-                voice_threshold,
-            } => commands::audio::bridge(&input, &output, seconds, denoise, voice_threshold)?,
-            AudioCommand::Calibrate {
-                input,
-                output,
-                probes,
-                dry_run,
-            } => commands::audio::calibrate(&input, &output, probes, dry_run)?,
-        },
-        Commands::Brave { sub } => match sub {
-            BraveCommand::Debloat { path } => commands::brave::debloat(&path)?,
         },
         Commands::Packages => {
             tui::packages::run()?;

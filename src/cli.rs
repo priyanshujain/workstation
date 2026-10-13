@@ -62,28 +62,10 @@ pub enum Commands {
         sub: AppCommand,
     },
 
-    /// Share the clipboard with, or mirror, the connected Android device
-    Android {
-        #[command(subcommand)]
-        sub: AndroidCommand,
-    },
-
     /// Keep the menu bar on a chosen monitor across dock reconnects
     Display {
         #[command(subcommand)]
         sub: DisplayCommand,
-    },
-
-    /// Manage the virtual audio devices and the echo-cancelling bridge
-    Audio {
-        #[command(subcommand)]
-        sub: AudioCommand,
-    },
-
-    #[command(about = "Generate a Brave policy profile")]
-    Brave {
-        #[command(subcommand)]
-        sub: BraveCommand,
     },
 
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
@@ -120,36 +102,6 @@ pub enum AppCommand {
 }
 
 #[derive(Subcommand)]
-pub enum AndroidCommand {
-    /// Show connected devices and which one commands would target
-    List,
-
-    /// Bridge the device clipboard to the Mac, no window (Ctrl-C to stop)
-    Clip {
-        /// Target a specific serial from `wsctl android list`
-        #[arg(short, long)]
-        device: Option<String>,
-    },
-
-    /// Mirror the screen, which also syncs the clipboard both ways (Ctrl-C to stop)
-    Mirror {
-        /// Target a specific serial from `wsctl android list`
-        #[arg(short, long)]
-        device: Option<String>,
-    },
-
-    /// Type the Mac clipboard into the focused field on the device
-    Paste {
-        /// Target a specific serial from `wsctl android list`
-        #[arg(short, long)]
-        device: Option<String>,
-
-        /// Text to type instead of the clipboard contents
-        text: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum DisplayCommand {
     /// Show connected displays and their keys
     List,
@@ -175,72 +127,6 @@ pub enum DisplayCommand {
     /// Run the watcher in the foreground (used by the launchd agent)
     #[command(hide = true)]
     Watch,
-}
-
-#[derive(Subcommand)]
-pub enum AudioCommand {
-    /// Install the virtual audio devices (asks for sudo, restarts coreaudiod)
-    Install,
-
-    /// Remove the virtual audio devices (asks for sudo, restarts coreaudiod)
-    Uninstall,
-
-    /// Show whether the devices are installed and loaded
-    Status,
-
-    /// List the real devices the bridge can use, by UID
-    Devices,
-
-    /// Run the echo-cancelling bridge until interrupted
-    Bridge {
-        /// UID of the real microphone
-        #[arg(short, long)]
-        input: String,
-
-        /// UID of the real speaker
-        #[arg(short, long)]
-        output: String,
-
-        /// Stop after this many seconds instead of running until interrupted
-        #[arg(long)]
-        seconds: Option<u64>,
-
-        /// Suppress background noise on the microphone with RNNoise
-        #[arg(long)]
-        denoise: bool,
-
-        /// Fade the microphone out below this voice probability, 0 to 1
-        #[arg(long, default_value_t = 0.0)]
-        voice_threshold: f32,
-    },
-
-    /// Measure the real round trip between a speaker and a microphone, out loud
-    Calibrate {
-        /// UID of the real microphone
-        #[arg(short, long)]
-        input: String,
-
-        /// UID of the real speaker
-        #[arg(short, long)]
-        output: String,
-
-        /// How many times to play the probe
-        #[arg(long)]
-        probes: Option<usize>,
-
-        /// Measure and report without saving the correction
-        #[arg(short = 'n', long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum BraveCommand {
-    #[command(about = "Write an Origin-like debloat profile for manual installation")]
-    Debloat {
-        #[arg(help = "Destination for the .mobileconfig file")]
-        path: std::path::PathBuf,
-    },
 }
 
 #[derive(Subcommand)]
