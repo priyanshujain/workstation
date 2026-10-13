@@ -1,6 +1,8 @@
+#[cfg(target_os = "macos")]
 mod builder;
 mod cli;
 mod commands;
+#[cfg(target_os = "macos")]
 mod config;
 mod tui;
 
@@ -9,7 +11,9 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AppCommand, Cli, Commands, DiskAgentCommand, DiskCommand, DisplayCommand, SelfCommand};
+#[cfg(target_os = "macos")]
+use cli::{AppCommand, DiskAgentCommand, DisplayCommand};
+use cli::{Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     // Rust ignores SIGPIPE, so println! panics once a reader goes away and
@@ -31,9 +35,11 @@ fn main() -> anyhow::Result<()> {
         .without_time()
         .init();
 
+    #[cfg(target_os = "macos")]
     let workstation = config::config();
 
     match cli.command {
+        #[cfg(target_os = "macos")]
         Commands::Apply {
             profile,
             dry_run,
@@ -41,9 +47,11 @@ fn main() -> anyhow::Result<()> {
         } => {
             commands::apply::run(&workstation, &profile, dry_run, yes)?;
         }
+        #[cfg(target_os = "macos")]
         Commands::Diff { profile, json } => {
             commands::diff::run(&workstation, &profile, json)?;
         }
+        #[cfg(target_os = "macos")]
         Commands::Profiles { json } => {
             commands::profiles::run(&workstation, json)?;
         }
@@ -68,6 +76,7 @@ fn main() -> anyhow::Result<()> {
                         commands::audit::run_report(false)?;
                     }
                 }
+                #[cfg(target_os = "macos")]
                 DiskCommand::Agent { sub } => match sub {
                     DiskAgentCommand::Enable => commands::disk_agent::enable()?,
                     DiskAgentCommand::Disable => commands::disk_agent::disable()?,
@@ -95,6 +104,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
         Commands::Display { sub } => match sub {
             DisplayCommand::List => commands::display::list()?,
             DisplayCommand::Pin { key } => commands::display::pin(key)?,
@@ -104,6 +114,7 @@ fn main() -> anyhow::Result<()> {
             DisplayCommand::Disable => commands::display::disable()?,
             DisplayCommand::Watch => commands::display::watch()?,
         },
+        #[cfg(target_os = "macos")]
         Commands::App { sub } => match sub {
             AppCommand::Remove {
                 name,
@@ -119,8 +130,11 @@ fn main() -> anyhow::Result<()> {
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
             SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
+            #[cfg(target_os = "macos")]
             SelfCommand::RegisterAgent { label } => wsctl_core::bundle::register_here(&label)?,
+            #[cfg(target_os = "macos")]
             SelfCommand::UnregisterAgent { label } => wsctl_core::bundle::unregister_here(&label)?,
+            #[cfg(target_os = "macos")]
             SelfCommand::AgentStatus { label } => {
                 println!("{}", wsctl_core::bundle::status_here(&label))
             }

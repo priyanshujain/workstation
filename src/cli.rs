@@ -19,6 +19,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    #[cfg(target_os = "macos")]
     /// Install/update packages for a profile
     Apply {
         /// Profile to apply
@@ -33,6 +34,7 @@ pub enum Commands {
         yes: bool,
     },
 
+    #[cfg(target_os = "macos")]
     /// Preview what would change
     Diff {
         /// Profile to diff
@@ -43,6 +45,7 @@ pub enum Commands {
         json: bool,
     },
 
+    #[cfg(target_os = "macos")]
     /// List available profiles and scopes
     Profiles {
         /// Output as JSON
@@ -56,12 +59,14 @@ pub enum Commands {
         sub: DiskCommand,
     },
 
+    #[cfg(target_os = "macos")]
     /// Remove an application and the support files it leaves behind
     App {
         #[command(subcommand)]
         sub: AppCommand,
     },
 
+    #[cfg(target_os = "macos")]
     /// Keep the menu bar on a chosen monitor across dock reconnects
     Display {
         #[command(subcommand)]
@@ -76,6 +81,7 @@ pub enum Commands {
     SelfCmd(SelfCommand),
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 pub enum AppCommand {
     /// Delete an app plus its data, launchd jobs, symlinks and installer receipt
@@ -101,6 +107,7 @@ pub enum AppCommand {
     },
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 pub enum DisplayCommand {
     /// Show connected displays and their keys
@@ -142,6 +149,7 @@ pub enum DiskCommand {
     /// Browse and delete what is safe to remove, sizes filling in as it measures
     Cleanup,
 
+    #[cfg(target_os = "macos")]
     /// Manage the scheduled refresh of the cached disk report
     Agent {
         #[command(subcommand)]
@@ -180,6 +188,7 @@ pub enum DiskCommand {
     },
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 pub enum DiskAgentCommand {
     /// Install and load the scheduled refresh
@@ -217,15 +226,18 @@ pub enum SelfCommand {
         purge: bool,
     },
 
+    #[cfg(target_os = "macos")]
     /// Register a job of the Workstation bundle with launchd. Run by the bundled copy:
     /// the Service Management API registers jobs of the calling app only.
     #[command(hide = true)]
     RegisterAgent { label: String },
 
+    #[cfg(target_os = "macos")]
     /// Unregister a job of the Workstation bundle. Run by the bundled copy.
     #[command(hide = true)]
     UnregisterAgent { label: String },
 
+    #[cfg(target_os = "macos")]
     /// Print the SMAppService status of a job of the Workstation bundle. Run by the bundled copy.
     #[command(hide = true)]
     AgentStatus { label: String },

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use console::style;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(target_os = "macos")]
 use wsctl_core::bundle;
 
 const INSTALLER_URL: &str =
@@ -12,11 +13,12 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = path.canonicalize().unwrap_or(path);
 
     println!(
-        "{} This will remove the {} binary, its launchd jobs and the Margin Workstation app:",
+        "{} This will remove the {} binary, and on macOS its launchd jobs and the Margin Workstation app:",
         style("→").cyan(),
         style("wsctl").bold()
     );
     println!("    {}", style(path.display()).dim());
+    #[cfg(target_os = "macos")]
     println!("    {}", style(bundle::app_path().display()).dim());
 
     let data: Vec<PathBuf> = purge
@@ -39,9 +41,12 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     }
 
     // Jobs first: with the binary gone they would keep running the bundled copy.
-    display::agent::uninstall()?;
-    disk::agent::uninstall()?;
-    bundle::remove()?;
+    #[cfg(target_os = "macos")]
+    {
+        display::agent::uninstall()?;
+        disk::agent::uninstall()?;
+        bundle::remove()?;
+    }
     if purge {
         remove_paths(&data)?;
     }
@@ -99,9 +104,14 @@ fn delete_binary(path: &Path) -> Result<()> {
 /// The data wsctl leaves behind once the binary, jobs and bundle are gone: the job logs,
 /// the disk report in Application Support, and the display pin in ~/.config.
 fn purge_paths() -> Vec<PathBuf> {
-    let mut paths = vec![display::agent::log_path(), disk::agent::log_path()];
-    if let Some(dir) = display::config::config_path().parent() {
-        paths.push(dir.to_path_buf());
+    let mut paths = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(display::agent::log_path());
+        paths.push(disk::agent::log_path());
+        if let Some(dir) = display::config::config_path().parent() {
+            paths.push(dir.to_path_buf());
+        }
     }
     if let Some(data) = dirs::data_dir() {
         paths.push(data.join("wsctl"));
@@ -152,11 +162,14 @@ mod tests {
     #[test]
     fn purge_covers_logs_config_and_data() {
         let paths = purge_paths();
-        let has = |suffix: &str| paths.iter().any(|p| p.ends_with(suffix));
-        assert!(has("Library/Logs/wsctl-display.log"));
-        assert!(has("Library/Logs/wsctl-disk-report.log"));
-        assert!(has(".config/wsctl"));
-        assert!(has("Application Support/wsctl"));
+        #[cfg(target_os = "macos")]
+        {
+            let has = |suffix: &str| paths.iter().any(|p| p.ends_with(suffix));
+            assert!(has("Library/Logs/wsctl-display.log"));
+            assert!(has("Library/Logs/wsctl-disk-report.log"));
+            assert!(has(".config/wsctl"));
+        }
+        assert!(paths.contains(&dirs::data_dir().unwrap().join("wsctl")));
     }
 
     #[test]

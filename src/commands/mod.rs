@@ -1,9 +1,15 @@
+#[cfg(target_os = "macos")]
 pub mod app;
+#[cfg(target_os = "macos")]
 pub mod apply;
 pub mod audit;
+#[cfg(target_os = "macos")]
 pub mod diff;
+#[cfg(target_os = "macos")]
 pub mod disk_agent;
+#[cfg(target_os = "macos")]
 pub mod display;
+#[cfg(target_os = "macos")]
 pub mod profiles;
 pub mod projects;
 pub mod self_cmd;
