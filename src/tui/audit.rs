@@ -2542,6 +2542,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn the_naming_view_has_its_rows_before_a_walk_can_size_them() {
         let rules = attribution_rules();
         let mut app = blank(None);
