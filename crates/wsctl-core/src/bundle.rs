@@ -802,7 +802,7 @@ mod tests {
 
         let plist = info_plist();
         assert!(plist.contains("<string>Workstation</string>"));
-        assert!(plist.contains("<string>dev.pj.workstation</string>"));
+        assert!(plist.contains(&format!("<string>{BUNDLE_ID}</string>")));
         assert!(plist.contains("<key>CFBundleIconFile</key>\n    <string>Workstation</string>"));
         assert!(plist.contains("<key>CFBundleExecutable</key>\n    <string>Workstation</string>"));
         assert!(
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn paths_land_in_the_user_applications_folder() {
-        assert!(app_path().ends_with("Applications/Workstation.app"));
-        assert!(executable().ends_with("Workstation.app/Contents/MacOS/Workstation"));
+        assert!(app_path().ends_with(format!("Applications/{DISPLAY_NAME}.app")));
+        assert!(executable().ends_with(format!("{DISPLAY_NAME}.app/Contents/MacOS/{NAME}")));
     }
 }
