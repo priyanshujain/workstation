@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 pub mod agent;
 pub mod arrange;
 pub mod config;
