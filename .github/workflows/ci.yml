@@ -23,8 +23,11 @@ env:
 jobs:
   # Fast unit tests - run on every push
   unit-tests:
-    name: Unit Tests
-    runs-on: macos-latest
+    name: Unit Tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,8 +57,11 @@ jobs:
 
   # Build check
   build:
-    name: Build
-    runs-on: macos-latest
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
