@@ -9,12 +9,7 @@ description = "Core abstractions for wsctl — declarative workstation configura
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
-petgraph.workspace = true
-tokio.workspace = true
-async-trait.workspace = true
 tracing.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 dirs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
