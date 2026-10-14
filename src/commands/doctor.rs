@@ -728,12 +728,35 @@ mod os {
             "{}#systemConfigs.{}.config.pacman.packages",
             target.flake, target.host
         ))?;
-        Ok(package_check(
+        let snapshot: Option<String> = serde_json::from_str(&output(
+            "nix",
+            &[
+                "eval",
+                "--json",
+                &format!(
+                    "{}#systemConfigs.{}.config.pacman.snapshot",
+                    target.flake, target.host
+                ),
+            ],
+        )?)?;
+        let mut check = package_check(
             "pacman",
             &installed(&["-Qq"])?,
             &installed(&["-Qqen"])?,
             &declared,
-        ))
+        );
+        if snapshot.is_none() && check.level == super::Level::Pass {
+            check = Check::warn(
+                "pacman",
+                "not pinned: pacman.snapshot is unset, so the live mirrors decide versions",
+                Vec::new(),
+            );
+        } else if snapshot.is_none() {
+            check
+                .details
+                .push("not pinned: pacman.snapshot is unset".to_string());
+        }
+        Ok(check)
     }
 
     fn aur(target: &Target) -> Result<Check> {
