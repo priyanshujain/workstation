@@ -22,6 +22,10 @@ impl Target {
                 .to_string(),
             None => flake,
         };
+        let flake = match std::fs::canonicalize(&flake) {
+            Ok(path) if !flake.contains(':') => path.display().to_string(),
+            _ => flake,
+        };
         Ok(Self { flake, host })
     }
 
@@ -42,9 +46,14 @@ fn step(what: &str) {
     println!("{} {}", style("→").cyan(), style(what).bold());
 }
 
+/// Runs from a scratch directory, because the switch and build tools leave a `result` link in
+/// whatever directory they start in.
 fn run(program: &str, args: &[&str]) -> Result<()> {
+    let scratch = std::env::temp_dir().join("wsctl");
+    std::fs::create_dir_all(&scratch)?;
     let status = Command::new(program)
         .args(args)
+        .current_dir(&scratch)
         .status()
         .with_context(|| format!("could not run {program}"))?;
     if !status.success() {
