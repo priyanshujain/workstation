@@ -221,22 +221,54 @@ mod os {
 
     const PROFILE: &str = "/nix/var/nix/profiles/system-manager-profiles/system-manager";
 
-    // Files the installer and the running system own; editing them is expected.
-    const MACHINE_FILES: &[&str] = &[
-        "/etc/fstab",
-        "/etc/group",
-        "/etc/gshadow",
-        "/etc/hosts",
-        "/etc/passwd",
-        "/etc/resolv.conf",
-        "/etc/shadow",
-        "/etc/shells",
-        "/etc/subgid",
-        "/etc/subuid",
+    /// userborn writes these from the declared `users` and `groups`.
+    const USERBORN_FILES: &[&str] = &["/etc/passwd", "/etc/group", "/etc/shadow", "/etc/gshadow"];
+
+    /// What a fresh Arch install generates by itself, with no choice made: identities, keys,
+    /// caches built from installed packages, and the backups shadow's tools keep.
+    const ARCH_GENERATED: &[&str] = &[
+        "/etc/.pwd.lock",
+        "/etc/.updated",
+        "/etc/adjtime",
+        "/etc/ld.so.cache",
+        "/etc/machine-id",
+        "/etc/os-release",
+        "/etc/passwd-",
+        "/etc/group-",
+        "/etc/shadow-",
+        "/etc/gshadow-",
+        "/etc/subuid-",
+        "/etc/subgid-",
+        "/etc/ssh/ssh_host_*",
+        "/etc/pacman.d/gnupg/*",
+        "/etc/ca-certificates/extracted/*",
+        "/etc/ssl/certs/*",
+        "/etc/fonts/conf.d/*",
+        "/etc/mkinitcpio.d/*.preset",
     ];
 
-    // The Nix installer hooks the daemon profile into these.
-    const NIX_INSTALLER_FILES: &[&str] = &["/etc/bash.bashrc", "/etc/zsh/zshrc"];
+    /// What the Nix installer writes before wsctl can run.
+    const NIX_INSTALLER: &[&str] = &[
+        "/etc/bash.bashrc",
+        "/etc/bashrc",
+        "/etc/zshrc",
+        "/etc/zsh/zshrc",
+        "/etc/profile.d/nix.sh",
+        "/etc/nix/nix.conf",
+        "/etc/nix/nix.custom.conf",
+        "/etc/tmpfiles.d/nix-daemon.conf",
+        "/etc/systemd/system/nix-daemon.service",
+        "/etc/systemd/system/nix-daemon.socket",
+        "/etc/systemd/system/determinate-nixd.socket",
+        "/usr/local/bin/determinate-nixd",
+    ];
+
+    fn matches(patterns: &[&str], path: &str) -> bool {
+        patterns.iter().any(|p| match p.split_once('*') {
+            Some((head, tail)) => path.starts_with(head) && path.ends_with(tail),
+            None => *p == path,
+        })
+    }
 
     pub fn checks(target: &Target) -> Vec<Check> {
         let managed = managed_files().unwrap_or_default();
@@ -254,6 +286,7 @@ mod os {
             Check::from_result("/etc drift", etc_drift(&managed)),
             Check::from_result("modified /etc", modified_etc(&managed)),
             Check::from_result("pacnew", pacnew(&managed)),
+            Check::from_result("unowned /etc", unowned(&managed)),
             Check::from_result("failed units", failed_units()),
             Check::from_result("system units", system_units(&managed)),
             Check::from_result("user units", user_units()),
@@ -340,8 +373,8 @@ mod os {
             .filter_map(|l| l.trim().strip_suffix(" [modified]"))
             .map(|l| l.trim_start_matches("Backup Files    :").trim().to_string())
             .filter(|f| {
-                !MACHINE_FILES.contains(&f.as_str())
-                    && !NIX_INSTALLER_FILES.contains(&f.as_str())
+                !USERBORN_FILES.contains(&f.as_str())
+                    && !matches(NIX_INSTALLER, f)
                     && !managed.contains(f)
             })
             .collect();
@@ -396,6 +429,95 @@ mod os {
             Check::warn(
                 "pacnew",
                 format!("{} unmerged .pacnew or .pacsave files", found.len()),
+                found,
+            )
+        })
+    }
+
+    fn unowned(managed: &BTreeSet<String>) -> Result<Check> {
+        let owned: BTreeSet<String> = output("pacman", &["-Qlq"])?
+            .lines()
+            .filter(|l| l.starts_with("/etc/") || l.starts_with("/usr/local/"))
+            .map(|l| l.trim_end_matches('/').to_string())
+            .collect();
+        let mut found = Vec::new();
+        let mut unreadable = Vec::new();
+        let mut stack = vec![
+            std::path::PathBuf::from("/etc"),
+            std::path::PathBuf::from("/usr/local"),
+        ];
+        while let Some(dir) = stack.pop() {
+            let mut files = Vec::new();
+            match std::fs::read_dir(&dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let Ok(kind) = entry.file_type() else {
+                            continue;
+                        };
+                        if kind.is_dir() {
+                            stack.push(entry.path());
+                        } else {
+                            files.push((entry.path(), kind.is_symlink()));
+                        }
+                    }
+                }
+                Err(_) => {
+                    let dir_name = dir.display().to_string();
+                    let listed = std::process::Command::new("sudo")
+                        .args(["-n", "find", &dir_name, "-mindepth", "1"])
+                        .args(["(", "-type", "f", "-o", "-type", "l", ")"])
+                        .output();
+                    match listed {
+                        Ok(out) if out.status.success() => {
+                            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                                files.push((std::path::PathBuf::from(line), false));
+                            }
+                        }
+                        _ => unreadable.push(format!("not readable {dir_name}")),
+                    }
+                }
+            }
+            for (path, is_symlink) in files {
+                let name = path.display().to_string();
+                let unit_link = is_symlink
+                    && (name.starts_with("/etc/systemd/system/")
+                        || name.starts_with("/etc/systemd/user/"))
+                    && std::fs::read_link(&path).is_ok_and(|t| {
+                        let t = t.display().to_string();
+                        t.starts_with("/usr/lib/systemd/")
+                            || t == "/dev/null"
+                            || t.starts_with("/etc/systemd/system/")
+                    });
+                let backup = name
+                    .strip_suffix(".system-manager-backup")
+                    .is_some_and(|b| managed.contains(b));
+                if owned.contains(&name)
+                    || managed.contains(&name)
+                    || backup
+                    || unit_link
+                    || USERBORN_FILES.contains(&name.as_str())
+                    || matches(ARCH_GENERATED, &name)
+                    || matches(NIX_INSTALLER, &name)
+                {
+                    continue;
+                }
+                found.push(name);
+            }
+        }
+        found.sort();
+        found.extend(unreadable);
+        Ok(if found.is_empty() {
+            Check::pass(
+                "unowned /etc",
+                "every file is packaged, declared or generated",
+            )
+        } else {
+            Check::warn(
+                "unowned /etc",
+                format!(
+                    "{} files no package or declaration accounts for",
+                    found.len()
+                ),
                 found,
             )
         })
