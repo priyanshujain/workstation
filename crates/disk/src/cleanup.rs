@@ -333,11 +333,25 @@ impl Target {
             CleanAction::RemoveContents(path) | CleanAction::RemoveDir(path) => path,
             _ => return Ok(()),
         };
+        if holds_repository(path) {
+            return Err(format!("{}: holds a git repository", self.name));
+        }
         match live.check(path).first() {
             Some(busy) => Err(format!("{}: {busy}", self.name)),
             None => Ok(()),
         }
     }
+}
+
+fn holds_repository(path: &Path) -> bool {
+    let children = fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path());
+    std::iter::once(path.to_path_buf())
+        .chain(children)
+        .any(|dir| dir.join(".git").exists())
 }
 
 // `rm -rf` instead of fs::remove_* because BSD/macOS `rm -f` chmods read-only
@@ -414,6 +428,25 @@ mod tests {
         assert_eq!(target.size().total(), None, "unmeasured, not empty");
         assert!(target.clean().is_err());
         assert!(file.exists());
+    }
+
+    #[test]
+    fn a_folder_holding_a_git_repository_is_never_cleaned() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("checkout");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(repo.join("work.txt"), b"x").unwrap();
+        let live = crate::liveness::Liveness::empty();
+
+        for action in [
+            CleanAction::RemoveContents(dir.path().to_path_buf()),
+            CleanAction::RemoveDir(repo.clone()),
+        ] {
+            let target = Target::new("Caches > tool", "", 1, action);
+            assert!(target.refuse_if_in_use(&live).is_err());
+            assert!(target.clean().is_err());
+        }
+        assert!(repo.join("work.txt").exists());
     }
 
     #[test]
