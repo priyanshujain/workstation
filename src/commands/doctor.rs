@@ -159,6 +159,13 @@ fn stray_binaries() -> Check {
             if resolved(&path).is_some_and(|p| p.starts_with("/nix/store")) {
                 continue;
             }
+            let executable = std::fs::metadata(&path).is_ok_and(|m| {
+                use std::os::unix::fs::PermissionsExt;
+                m.is_file() && m.permissions().mode() & 0o111 != 0
+            });
+            if !executable {
+                continue;
+            }
             found.push(path.display().to_string());
         }
     }
