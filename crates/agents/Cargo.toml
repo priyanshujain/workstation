@@ -1,0 +1,15 @@
+[package]
+name = "agents"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Running coding agents, their orphaned processes and the clones they leave behind"
+
+[dependencies]
+disk.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc = "0.2"

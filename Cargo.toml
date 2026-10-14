@@ -7,6 +7,7 @@ members = [
     "crates/disk",
     "crates/display",
     "crates/apps",
+    "crates/agents",
 ]
 
 [workspace.package]
@@ -45,6 +46,7 @@ packages = { path = "crates/packages" }
 disk = { path = "crates/disk" }
 display = { path = "crates/display" }
 apps = { path = "crates/apps" }
+agents = { path = "crates/agents" }
 
 [package]
 name = "wsctl"
@@ -61,6 +63,7 @@ path = "src/main.rs"
 [dependencies]
 wsctl-core.workspace = true
 apps.workspace = true
+agents.workspace = true
 packages.workspace = true
 disk.workspace = true
 display.workspace = true
