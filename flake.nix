@@ -32,6 +32,8 @@
 
       systemModules.default = ./nix/modules/linux;
 
+      homeModules.default = import ./nix/modules/home self;
+
       systemConfigs.arch = system-manager.lib.makeSystemConfig {
         modules = [
           self.systemModules.default
