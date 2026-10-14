@@ -15,6 +15,7 @@ pub struct InstalledApps {
     names: HashMap<String, String>,
     vendors: Vec<String>,
     commands: HashSet<String>,
+    enumerated: bool,
 }
 
 impl InstalledApps {
@@ -42,7 +43,10 @@ impl InstalledApps {
     }
 
     pub fn from_bundles(bundles: impl IntoIterator<Item = PathBuf>) -> InstalledApps {
-        let mut apps = InstalledApps::default();
+        let mut apps = InstalledApps {
+            enumerated: true,
+            ..InstalledApps::default()
+        };
         for bundle in bundles {
             if let Some((id, name)) = identity(&bundle) {
                 apps.add(&id, &name);
@@ -65,6 +69,9 @@ impl InstalledApps {
         };
         if let Some(name) = self.app_for(&id) {
             return Owner::App(name.clone());
+        }
+        if !self.enumerated {
+            return Owner::Unresolved;
         }
         let shared_vendor = vendor(&id).is_some_and(|v| self.vendors.contains(&v));
         let names_a_command = id
@@ -145,7 +152,7 @@ mod tests {
     use std::fs;
 
     fn installed() -> InstalledApps {
-        let mut apps = InstalledApps::default();
+        let mut apps = InstalledApps::from_bundles(Vec::new());
         apps.add("com.example.Editor", "Editor");
         apps.add("io.vendor.Tool", "Tool");
         apps
@@ -188,6 +195,17 @@ mod tests {
             apps.resolve("org.Zellij-Contributors.Zellij"),
             Owner::Unresolved
         );
+    }
+
+    #[test]
+    fn nothing_is_called_removed_when_installed_apps_were_never_listed() {
+        let mut apps = InstalledApps::default();
+        apps.add("com.example.Editor", "Editor");
+        assert_eq!(
+            apps.resolve("com.example.Editor"),
+            Owner::App("Editor".into())
+        );
+        assert_eq!(apps.resolve("net.gone.Player"), Owner::Unresolved);
     }
 
     #[test]

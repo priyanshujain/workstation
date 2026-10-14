@@ -441,6 +441,7 @@ mod tests {
             filetime::set_file_mtime(library.join(gone), old).unwrap();
         }
         let mut places = places(home.path(), true);
+        places.apps = InstalledApps::from_bundles(Vec::new());
         places.apps.add("com.example.Editor", "Editor");
 
         let rules = rules(&places, &[]);
@@ -468,7 +469,9 @@ mod tests {
             .join("Library/Application Support/net.gone.Player");
         fs::create_dir_all(&fresh).unwrap();
 
-        let rules = rules(&places(home.path(), true), &[]);
+        let mut places = places(home.path(), true);
+        places.apps = InstalledApps::from_bundles(Vec::new());
+        let rules = rules(&places, &[]);
 
         assert_eq!(find(&rules, &fresh).unwrap().category, "App data");
     }
