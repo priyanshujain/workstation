@@ -81,26 +81,10 @@ impl Audit {
     }
 }
 
-/// Walk the volume and name what can be named.
-pub fn scan() -> Audit {
-    let rules = attribution_rules();
-    let roots = sweep::discover_roots();
-    scan_with(&roots, &rules)
-}
-
-pub fn scan_with(roots: &[Root], rules: &[Rule]) -> Audit {
-    from_sweep(sweep::sweep(roots, rules), rules)
-}
-
-/// The same walk for a scan nobody is sitting at. The directories macOS asks
-/// about before opening are left closed and reported as such, because from a
-/// process no terminal owns each one is a dialog on the screen, and the scan
-/// hangs behind it until somebody answers.
-pub fn scan_unattended() -> Audit {
-    let rules = attribution_rules();
-    let roots = sweep::discover_roots();
-    let closed = platform::consent_gated_paths();
-    from_sweep(sweep::sweep_unattended(&roots, &rules, &closed), &rules)
+/// Walk `roots` and name what can be named. Everything in `closed` is left
+/// unopened and reported as such.
+pub fn scan_with(roots: &[Root], rules: &[Rule], closed: &[PathBuf]) -> Audit {
+    from_sweep(sweep::sweep_gated(roots, rules, closed), rules)
 }
 
 /// Sorting happens here rather than in the sweep: a streaming caller needs
@@ -192,7 +176,7 @@ mod tests {
             path: named.clone(),
         }];
 
-        let audit = scan_with(&roots, &rules);
+        let audit = scan_with(&roots, &rules, &[]);
 
         assert_eq!(audit.measured(), audit.attributed() + audit.unattributed());
         assert_eq!(audit.categories.len(), 1);
@@ -210,11 +194,28 @@ mod tests {
             name: "test".into(),
             path: dir.path().to_path_buf(),
         }];
-        let audit = scan_with(&roots, &[]);
+        let audit = scan_with(&roots, &[], &[]);
 
         let largest = audit.largest_unattributed(3);
         assert_eq!(largest[0].0, &stray);
         assert!(largest[0].1 >= 512 * 1024);
+    }
+
+    #[test]
+    fn a_scan_leaves_closed_directories_unopened_and_counts_them_unattended() {
+        let dir = tempdir().unwrap();
+        let gated = dir.path().join("Documents");
+        fs::create_dir_all(&gated).unwrap();
+        fs::write(gated.join("secret.bin"), vec![0u8; 512 * 1024]).unwrap();
+
+        let roots = vec![Root {
+            name: "test".into(),
+            path: dir.path().to_path_buf(),
+        }];
+        let audit = scan_with(&roots, &[], std::slice::from_ref(&gated));
+
+        assert!(audit.measured() < 512 * 1024, "{}", audit.measured());
+        assert_eq!(audit.denied(Denial::Unattended), 1);
     }
 
     #[test]
@@ -244,7 +245,7 @@ mod tests {
             },
         ];
 
-        let audit = scan_with(&roots, &rules);
+        let audit = scan_with(&roots, &rules, &[]);
 
         assert_eq!(audit.categories.len(), 1);
         assert_eq!(audit.categories[0].paths.len(), 2);
@@ -265,7 +266,7 @@ mod tests {
             path: dir.path().join("does-not-exist"),
         }];
 
-        let audit = scan_with(&roots, &rules);
+        let audit = scan_with(&roots, &rules, &[]);
         assert!(audit.categories.is_empty());
     }
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{Audit, Category, CategoryPath};
 use crate::projects::{Artifact, Project, ProjectKind};
-use crate::sweep::{Denial, Denials, RootUsage, Unreadable};
+use crate::sweep::{Denial, Denials, Root, RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
@@ -449,19 +449,33 @@ fn give_back(path: &Path, handback: Option<&Handback>) {
 /// Walk the disk and build a fresh report. This is the slow path, tens of
 /// seconds.
 pub fn generate(project_roots: &[PathBuf], max_depth: usize, now: SystemTime) -> Report {
-    from_audit(crate::audit::scan(), project_roots, max_depth, now)
+    measure(
+        &crate::sweep::discover_roots(),
+        project_roots,
+        max_depth,
+        now,
+        &crate::platform::closed_paths(),
+    )
+}
+
+/// Both the walk and the project search leave `closed` unopened.
+fn measure(
+    roots: &[Root],
+    project_roots: &[PathBuf],
+    max_depth: usize,
+    now: SystemTime,
+    closed: &[PathBuf],
+) -> Report {
+    let rules = crate::audit::attribution_rules();
+    let audit = crate::audit::scan_with(roots, &rules, closed);
+    from_audit(audit, project_roots, max_depth, now, closed)
 }
 
 /// What the scheduled refresh runs. The walk leaves closed whatever macOS
 /// would ask about, and the cache written back says which directories those
 /// were, so a reader knows they are unmeasured rather than empty.
 pub fn refresh_unattended(project_roots: &[PathBuf], max_depth: usize) -> Report {
-    let report = from_audit(
-        crate::audit::scan_unattended(),
-        project_roots,
-        max_depth,
-        SystemTime::now(),
-    );
+    let report = generate(project_roots, max_depth, SystemTime::now());
     write_back(&report);
     report
 }
@@ -480,6 +494,7 @@ pub fn from_audit(
     project_roots: &[PathBuf],
     max_depth: usize,
     now: SystemTime,
+    closed: &[PathBuf],
 ) -> Report {
     let roots = audit
         .roots
@@ -516,7 +531,7 @@ pub fn from_audit(
         })
         .collect();
 
-    let projects = crate::projects::discover(project_roots, max_depth)
+    let projects = crate::projects::discover(project_roots, max_depth, closed)
         .into_iter()
         .map(|p| ProjectSnap {
             root: p.root,
@@ -1032,6 +1047,33 @@ mod tests {
         };
 
         assert_eq!(report.stale_paths(), vec![artifact.as_path()]);
+    }
+
+    #[test]
+    fn a_fresh_report_leaves_closed_directories_unopened_in_the_walk_and_the_project_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let gated = dir.path().join("Documents");
+        let project = gated.join("app");
+        std::fs::create_dir_all(project.join("node_modules")).unwrap();
+        std::fs::write(project.join("package.json"), "{}").unwrap();
+        std::fs::write(project.join("node_modules/x.js"), vec![0u8; 512 * 1024]).unwrap();
+        let roots = [Root {
+            name: "Home".into(),
+            path: dir.path().to_path_buf(),
+        }];
+
+        let report = measure(
+            &roots,
+            &[dir.path().to_path_buf()],
+            6,
+            SystemTime::now(),
+            std::slice::from_ref(&gated),
+        );
+
+        assert!(report.to_projects().is_empty());
+        let audit = report.to_audit();
+        assert!(audit.measured() < 512 * 1024, "{}", audit.measured());
+        assert_eq!(audit.denied(Denial::Unattended), 1);
     }
 
     #[test]

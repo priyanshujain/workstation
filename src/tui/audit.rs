@@ -27,11 +27,11 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use disk::audit::{self, Audit, attribution_rules};
 use disk::overview::{DiskOverview, disk_overview};
-use disk::report;
 use disk::sweep::{
     self, Denial, Denials, Flow, Progress, Root, RootUsage, Rule, Sweep, Unreadable,
 };
 use disk::util::format_size;
+use disk::{platform, report};
 use ratatui::{prelude::*, widgets::*};
 
 use crate::tui::live::{self, Children};
@@ -49,6 +49,7 @@ const UNNAMED: &str = "unnamed, largest first";
 /// Browse the volume, from the first frame of the walk.
 pub fn run(no_cache: bool) -> Result<()> {
     let mut app = App::new(disk_overview());
+    app.closed = platform::closed_paths();
 
     // A walk takes about two minutes, so a usable cache is worth drawing
     // instantly and saying how old it is.
@@ -76,6 +77,8 @@ struct App {
     age: Option<Duration>,
     jobs_left: usize,
     quit: bool,
+    /// Left unopened by every walk from this screen.
+    closed: Vec<PathBuf>,
 }
 
 /// The two halves of the report. Both describe the same bytes, so their totals
@@ -399,7 +402,7 @@ impl Pane {
 
     /// Handles `Enter`. `Some` is a directory that still has to be walked;
     /// anything already measured is on screen by the time this returns.
-    fn enter(&mut self) -> Option<(String, PathBuf, u64)> {
+    fn enter(&mut self, closed: &[PathBuf]) -> Option<(String, PathBuf, u64)> {
         match self.drill() {
             Drill::Rows { name, items, total } => {
                 self.stack.push(View::Directory {
@@ -417,7 +420,7 @@ impl Pane {
                 total,
                 below,
             } => {
-                let listing = live::children_as_roots(&path);
+                let listing = live::children_as_roots(&path, closed);
                 self.stack.push(View::Directory {
                     name,
                     items: measured_items(&listing, &below),
@@ -455,6 +458,7 @@ impl App {
             age: None,
             jobs_left: 0,
             quit: false,
+            closed: Vec::new(),
         }
     }
 
@@ -994,8 +998,8 @@ fn denial_notes(denials: Denials, terminal: &str) -> Vec<String> {
     }
     if denials.unattended > 0 {
         notes.push(format!(
-            "  {} left closed: the scheduled refresh does not open what macOS asks \
-             about first. Press r to measure them now.",
+            "  {} left closed: macOS asks before opening them. Give {terminal} Full \
+             Disk Access to measure them.",
             directories(denials.unattended)
         ));
     }
@@ -1138,14 +1142,42 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
 fn sweep_live(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let roots = sweep::discover_roots();
     let rules = attribution_rules();
+    let Some(audit) = measure_volume(app, terminal, &roots, &rules, &mut pressed)? else {
+        return Ok(());
+    };
 
-    app.begin_scan(&rules);
+    // An interactive walk leaves the fast path better off than it found it,
+    // which is the contract report::load_or_refresh keeps for every other
+    // caller.
+    app.status = Status::Saving;
+    terminal.draw(|f| render(f, app))?;
+    save(audit, &app.closed);
+
+    app.status = Status::Idle;
+    app.age = Some(Duration::ZERO);
+    Ok(())
+}
+
+/// `None` when the walk was stopped part way.
+fn measure_volume<B>(
+    app: &mut App,
+    terminal: &mut Terminal<B>,
+    roots: &[Root],
+    rules: &[Rule],
+    interrupt: &mut dyn FnMut() -> io::Result<Pressed>,
+) -> Result<Option<Audit>>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let closed = app.closed.clone();
+    app.begin_scan(rules);
     let mut throttle = live::Throttle::new(live::REDRAW);
     let mut failure: Option<anyhow::Error> = None;
 
-    let swept = sweep::sweep_streaming(&roots, &rules, &mut |progress| {
+    let swept = sweep::sweep_streaming(roots, rules, &closed, &mut |progress| {
         app.apply_top(&progress);
-        flow(app, terminal, &mut throttle, &mut failure, &mut pressed)
+        flow(app, terminal, &mut throttle, &mut failure, interrupt)
     });
 
     if let Some(e) = failure {
@@ -1155,23 +1187,12 @@ fn sweep_live(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
         // Half a measurement, so nothing on screen has an age.
         app.stop();
         app.age = None;
-        return Ok(());
+        return Ok(None);
     };
 
-    let audit = audit::from_sweep(swept, &rules);
+    let audit = audit::from_sweep(swept, rules);
     app.finish(&audit);
-
-    // An interactive walk leaves the fast path better off than it found it,
-    // which is the contract report::load_or_refresh keeps for every other
-    // caller.
-    app.status = Status::Saving;
-    throttle.force();
-    terminal.draw(|f| render(f, app))?;
-    save(audit);
-
-    app.status = Status::Idle;
-    app.age = Some(Duration::ZERO);
-    Ok(())
+    Ok(Some(audit))
 }
 
 /// One redraw and one look at the keyboard, from inside a walk. Shared so a
@@ -1216,12 +1237,13 @@ where
     }
 }
 
-fn save(audit: Audit) {
+fn save(audit: Audit, closed: &[PathBuf]) {
     let report = report::from_audit(
         audit,
         &disk::projects::default_roots(),
         disk::projects::MAX_DEPTH,
         SystemTime::now(),
+        closed,
     );
     if let Err(e) = report::save(&report) {
         tracing::warn!("could not write disk report cache: {e}");
@@ -1250,7 +1272,8 @@ fn pressed() -> io::Result<Pressed> {
 }
 
 fn drill_in(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    match app.pane_mut().enter() {
+    let closed = app.closed.clone();
+    match app.pane_mut().enter(&closed) {
         Some((name, path, total)) => {
             sweep_directory(app, terminal, name, path, total, &mut pressed)
         }
@@ -1274,7 +1297,8 @@ where
 {
     // The loose files are read here and never reported by a root, so the listing
     // starts with them already counted.
-    let listing = live::children_as_roots(&path);
+    let closed = app.closed.clone();
+    let listing = live::children_as_roots(&path, &closed);
     let owner = app.section;
     app.of_mut(owner).open_directory(name, &listing, total);
     app.status = Status::Scanning;
@@ -1283,7 +1307,7 @@ where
     let mut throttle = live::Throttle::new(live::REDRAW);
     let mut failure: Option<anyhow::Error> = None;
 
-    let swept = sweep::sweep_streaming(&listing.roots, &[], &mut |progress| {
+    let swept = sweep::sweep_streaming(&listing.roots, &[], &closed, &mut |progress| {
         app.apply_drill(owner, &progress);
         flow(app, terminal, &mut throttle, &mut failure, interrupt)
     });
@@ -1993,10 +2017,9 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_the_refresh_left_closed_is_fixed_by_a_keypress_not_a_grant() {
-        // Nothing refused it: the scheduled scan chose not to ask. So the note
-        // must send the user to the key that measures it, and must not send
-        // them to System Settings for a grant that would change nothing.
+    fn a_directory_left_closed_is_fixed_by_full_disk_access_not_sudo() {
+        // Without Full Disk Access every walk leaves it closed, so the grant is
+        // the only thing that measures it.
         let notes = denial_notes(
             Denials {
                 unattended: 3,
@@ -2006,8 +2029,7 @@ mod tests {
         );
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("3 directories"), "{notes:?}");
-        assert!(notes[0].contains("Press r"), "{notes:?}");
-        assert!(!notes[0].contains("Full Disk Access"), "{notes:?}");
+        assert!(notes[0].contains("Full Disk Access"), "{notes:?}");
         assert!(!notes[0].contains("sudo"), "{notes:?}");
     }
 
@@ -2035,7 +2057,7 @@ mod tests {
             denial: Denial::Unattended,
         }];
         let mut app = cached(vec![root]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         assert_eq!(
             labels(&app),
@@ -2048,7 +2070,7 @@ mod tests {
         assert_eq!(denials.unattended, 1);
         let notes = denial_notes(denials, TERMINAL);
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].contains("Press r"), "{notes:?}");
+        assert!(notes[0].contains("Full Disk Access"), "{notes:?}");
     }
 
     #[test]
@@ -2092,7 +2114,7 @@ mod tests {
         let mut app = cached(vec![root]);
 
         assert!(
-            app.pane_mut().enter().is_none(),
+            app.pane_mut().enter(&[]).is_none(),
             "a level the sweep already measured must not ask for a walk"
         );
         assert_eq!(app.pane().stack.len(), 2);
@@ -2114,13 +2136,13 @@ mod tests {
         let scratch = Scratch::new("addsup");
         let sub = scratch.dir("sub");
         scratch.file("loose.bin", 64 * 1024);
-        let loose = live::children_as_roots(scratch.path()).loose_bytes;
+        let loose = live::children_as_roots(scratch.path(), &[]).loose_bytes;
 
         let mut root = usage("Scratch", 512 * 1024 + loose, Denials::default());
         root.path = scratch.path().to_path_buf();
         root.children = vec![(sub, 512 * 1024)];
         let mut app = cached(vec![root]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         let View::Directory { total, .. } = app.pane().current() else {
             panic!("not in a directory");
@@ -2150,7 +2172,7 @@ mod tests {
         let mut app = cached(vec![root]);
 
         assert!(
-            app.pane_mut().enter().is_none(),
+            app.pane_mut().enter(&[]).is_none(),
             "a cached level must answer without walking anything"
         );
         assert!(!app.scanning());
@@ -2196,7 +2218,7 @@ mod tests {
             },
         ];
         let mut app = cached(vec![root]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         let denials = app.denials();
         assert_eq!(
@@ -2227,7 +2249,7 @@ mod tests {
         root.path = scratch.path().to_path_buf();
         root.children = vec![(child, 64 * 1024)];
         let mut app = cached(vec![root]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         assert_eq!(
             labels(&app),
@@ -2249,7 +2271,7 @@ mod tests {
         root.path = scratch.path().to_path_buf();
         root.children = vec![(full, 32 * 1024), (empty, 0)];
         let mut app = cached(vec![root]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         assert_eq!(
             labels(&app),
@@ -2273,7 +2295,7 @@ mod tests {
         fs::write(documents.join("f.bin"), vec![0u8; 128 * 1024]).unwrap();
         fs::write(caches.join("f.bin"), vec![0u8; 64 * 1024]).unwrap();
         scratch.file("loose.bin", 8 * 1024);
-        let loose = live::children_as_roots(scratch.path()).loose_bytes;
+        let loose = live::children_as_roots(scratch.path(), &[]).loose_bytes;
 
         let mut home = usage("Home", 128 * 1024 + loose, Denials::default());
         home.path = scratch.path().to_path_buf();
@@ -2283,7 +2305,7 @@ mod tests {
         user_library.children = vec![(caches, 64 * 1024)];
 
         let mut app = cached(vec![home, user_library]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         assert_eq!(
             labels(&app),
@@ -2310,7 +2332,7 @@ mod tests {
         assert!(screen.contains("counted under User Library"), "{screen}");
 
         assert!(
-            app.pane_mut().enter().is_none(),
+            app.pane_mut().enter(&[]).is_none(),
             "the other root already measured this level"
         );
         assert!(
@@ -2331,7 +2353,7 @@ mod tests {
         app.toggle();
         assert_eq!(names(&app), vec![UNNAMED.to_string()]);
 
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
         let note = unlisted_note(&app).expect("bytes are missing from this listing");
         assert!(note.contains(&format_size(2 * GB - 512 * MB)), "{note}");
         assert!(note.contains("not listed"), "{note}");
@@ -2359,6 +2381,64 @@ mod tests {
     }
 
     #[test]
+    fn a_drill_down_leaves_a_closed_child_unopened() {
+        let scratch = Scratch::new("drill-closed");
+        let gated = scratch.dir("Documents");
+        fs::write(gated.join("secret.bin"), vec![0u8; 512 * 1024]).unwrap();
+        scratch.file("loose.bin", 64 * 1024);
+
+        let mut app = started(&["Home"]);
+        app.closed = vec![gated];
+        walked(&mut app, "scratch", scratch.path(), 0, Pressed::default());
+
+        let rows = labels(&app);
+        assert!(
+            rows.contains(&("Documents".to_string(), "unknown".to_string())),
+            "{rows:?}"
+        );
+        assert_eq!(app.denials().unattended, 1);
+    }
+
+    #[test]
+    fn a_drill_into_a_closed_directory_reads_nothing() {
+        let scratch = Scratch::new("drill-into-closed");
+        let gated = scratch.dir("Documents");
+        fs::write(gated.join("secret.bin"), vec![0u8; 64 * 1024]).unwrap();
+
+        let mut app = started(&["Home"]);
+        app.closed = vec![gated.clone()];
+        walked(&mut app, "Documents", &gated, 0, Pressed::default());
+
+        assert!(app.pane().items().is_empty(), "{:?}", labels(&app));
+        assert!(drawn(&app, 100, 12).contains("Full Disk Access"));
+    }
+
+    #[test]
+    fn a_rescan_leaves_a_closed_directory_unopened() {
+        let scratch = Scratch::new("rescan-closed");
+        let gated = scratch.dir("Documents");
+        fs::write(gated.join("secret.bin"), vec![0u8; 512 * 1024]).unwrap();
+        scratch.file("plain.bin", 64 * 1024);
+        let roots = vec![Root {
+            name: "Home".to_string(),
+            path: scratch.path().to_path_buf(),
+        }];
+
+        let mut app = blank(None);
+        app.closed = vec![gated];
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let audit = measure_volume(&mut app, &mut terminal, &roots, &[], &mut || {
+            Ok(Pressed::default())
+        })
+        .unwrap()
+        .expect("nothing stopped the walk");
+
+        assert!(audit.measured() < 512 * 1024, "{}", audit.measured());
+        assert!(audit.measured() >= 64 * 1024, "{}", audit.measured());
+        assert_eq!(audit.denied(Denial::Unattended), 1);
+    }
+
+    #[test]
     fn a_walked_directory_hands_the_next_level_down_its_own_children() {
         let scratch = Scratch::new("deep");
         let sub = scratch.dir("sub");
@@ -2372,7 +2452,7 @@ mod tests {
             matches!(app.pane().items()[0].down, Down::Children(_)),
             "the walk measured these, so the level below is a lookup"
         );
-        assert!(app.pane_mut().enter().is_none());
+        assert!(app.pane_mut().enter(&[]).is_none());
         assert_eq!(labels(&app)[0].0, "inner");
     }
 
@@ -2484,7 +2564,7 @@ mod tests {
             label: "named".into(),
             path: named,
         }];
-        let audit = audit::scan_with(&roots, &rules);
+        let audit = audit::scan_with(&roots, &rules, &[]);
         let measured = audit.measured();
 
         let mut app = blank(None);
@@ -2530,7 +2610,10 @@ mod tests {
             vec![("Rust".to_string(), "12 KB".to_string())]
         );
 
-        assert!(app.pane_mut().enter().is_none(), "a category needs no walk");
+        assert!(
+            app.pane_mut().enter(&[]).is_none(),
+            "a category needs no walk"
+        );
         assert_eq!(
             labels(&app),
             vec![
@@ -2685,7 +2768,7 @@ mod tests {
         walked(&mut app, "scratch", scratch.path(), 0, Pressed::default());
         assert_eq!(app.pane().breadcrumb(), "Where the space is > scratch");
 
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
         assert_eq!(
             app.pane().breadcrumb(),
             "Where the space is > scratch > sub"
@@ -2874,7 +2957,7 @@ mod tests {
         assert_eq!(row.name, "Other volumes");
         assert!(!row.drillable());
 
-        assert!(app.pane_mut().enter().is_none(), "nothing to walk");
+        assert!(app.pane_mut().enter(&[]).is_none(), "nothing to walk");
         assert_eq!(app.pane().stack.len(), 1, "Enter did not open a level");
         assert!(app.pane().at_top());
 
@@ -2888,7 +2971,7 @@ mod tests {
         app.toggle();
         cursor_on(&mut app, 3);
         assert_eq!(app.pane().selected().unwrap().name, "Other volumes");
-        assert!(app.pane_mut().enter().is_none());
+        assert!(app.pane_mut().enter(&[]).is_none());
         assert_eq!(app.pane().stack.len(), 1);
     }
 
@@ -2947,7 +3030,7 @@ mod tests {
         user_library.path = library;
 
         let mut app = cached(vec![home, user_library]);
-        app.pane_mut().enter();
+        app.pane_mut().enter(&[]);
 
         let drawn = body_of(&app, 100, 16);
         assert!(drawn.contains("elsewhere"), "{drawn}");

@@ -187,9 +187,8 @@ fn print_unreadable(audit: &Audit) {
     print_denial(
         audit,
         Denial::Unattended,
-        "The scheduled refresh leaves these closed: macOS asks before an app opens them, \
-         and nobody was there to answer. wsctl disk audit --no-cache from a terminal \
-         measures them:",
+        "Left closed: macOS asks before an app opens them. Full Disk Access for the \
+         terminal, or for wsctl in the scheduled refresh, measures them:",
     );
 }
 

@@ -73,13 +73,11 @@ pub fn plist_contents(label: &str, log: &Path) -> String {
         })
         .collect();
 
-    // `disk agent refresh` rather than `disk audit --no-cache`. The audit
-    // opens everything, and a logged-in user's tccd will put a dialog on the
-    // screen for the directories macOS gates, four times a day, with the scan
-    // hung behind it until somebody clicks. Neither the background domain nor
-    // a session-type limit stops that while the user is logged in, which is
-    // exactly when the refresh runs; the only thing that does is not opening
-    // those directories. The refresh leaves them closed and the cache says so.
+    // `disk agent refresh` rather than `disk audit --no-cache`. A logged-in user's tccd
+    // puts a dialog on the screen for each directory macOS gates, and neither
+    // the background domain nor a session-type limit stops that; the only
+    // thing that does is not opening those directories. Without Full Disk
+    // Access every walk leaves them closed and the cache says so.
     //
     // RunAtLoad is false on purpose. The scan takes minutes, and running it at
     // every login is exactly the cost this cache exists to avoid.

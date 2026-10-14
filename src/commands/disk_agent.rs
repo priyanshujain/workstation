@@ -45,7 +45,7 @@ pub fn refresh() -> Result<()> {
     let audit = report.to_audit();
     let denials = audit.denials();
     println!(
-        "{} refreshed in {}s: {} measured, {} left closed for a scan someone is present for, {} refused",
+        "{} refreshed in {}s: {} measured, {} left closed without Full Disk Access, {} refused",
         stamp(),
         started.elapsed().as_secs(),
         format_size(audit.measured()),

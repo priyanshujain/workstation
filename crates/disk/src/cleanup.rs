@@ -203,6 +203,24 @@ impl Target {
         }
     }
 
+    /// A target inside a directory left closed: unmeasured, and never cleaned.
+    pub fn closed(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        action: CleanAction,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            size: Size::Measured {
+                bytes: 0,
+                denials: Denials::one(crate::sweep::Denial::Unattended),
+            },
+            measure: Measure::Nothing,
+            action,
+        }
+    }
+
     /// A target nothing can size up front: what a command prunes is only known
     /// once it has run.
     pub fn unknown(
@@ -235,7 +253,12 @@ impl Target {
         &self.action
     }
 
+    /// A target that holds anything left closed is never touched: deleting it
+    /// opens the closed directory and raises the dialog the walk avoided.
     pub fn clean(&self) -> Result<u64, String> {
+        if self.size.denials().unattended > 0 {
+            return Err(format!("{} left closed: needs Full Disk Access", self.name));
+        }
         match &self.action {
             CleanAction::RemoveContents(path) => {
                 let size = dir_size(path);
@@ -332,8 +355,8 @@ fn rm_rf(path: &Path) -> Result<(), String> {
 /// Nothing here walks a tree, so the list is ready in milliseconds and a caller
 /// can draw it before measuring anything. There is no useful order yet either:
 /// sorting is the caller's job, once sizes start arriving.
-pub fn discover_all_targets() -> Vec<Target> {
-    let mut targets = platform::cleanup_targets();
+pub fn discover_all_targets(closed: &[PathBuf]) -> Vec<Target> {
+    let mut targets = platform::cleanup_targets(closed);
     push_cleanable(&mut targets, platform::cleanable_paths());
     targets
 }
@@ -418,6 +441,27 @@ pub(crate) fn files_by_extension_size(dir: &std::path::Path, ext: &str) -> u64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Discovery against the real home, with nothing under it opened.
+    fn home_closed() -> Vec<PathBuf> {
+        vec![dirs::home_dir().unwrap()]
+    }
+
+    #[test]
+    fn a_target_holding_something_left_closed_is_never_cleaned() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("keep.dmg");
+        fs::write(&file, b"x").unwrap();
+        let target = Target::closed(
+            "DMG installers",
+            "",
+            CleanAction::RemoveByExtension(dir.path().to_path_buf(), "dmg".into()),
+        );
+
+        assert_eq!(target.size().total(), None, "unmeasured, not empty");
+        assert!(target.clean().is_err());
+        assert!(file.exists());
+    }
 
     #[test]
     #[cfg(unix)]
@@ -593,7 +637,7 @@ mod tests {
     fn discovery_measures_nothing() {
         // The screen has to draw before any of this is walked, so discovery is
         // allowed to stat and nothing else.
-        let targets = discover_all_targets();
+        let targets = discover_all_targets(&home_closed());
         for target in &targets {
             match target.measure() {
                 Measure::Tree(_) | Measure::IdleChildren { .. } => assert_eq!(
@@ -831,7 +875,7 @@ mod tests {
         let derived = dirs::home_dir()
             .unwrap()
             .join("Library/Developer/Xcode/DerivedData");
-        let targets = discover_all_targets();
+        let targets = discover_all_targets(&home_closed());
         let rows: Vec<&str> = targets
             .iter()
             .filter(|t| emptied_dir(t.action()) == Some(&derived))
@@ -855,7 +899,7 @@ mod tests {
             .filter(|path| !cleanable.contains(path))
             .collect();
 
-        for target in discover_all_targets() {
+        for target in discover_all_targets(&home_closed()) {
             if let Some(path) = emptied_dir(target.action()) {
                 assert!(
                     !accounting_only.contains(path),
@@ -873,7 +917,7 @@ mod tests {
         // Named one by one so reintroducing any of them fails loudly. Emptying
         // a source tree or someone's Documents is data loss, not cleanup.
         let home = dirs::home_dir().unwrap();
-        let targets = discover_all_targets();
+        let targets = discover_all_targets(&home_closed());
 
         for relative in ["Documents", "dotfiles", "Desktop", "Downloads", "go/src"] {
             let path = home.join(relative);

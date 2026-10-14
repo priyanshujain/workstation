@@ -23,7 +23,10 @@ pub fn run(opts: Options) -> Result<()> {
     let roots = if opts.roots.is_empty() {
         default_roots()
     } else {
-        opts.roots.clone()
+        opts.roots
+            .iter()
+            .map(|r| std::path::absolute(r).unwrap_or_else(|_| r.clone()))
+            .collect()
     };
 
     if roots.is_empty() {
@@ -36,8 +39,12 @@ pub fn run(opts: Options) -> Result<()> {
         "  {}",
         style("Project Build Artifacts").bold().underlined().cyan()
     );
+    let closed = disk::platform::closed_paths();
     for root in &roots {
         println!("  {}", style(root.display()).dim());
+    }
+    for line in unmeasured_roots(&roots, &closed) {
+        println!("  {}", style(line).yellow());
     }
     println!();
 
@@ -50,7 +57,10 @@ pub fn run(opts: Options) -> Result<()> {
     }
 
     let (projects, source) = if custom_roots {
-        (disk::projects::discover(&roots, MAX_DEPTH), Source::Fresh)
+        (
+            disk::projects::discover(&roots, MAX_DEPTH, &closed),
+            Source::Fresh,
+        )
     } else {
         let (report, source) = report::load_or_refresh(&roots, MAX_DEPTH, opts.no_cache);
         (report.to_projects(), source)
@@ -287,4 +297,46 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     Ok(input.trim().eq_ignore_ascii_case("y"))
+}
+
+fn unmeasured_roots(roots: &[PathBuf], closed: &[PathBuf]) -> Vec<String> {
+    roots
+        .iter()
+        .filter(|root| disk::sweep::is_closed(root, closed))
+        .map(|root| {
+            format!(
+                "{} not scanned: give {} Full Disk Access to measure it",
+                root.display(),
+                disk::sweep::full_disk_access_app()
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_root_inside_a_closed_directory_is_reported_and_not_scanned() {
+        let home = tempfile::tempdir().unwrap();
+        let documents = home.path().join("Documents");
+        let inside = documents.join("app");
+        let open = home.path().join("Workspace/app");
+        for dir in [&inside, &open] {
+            std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+            std::fs::write(dir.join("package.json"), "{}").unwrap();
+            std::fs::write(dir.join("node_modules/x.js"), vec![0u8; 8192]).unwrap();
+        }
+        let roots = vec![inside, home.path().join("Workspace")];
+        let closed = vec![documents];
+
+        let lines = unmeasured_roots(&roots, &closed);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("Full Disk Access"), "{lines:?}");
+
+        let found = disk::projects::discover(&roots, MAX_DEPTH, &closed);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, open);
+    }
 }

@@ -50,9 +50,8 @@ pub enum Denial {
     /// Disk Access will help.
     Forbidden,
     /// Never tried. macOS puts a dialog on the screen before it lets a process
-    /// open this directory, and a scan nobody is sitting at has nobody to
-    /// answer it, so the walk left it closed. A scan somebody is present for
-    /// measures it.
+    /// without Full Disk Access open this directory, so the walk left it
+    /// closed. Granting Full Disk Access is what measures it.
     Unattended,
 }
 
@@ -262,6 +261,35 @@ impl Sweep {
     }
 }
 
+/// Every mount point, read from the kernel's mount table without touching any
+/// of them, so a walk can step over one before its stat brings it up.
+#[cfg(target_os = "macos")]
+fn mount_points() -> HashSet<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut buf: *mut libc::statfs = std::ptr::null_mut();
+    // SAFETY: getmntinfo points `buf` at `count` statfs records it owns and
+    // keeps alive until the next call; they are copied out before returning.
+    let count = unsafe { libc::getmntinfo(&mut buf, libc::MNT_NOWAIT) };
+    if count <= 0 || buf.is_null() {
+        return HashSet::new();
+    }
+    let mounts = unsafe { std::slice::from_raw_parts(buf, count as usize) };
+    mounts
+        .iter()
+        .map(|m| {
+            let name = unsafe { CStr::from_ptr(m.f_mntonname.as_ptr()) };
+            PathBuf::from(OsStr::from_bytes(name.to_bytes()))
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mount_points() -> HashSet<PathBuf> {
+    HashSet::new()
+}
+
 fn open_dir(dir: &Path) -> std::io::Result<ReadDir> {
     let started = Instant::now();
     let entries = std::fs::read_dir(dir);
@@ -408,20 +436,25 @@ fn same_inode(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Inside a closed directory counts as closed: opening it raises the same
+/// dialog.
+pub fn is_closed(path: &Path, closed: &[PathBuf]) -> bool {
+    closed.iter().any(|c| path.starts_with(c))
+}
+
 /// Walk every root once, charging each byte to at most one rule.
 pub fn sweep(roots: &[Root], rules: &[Rule]) -> Sweep {
-    sweep_unattended(roots, rules, &[])
+    sweep_gated(roots, rules, &[])
 }
 
 /// The same walk with `closed` left unopened, each recorded as
 /// [`Denial::Unattended`] so its bytes read as unknown rather than zero.
 ///
-/// This is the walk for a scan nobody is sitting at. Opening a directory
-/// macOS asks about first puts a dialog on the screen and blocks the open
-/// until somebody answers, so a scheduled scan that tries is a scan that
-/// nags, then hangs.
-pub fn sweep_unattended(roots: &[Root], rules: &[Rule], closed: &[PathBuf]) -> Sweep {
-    sweep_unattended_streaming(roots, rules, closed, &mut |_| Flow::Continue)
+/// Opening a directory macOS asks about first puts a dialog on the screen and
+/// blocks the open until somebody answers, so every caller passes
+/// [`crate::platform::closed_paths`] here.
+pub fn sweep_gated(roots: &[Root], rules: &[Rule], closed: &[PathBuf]) -> Sweep {
+    sweep_streaming(roots, rules, closed, &mut |_| Flow::Continue)
         .expect("a sweep that is never cancelled always finishes")
 }
 
@@ -430,14 +463,6 @@ pub fn sweep_unattended(roots: &[Root], rules: &[Rule], closed: &[PathBuf]) -> S
 /// `on_progress` runs on the calling thread, never on a worker, so it can draw
 /// to the terminal without a lock. `None` means the caller cancelled.
 pub fn sweep_streaming(
-    roots: &[Root],
-    rules: &[Rule],
-    on_progress: &mut dyn FnMut(Progress) -> Flow,
-) -> Option<Sweep> {
-    sweep_unattended_streaming(roots, rules, &[], on_progress)
-}
-
-pub fn sweep_unattended_streaming(
     roots: &[Root],
     rules: &[Rule],
     closed: &[PathBuf],
@@ -450,9 +475,10 @@ pub fn sweep_unattended_streaming(
         .collect();
     let skip: HashSet<&Path> = roots.iter().map(|r| r.path.as_path()).collect();
     let closed: HashSet<&Path> = closed.iter().map(PathBuf::as_path).collect();
+    let mounts = mount_points();
     let seen = Mutex::new(HashSet::new());
 
-    let units = plan(roots, &by_path, &closed, &seen);
+    let units = plan(roots, &by_path, &closed, &mounts, &seen);
 
     // Loose files are already measured, so a root with nothing but files is
     // final before a single worker starts.
@@ -500,7 +526,7 @@ pub fn sweep_unattended_streaming(
             let tx = tx.clone();
             let queue = &queue;
             let cancel = &cancel;
-            let (by_path, skip, closed, seen) = (&by_path, &skip, &closed, &seen);
+            let (by_path, skip, closed, mounts, seen) = (&by_path, &skip, &closed, &mounts, &seen);
             scope.spawn(move || {
                 while !cancel.load(Ordering::Relaxed) {
                     let Some(job) = queue.lock().unwrap().pop() else {
@@ -510,6 +536,7 @@ pub fn sweep_unattended_streaming(
                         rules: by_path,
                         skip,
                         closed,
+                        mounts,
                         seen,
                         cancel,
                         dev: job.dev,
@@ -618,6 +645,7 @@ fn plan(
     roots: &[Root],
     by_path: &HashMap<&Path, usize>,
     closed: &HashSet<&Path>,
+    mounts: &HashSet<PathBuf>,
     seen: &Mutex<HashSet<(u64, u64)>>,
 ) -> Plan {
     let mut jobs = Vec::new();
@@ -629,6 +657,12 @@ fn plan(
             rule_sizes: vec![0; by_path.len()],
             unreadable: Vec::new(),
         };
+
+        if closed.iter().any(|c| root.path.starts_with(c)) {
+            seed.unreadable.push(unattended(&root.path));
+            seeds.push(seed);
+            continue;
+        }
 
         let meta = match std::fs::metadata(&root.path) {
             Ok(meta) => meta,
@@ -645,24 +679,31 @@ fn plan(
         let dev = meta.dev();
         let inherited = by_path.get(root.path.as_path()).copied();
 
-        if closed.contains(root.path.as_path()) {
-            seed.unreadable.push(unattended(&root.path));
-            seeds.push(seed);
-            continue;
-        }
-
         match open_dir(&root.path) {
             Err(e) => seed.unreadable.extend(refusal(&root.path, &e)),
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
+                    if mounts.contains(&path) {
+                        continue;
+                    }
+                    let rule = by_path.get(path.as_path()).copied().or(inherited);
+                    let is_root = roots.iter().any(|r| r.path == path);
+                    if closed.contains(path.as_path()) && !is_root {
+                        jobs.push(Job {
+                            root: index,
+                            path,
+                            rule,
+                            dev,
+                        });
+                        continue;
+                    }
                     let Ok(meta) = stat(&entry) else { continue };
                     if meta.dev() != dev {
                         continue;
                     }
-                    let rule = by_path.get(path.as_path()).copied().or(inherited);
 
-                    if meta.is_dir() && !roots.iter().any(|r| r.path == path) {
+                    if meta.is_dir() && !is_root {
                         jobs.push(Job {
                             root: index,
                             path,
@@ -792,6 +833,8 @@ struct Walker<'a> {
     /// Never opened. Checked before every `read_dir`, because the dialog is
     /// raised by the open itself and nothing after it can take it back.
     closed: &'a HashSet<&'a Path>,
+    /// Never stat'd: stat on a mount point is what brings it up.
+    mounts: &'a HashSet<PathBuf>,
     seen: &'a Mutex<HashSet<(u64, u64)>>,
     cancel: &'a AtomicBool,
     dev: u64,
@@ -803,15 +846,15 @@ impl Walker<'_> {
     /// Bytes under `dir` including `dir` itself, with each byte charged to
     /// `rule` unless something deeper claims it.
     fn walk(&mut self, dir: &Path, rule: Option<usize>) -> u64 {
+        if self.closed.contains(dir) {
+            self.unreadable.push(unattended(dir));
+            return 0;
+        }
+
         let mut total = match std::fs::symlink_metadata(dir) {
             Ok(meta) => self.charge_to(&meta, rule),
             Err(_) => 0,
         };
-
-        if self.closed.contains(dir) {
-            self.unreadable.push(unattended(dir));
-            return total;
-        }
 
         let entries = match open_dir(dir) {
             Ok(entries) => entries,
@@ -832,12 +875,19 @@ impl Walker<'_> {
 
         for entry in entries.flatten() {
             let path = entry.path();
+            if self.mounts.contains(&path) {
+                continue;
+            }
+            let rule = self.rules.get(path.as_path()).copied().or(rule);
+            if self.closed.contains(path.as_path()) && !self.skip.contains(path.as_path()) {
+                total += self.walk(&path, rule);
+                continue;
+            }
+
             let Ok(meta) = stat(&entry) else { continue };
             if meta.dev() != self.dev {
                 continue;
             }
-
-            let rule = self.rules.get(path.as_path()).copied().or(rule);
 
             if meta.is_dir() {
                 if self.skip.contains(path.as_path()) {
@@ -1155,7 +1205,7 @@ mod tests {
         fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
         fs::write(open.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
 
-        let swept = sweep_unattended(
+        let swept = sweep_gated(
             &[root("test", dir.path())],
             &[],
             std::slice::from_ref(&gated),
@@ -1191,7 +1241,7 @@ mod tests {
         fs::write(child.join("plain.bin"), vec![0u8; 64 * 1024]).unwrap();
         fs::write(gated.join("secret.bin"), vec![0u8; 256 * 1024]).unwrap();
 
-        let swept = sweep_unattended(
+        let swept = sweep_gated(
             &[root("test", dir.path())],
             &[],
             std::slice::from_ref(&gated),
@@ -1210,7 +1260,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("f.bin"), vec![0u8; 64 * 1024]).unwrap();
 
-        let swept = sweep_unattended(
+        let swept = sweep_gated(
             &[root("gated", dir.path())],
             &[],
             &[dir.path().to_path_buf()],
@@ -1219,6 +1269,38 @@ mod tests {
         assert_eq!(swept.total(), 0);
         assert_eq!(swept.denials().unattended, 1);
         assert_eq!(swept.roots[0].unreadable[0].denial, Denial::Unattended);
+    }
+
+    #[test]
+    fn a_closed_entry_is_never_stat_ed() {
+        // A stat would see a file and count its bytes; skipping it before the
+        // stat leaves it unknown, at the top and one level down.
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("child");
+        fs::create_dir(&child).unwrap();
+        let top = dir.path().join("Documents");
+        let deep = child.join("Documents");
+        fs::write(&top, vec![0u8; 256 * 1024]).unwrap();
+        fs::write(&deep, vec![0u8; 256 * 1024]).unwrap();
+
+        let swept = sweep_gated(&[root("test", dir.path())], &[], &[top, deep]);
+
+        assert!(swept.total() < 256 * 1024, "{}", swept.total());
+        assert_eq!(swept.denials().unattended, 2);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_mount_table_is_read_without_touching_a_mount() {
+        assert!(mount_points().contains(Path::new("/")));
+    }
+
+    #[test]
+    fn a_path_inside_a_closed_directory_is_closed() {
+        let closed = [PathBuf::from("/home/u/Documents")];
+        assert!(is_closed(Path::new("/home/u/Documents"), &closed));
+        assert!(is_closed(Path::new("/home/u/Documents/app"), &closed));
+        assert!(!is_closed(Path::new("/home/u/Documents2"), &closed));
     }
 
     #[test]
@@ -1308,7 +1390,7 @@ mod tests {
         }
 
         let mut events = Vec::new();
-        let result = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+        let result = sweep_streaming(&[root("test", dir.path())], &[], &[], &mut |p| {
             events.push(p);
             Flow::Continue
         });
@@ -1344,7 +1426,7 @@ mod tests {
         fs::write(dir.path().join("only.bin"), vec![0u8; 64 * 1024]).unwrap();
 
         let mut events = Vec::new();
-        let swept = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+        let swept = sweep_streaming(&[root("test", dir.path())], &[], &[], &mut |p| {
             events.push(p);
             Flow::Continue
         })
@@ -1379,7 +1461,7 @@ mod tests {
         }
 
         let mut done = Vec::new();
-        let swept = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+        let swept = sweep_streaming(&[root("test", dir.path())], &[], &[], &mut |p| {
             if let Progress::RootDone { bytes, .. } = p {
                 done.push(bytes);
             }
@@ -1407,7 +1489,7 @@ mod tests {
         fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
 
         let mut done = Vec::new();
-        let swept = sweep_streaming(&[root("inside", &inside)], &[], &mut |p| {
+        let swept = sweep_streaming(&[root("inside", &inside)], &[], &[], &mut |p| {
             if let Progress::RootDone { denials, bytes, .. } = p {
                 done.push((denials, bytes));
             }
@@ -1442,7 +1524,7 @@ mod tests {
         }
 
         let mut seen = 0;
-        let result = sweep_streaming(&[root("test", dir.path())], &[], &mut |p| {
+        let result = sweep_streaming(&[root("test", dir.path())], &[], &[], &mut |p| {
             if matches!(p, Progress::Scanned { .. }) {
                 seen += 1;
                 if seen == 1 {

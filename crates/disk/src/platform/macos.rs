@@ -281,10 +281,14 @@ pub fn cleanable_paths() -> Vec<(&'static str, &'static str, PathBuf)> {
 /// what used to leave the cleanup screen blank for tens of seconds. Each target
 /// says how it wants to be measured instead and the caller does the walking,
 /// which lets it draw the list first and fill the numbers in.
-pub fn cleanup_targets() -> Vec<Target> {
+pub fn cleanup_targets(closed: &[PathBuf]) -> Vec<Target> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
+    cleanup_targets_in(&home, closed)
+}
+
+fn cleanup_targets_in(home: &Path, closed: &[PathBuf]) -> Vec<Target> {
     let mut targets = Vec::new();
 
     let brew_cache = home.join("Library/Caches/Homebrew");
@@ -410,30 +414,62 @@ pub fn cleanup_targets() -> Vec<Target> {
         ));
     }
 
-    // One readdir, no recursion: this one is cheap enough to answer up front.
     let downloads = home.join("Downloads");
-    targets.push(Target::new(
-        "DMG installers",
-        "Downloaded .dmg files in ~/Downloads",
-        crate::cleanup::files_by_extension_size(&downloads, "dmg"),
-        CleanAction::RemoveByExtension(downloads, "dmg".into()),
-    ));
+    let action = CleanAction::RemoveByExtension(downloads.clone(), "dmg".into());
+    if crate::sweep::is_closed(&downloads, closed) {
+        targets.push(Target::closed(
+            "DMG installers",
+            "Downloaded .dmg files in ~/Downloads",
+            action,
+        ));
+    } else {
+        // One readdir, no recursion: this one is cheap enough to answer up front.
+        targets.push(Target::new(
+            "DMG installers",
+            "Downloaded .dmg files in ~/Downloads",
+            crate::cleanup::files_by_extension_size(&downloads, "dmg"),
+            action,
+        ));
+    }
 
     targets
 }
 
-/// Directories macOS asks the user about before it lets a process open them.
-///
-/// The grant that covers all of these at once is Full Disk Access, and it
-/// attaches to the terminal application, never to `wsctl`. Run from anywhere
-/// but a granted terminal, the first open of each directory here puts a dialog
-/// on the screen and blocks until somebody answers it. Everything else macOS
-/// protects refuses silently with EPERM and needs no list: the walk simply
-/// records the refusal.
-pub fn consent_gated_paths() -> Vec<PathBuf> {
+/// Whether this process holds Full Disk Access. The probe opens a directory
+/// only Full Disk Access opens. macOS never asks about that grant, so without
+/// it the open fails with EPERM and no dialog appears.
+pub fn has_full_disk_access() -> bool {
+    dirs::home_dir().is_some_and(|home| holds_full_disk_access(&home))
+}
+
+fn holds_full_disk_access(home: &Path) -> bool {
+    std::fs::read_dir(home.join("Library/Application Support/com.apple.TCC")).is_ok()
+}
+
+/// What every walk leaves unopened: nothing with Full Disk Access, every
+/// consent-gated directory without it.
+pub fn closed_paths() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
+    closed_paths_in(&home, holds_full_disk_access(&home))
+}
+
+fn closed_paths_in(home: &Path, full_disk_access: bool) -> Vec<PathBuf> {
+    if full_disk_access {
+        Vec::new()
+    } else {
+        consent_gated_paths_in(home)
+    }
+}
+
+/// Directories macOS asks the user about before it lets a process open them.
+///
+/// The grant that covers all of these at once is Full Disk Access. Without it,
+/// the first open of each directory here puts a dialog on the screen and
+/// blocks until somebody answers it. Everything else macOS protects refuses
+/// silently with EPERM and needs no list: the walk simply records the refusal.
+fn consent_gated_paths_in(home: &Path) -> Vec<PathBuf> {
     let folders = [
         "Desktop",
         "Documents",
@@ -448,6 +484,14 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
         "Library/Application Support/AddressBook",
         "Library/Calendars",
         "Library/Reminders",
+        "Library/Mail",
+        "Library/Messages",
+        "Library/Safari",
+        "Library/Metadata",
+        "Library/Suggestions",
+        "Library/HomeKit",
+        "Library/Biome",
+        "Library/Autosave Information",
         // The Photos and media libraries are asked about as Photos and as
         // Media Library. Their bundle names vary by version and by what is set
         // up, so the folders holding them stay closed as a whole.
@@ -458,17 +502,21 @@ pub fn consent_gated_paths() -> Vec<PathBuf> {
         "Library/Photos",
     ];
     let mut paths: Vec<PathBuf> = folders.iter().map(|p| home.join(p)).collect();
-    paths.extend(media_agent_dirs(&home));
+    paths.extend(children_named(
+        &home.join("Library/Application Support"),
+        &["com.apple."],
+    ));
+    paths.extend(media_agent_dirs(home));
     paths
 }
 
-/// The Music and TV apps keep working state under `~/Library/Caches` and
-/// `~/Library/Application Support`, and opening one of those bundle directories
-/// raises the Media Library dialog even though it is nowhere near `~/Music`.
-/// The bundle names drift between releases and grow new siblings, so rather
-/// than list them this reads the two parents, which is itself never gated, and
-/// closes every child whose name starts a media agent's bundle id. A new one
-/// next release is caught without a code change.
+/// The Music and TV apps keep working state under `~/Library/Caches`, and
+/// opening one of those bundle directories raises the Media Library dialog
+/// even though it is nowhere near `~/Music`. The bundle names drift between
+/// releases and grow new siblings, so rather than list them this reads the
+/// parent, which is itself never gated, and closes every child whose name
+/// starts a media agent's bundle id. Every `com.apple.*` under Application
+/// Support is closed the same way, without the prefix list.
 fn media_agent_dirs(home: &Path) -> Vec<PathBuf> {
     const PREFIXES: [&str; 8] = [
         "com.apple.Music",
@@ -480,24 +528,22 @@ fn media_agent_dirs(home: &Path) -> Vec<PathBuf> {
         "com.apple.AppleMediaServices",
         "com.apple.mediaanalysisd",
     ];
-    let parents = [
-        home.join("Library/Caches"),
-        home.join("Library/Application Support"),
-    ];
-    let mut dirs = Vec::new();
-    for parent in parents {
-        let Ok(entries) = std::fs::read_dir(&parent) else {
-            continue;
-        };
-        for entry in entries.flatten() {
+    children_named(&home.join("Library/Caches"), &PREFIXES)
+}
+
+fn children_named(parent: &Path, prefixes: &[&str]) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if PREFIXES.iter().any(|p| name.starts_with(p)) {
-                dirs.push(entry.path());
-            }
-        }
-    }
-    dirs
+            prefixes.iter().any(|p| name.starts_with(p))
+        })
+        .map(|entry| entry.path())
+        .collect()
 }
 
 fn claude_scratch_dir() -> Option<PathBuf> {
@@ -536,13 +582,75 @@ mod tests {
     fn every_consent_gated_path_is_absolute_and_inside_home() {
         // These are compared to walked paths by equality, so a relative one
         // would never match and its dialog would come straight back.
-        let home = dirs::home_dir().unwrap();
-        let paths = consent_gated_paths();
+        let home = tempfile::tempdir().unwrap();
+        let paths = consent_gated_paths_in(home.path());
         assert!(!paths.is_empty());
         for path in &paths {
             assert!(path.is_absolute(), "{}", path.display());
-            assert!(path.starts_with(&home), "{}", path.display());
+            assert!(path.starts_with(home.path()), "{}", path.display());
         }
+    }
+
+    #[test]
+    fn full_disk_access_opens_everything_and_its_absence_closes_the_gated_paths() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(closed_paths_in(home.path(), true).is_empty());
+        assert_eq!(
+            closed_paths_in(home.path(), false),
+            consent_gated_paths_in(home.path())
+        );
+    }
+
+    #[test]
+    fn the_probe_reads_the_tcc_directory_and_nothing_else() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!holds_full_disk_access(home.path()));
+        std::fs::create_dir_all(
+            home.path()
+                .join("Library/Application Support/com.apple.TCC"),
+        )
+        .unwrap();
+        assert!(holds_full_disk_access(home.path()));
+    }
+
+    #[test]
+    fn cleanup_measures_downloads_only_when_it_is_open() {
+        let home = tempfile::tempdir().unwrap();
+        let downloads = home.path().join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::write(downloads.join("x.dmg"), vec![0u8; 4096]).unwrap();
+        let dmg = |targets: Vec<Target>| {
+            targets
+                .into_iter()
+                .find(|t| t.name == "DMG installers")
+                .unwrap()
+        };
+
+        let open = dmg(cleanup_targets_in(home.path(), &[]));
+        assert_eq!(open.size().total(), Some(4096));
+
+        let closed = dmg(cleanup_targets_in(
+            home.path(),
+            &closed_paths_in(home.path(), false),
+        ));
+        assert_eq!(closed.size().total(), None);
+        assert_eq!(closed.size().denials().unattended, 1);
+        assert!(closed.clean().is_err());
+        assert!(downloads.join("x.dmg").exists());
+    }
+
+    #[test]
+    fn every_apple_directory_under_application_support_is_closed() {
+        let home = tempfile::tempdir().unwrap();
+        let support = home.path().join("Library/Application Support");
+        for name in ["com.apple.sharedfilelist", "com.apple.NewThing", "Code"] {
+            std::fs::create_dir_all(support.join(name)).unwrap();
+        }
+
+        let closed = consent_gated_paths_in(home.path());
+        assert!(closed.contains(&support.join("com.apple.sharedfilelist")));
+        assert!(closed.contains(&support.join("com.apple.NewThing")));
+        assert!(!closed.contains(&support.join("Code")), "{closed:?}");
     }
 
     #[test]
@@ -578,8 +686,8 @@ mod tests {
 
     #[test]
     fn the_folders_everyone_is_asked_about_are_listed() {
-        let home = dirs::home_dir().unwrap();
-        let paths = consent_gated_paths();
+        let home = tempfile::tempdir().unwrap();
+        let paths = consent_gated_paths_in(home.path());
         for folder in [
             "Desktop",
             "Documents",
@@ -587,8 +695,21 @@ mod tests {
             "Pictures",
             "Music",
             "Movies",
+            "Library/Containers",
+            "Library/Group Containers",
+            "Library/Mail",
+            "Library/Messages",
+            "Library/Safari",
+            "Library/Metadata",
+            "Library/Suggestions",
+            "Library/HomeKit",
+            "Library/Biome",
+            "Library/Autosave Information",
         ] {
-            assert!(paths.contains(&home.join(folder)), "{folder} missing");
+            assert!(
+                paths.contains(&home.path().join(folder)),
+                "{folder} missing"
+            );
         }
     }
 }

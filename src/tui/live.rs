@@ -6,7 +6,7 @@
 //! account for them. The screens differ in what they draw, not in this.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use disk::sweep::{Denial, Root};
@@ -35,7 +35,17 @@ pub struct Children {
 /// A symlink is a loose entry whatever it points at: walking one would bill
 /// this directory for bytes that live elsewhere, and bill them twice if the
 /// target is also on the volume.
-pub fn children_as_roots(dir: &Path) -> Children {
+///
+/// Nothing in `closed` is opened or stat'd: a closed `dir` is denied as
+/// unattended, and a closed child is handed on as a root for the sweep to
+/// leave closed.
+pub fn children_as_roots(dir: &Path, closed: &[PathBuf]) -> Children {
+    if disk::sweep::is_closed(dir, closed) {
+        return Children {
+            denied: Some(Denial::Unattended),
+            ..Children::default()
+        };
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -50,6 +60,13 @@ pub fn children_as_roots(dir: &Path) -> Children {
     let mut seen = HashSet::new();
 
     for entry in entries.flatten() {
+        if closed.contains(&entry.path()) {
+            children.roots.push(Root {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                path: entry.path(),
+            });
+            continue;
+        }
         // `DirEntry::metadata` is `lstat` on unix, so a symlink describes
         // itself rather than its target.
         let Ok(meta) = entry.metadata() else { continue };
@@ -162,7 +179,7 @@ mod tests {
         let sub = scratch.dir("sub");
         scratch.file("loose.bin", 8 * 1024);
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert_eq!(names(&children), vec!["sub".to_string()]);
         assert_eq!(children.roots[0].path, sub);
@@ -174,7 +191,7 @@ mod tests {
     fn an_empty_readable_directory_is_empty_rather_than_refused() {
         let scratch = Scratch::new("empty");
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_files, 0);
@@ -192,7 +209,7 @@ mod tests {
             scratch.dir(name);
         }
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert_eq!(names(&children), vec!["alpha", "mike", "zulu"]);
     }
@@ -202,7 +219,7 @@ mod tests {
         let scratch = Scratch::new("naming");
         let sub = scratch.dir("Application Support");
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert_eq!(children.roots[0].name, "Application Support");
         assert_eq!(children.roots[0].path, sub);
@@ -215,7 +232,7 @@ mod tests {
         scratch.file("small.bin", 100);
         scratch.file("also-small.bin", 1000);
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert_eq!(children.loose_files, 2);
         // Two files under a block each still occupy a block each: apparent
@@ -234,7 +251,7 @@ mod tests {
         file.set_len(512 * 1024 * 1024).unwrap();
         drop(file);
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert!(
             children.loose_bytes < 1024 * 1024,
@@ -249,7 +266,7 @@ mod tests {
         let original = scratch.file("original.bin", 512 * 1024);
         fs::hard_link(&original, scratch.path().join("clone.bin")).unwrap();
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert_eq!(children.loose_files, 2);
         assert!(
@@ -268,7 +285,7 @@ mod tests {
         elsewhere.file("huge.bin", 4 * 1024 * 1024);
         symlink(elsewhere.path(), scratch.path().join("link")).unwrap();
 
-        let children = children_as_roots(scratch.path());
+        let children = children_as_roots(scratch.path(), &[]);
 
         assert!(
             children.roots.is_empty(),
@@ -292,7 +309,7 @@ mod tests {
         fs::write(locked.join("secret.bin"), vec![0u8; 64 * 1024]).unwrap();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let children = children_as_roots(&locked);
+        let children = children_as_roots(&locked, &[]);
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
 
         assert!(children.roots.is_empty());
@@ -304,8 +321,36 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_directory_is_never_opened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Opening it would answer Forbidden, so Unattended proves it was not.
+        let scratch = Scratch::new("closed-dir");
+        let gated = scratch.dir("Documents");
+        fs::set_permissions(&gated, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let children = children_as_roots(&gated, std::slice::from_ref(&gated));
+        let _ = fs::set_permissions(&gated, fs::Permissions::from_mode(0o755));
+
+        assert_eq!(children.denied, Some(Denial::Unattended));
+        assert!(children.roots.is_empty());
+    }
+
+    #[test]
+    fn a_closed_child_is_handed_to_the_sweep_without_a_stat() {
+        let scratch = Scratch::new("closed-child");
+        let gated = scratch.file("Documents", 8 * 1024);
+
+        let children = children_as_roots(scratch.path(), std::slice::from_ref(&gated));
+
+        assert_eq!(children.loose_files, 0, "a stat would have made it a file");
+        assert_eq!(children.roots.len(), 1);
+        assert_eq!(children.roots[0].path, gated);
+    }
+
+    #[test]
     fn a_missing_directory_is_not_a_refusal() {
-        let children = children_as_roots(Path::new("/this/path/does/not/exist/xyz"));
+        let children = children_as_roots(Path::new("/this/path/does/not/exist/xyz"), &[]);
 
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_bytes, 0);
@@ -318,7 +363,7 @@ mod tests {
         let scratch = Scratch::new("not-a-dir");
         let file = scratch.file("plain.bin", 8 * 1024);
 
-        let children = children_as_roots(&file);
+        let children = children_as_roots(&file, &[]);
 
         assert!(children.roots.is_empty());
         assert_eq!(children.loose_files, 0);

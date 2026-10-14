@@ -134,11 +134,12 @@ pub const MAX_DEPTH: usize = 8;
 /// Projects without artifacts are skipped: there is nothing to clean and
 /// listing them only buries the ones that matter. A directory can yield more
 /// than one project when markers for different toolchains sit side by side.
-pub fn discover(roots: &[PathBuf], max_depth: usize) -> Vec<Project> {
+/// Nothing in `closed` is opened, at any depth.
+pub fn discover(roots: &[PathBuf], max_depth: usize, closed: &[PathBuf]) -> Vec<Project> {
     let mut found = Vec::new();
 
     for root in roots {
-        if !root.is_dir() {
+        if crate::sweep::is_closed(root, closed) || !root.is_dir() {
             continue;
         }
 
@@ -150,6 +151,9 @@ pub fn discover(roots: &[PathBuf], max_depth: usize) -> Vec<Project> {
                 if e.depth() == 0 {
                     return true;
                 }
+                if closed.iter().any(|c| c == e.path()) {
+                    return false;
+                }
                 let name = e.file_name().to_string_lossy();
                 !(e.file_type().is_dir() && PRUNE.contains(&name.as_ref()))
             });
@@ -159,7 +163,7 @@ pub fn discover(roots: &[PathBuf], max_depth: usize) -> Vec<Project> {
                 continue;
             }
             for kind in ALL_KINDS {
-                if let Some(project) = classify(entry.path(), kind) {
+                if let Some(project) = classify(entry.path(), kind, closed) {
                     found.push(project);
                 }
             }
@@ -170,7 +174,7 @@ pub fn discover(roots: &[PathBuf], max_depth: usize) -> Vec<Project> {
     found
 }
 
-fn classify(dir: &Path, kind: ProjectKind) -> Option<Project> {
+fn classify(dir: &Path, kind: ProjectKind, closed: &[PathBuf]) -> Option<Project> {
     if !kind.markers().iter().any(|m| dir.join(m).is_file()) {
         return None;
     }
@@ -179,7 +183,7 @@ fn classify(dir: &Path, kind: ProjectKind) -> Option<Project> {
         .artifact_dirs()
         .iter()
         .map(|name| dir.join(name))
-        .filter(|p| p.is_dir())
+        .filter(|p| !closed.contains(p) && p.is_dir())
         .map(|path| {
             let size = dir_size(&path);
             Artifact { path, size }
@@ -192,7 +196,7 @@ fn classify(dir: &Path, kind: ProjectKind) -> Option<Project> {
     }
 
     Some(Project {
-        last_active: newest_source_mtime(dir),
+        last_active: newest_source_mtime(dir, closed),
         root: dir.to_path_buf(),
         kind,
         artifacts,
@@ -204,7 +208,7 @@ fn classify(dir: &Path, kind: ProjectKind) -> Option<Project> {
 /// Capped because the answer only needs to be good enough to bucket a project
 /// as "touched recently" or not, and an uncapped walk of a large monorepo
 /// costs far more than that answer is worth.
-fn newest_source_mtime(dir: &Path) -> Option<SystemTime> {
+fn newest_source_mtime(dir: &Path, closed: &[PathBuf]) -> Option<SystemTime> {
     const MAX_ENTRIES: usize = 20_000;
 
     let walk = WalkDir::new(dir)
@@ -214,6 +218,9 @@ fn newest_source_mtime(dir: &Path) -> Option<SystemTime> {
         .filter_entry(|e| {
             if e.depth() == 0 {
                 return true;
+            }
+            if closed.iter().any(|c| c == e.path()) {
+                return false;
             }
             let name = e.file_name().to_string_lossy();
             !(e.file_type().is_dir() && PRUNE.contains(&name.as_ref()))
@@ -248,7 +255,7 @@ mod tests {
         write(&root.join("src/main.rs"), 20);
         write(&root.join("target/debug/blob.rlib"), 5000);
 
-        let found = discover(&[dir.path().to_path_buf()], 6);
+        let found = discover(&[dir.path().to_path_buf()], 6, &[]);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, ProjectKind::Cargo);
@@ -263,7 +270,7 @@ mod tests {
         write(&root.join("Cargo.toml"), 10);
         write(&root.join("src/main.rs"), 20);
 
-        assert!(discover(&[dir.path().to_path_buf()], 6).is_empty());
+        assert!(discover(&[dir.path().to_path_buf()], 6, &[]).is_empty());
     }
 
     #[test]
@@ -280,7 +287,7 @@ mod tests {
         write(&inner.join("src/lib.rs"), 20);
         write(&inner.join("target/debug/blob.rlib"), 9000);
 
-        let found = discover(&[dir.path().to_path_buf()], 6);
+        let found = discover(&[dir.path().to_path_buf()], 6, &[]);
 
         let kinds: Vec<ProjectKind> = found.iter().map(|p| p.kind).collect();
         assert!(kinds.contains(&ProjectKind::Cargo), "got {kinds:?}");
@@ -302,7 +309,7 @@ mod tests {
         write(&root.join("node_modules/dep/Cargo.toml"), 10);
         write(&root.join("node_modules/dep/target/x.rlib"), 4000);
 
-        let found = discover(&[dir.path().to_path_buf()], 8);
+        let found = discover(&[dir.path().to_path_buf()], 8, &[]);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, ProjectKind::Node);
@@ -316,7 +323,7 @@ mod tests {
         write(&root.join("src/main.rs"), 20);
         write(&root.join("target/debug/blob.rlib"), 5000);
 
-        let found = discover(&[dir.path().to_path_buf()], 6);
+        let found = discover(&[dir.path().to_path_buf()], 6, &[]);
         let project = &found[0];
 
         // Sources were just written, so zero days idle right now.
@@ -347,10 +354,24 @@ mod tests {
         // Artifact written now, long after the sources.
         write(&root.join("target/debug/blob.rlib"), 5000);
 
-        let found = discover(&[dir.path().to_path_buf()], 6);
+        let found = discover(&[dir.path().to_path_buf()], 6, &[]);
         let idle = found[0].idle_days(SystemTime::now()).unwrap();
 
         assert!(idle >= 29, "expected ~30 days idle, got {idle}");
+    }
+
+    #[test]
+    fn a_project_inside_a_closed_directory_is_never_opened() {
+        let dir = tempdir().unwrap();
+        let gated = dir.path().join("Documents");
+        write(&gated.join("app/package.json"), 2);
+        write(&gated.join("app/node_modules/x.js"), 8192);
+        write(&dir.path().join("open/package.json"), 2);
+        write(&dir.path().join("open/node_modules/x.js"), 8192);
+
+        let found = discover(&[dir.path().to_path_buf()], 6, &[gated]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, dir.path().join("open"));
     }
 
     #[test]

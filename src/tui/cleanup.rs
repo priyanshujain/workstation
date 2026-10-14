@@ -53,6 +53,8 @@ struct App {
     quit: bool,
     results: Vec<CleanResult>,
     done_scroll: u16,
+    /// Left unopened by every walk from this screen.
+    closed: Vec<PathBuf>,
 }
 
 struct MarkedPath {
@@ -133,6 +135,7 @@ impl App {
             quit: false,
             results: Vec::new(),
             done_scroll: 0,
+            closed: Vec::new(),
         }
     }
 
@@ -441,7 +444,7 @@ fn denial_advice(denial: Denial) -> &'static str {
         Denial::Protected => "Grant the terminal Full Disk Access to read it",
         Denial::Forbidden => "Unix permissions deny it, reading it needs sudo",
         Denial::Unattended => {
-            "Left closed: macOS asks before an app opens it, so measure it from here"
+            "Left closed: macOS asks before opening it, Full Disk Access measures it"
         }
     }
 }
@@ -650,7 +653,9 @@ fn clone_action(action: &CleanAction) -> CleanAction {
 }
 
 pub fn run() -> Result<()> {
-    let mut app = App::new(discover_all_targets());
+    let closed = disk::platform::closed_paths();
+    let mut app = App::new(discover_all_targets(&closed));
+    app.closed = closed;
     super::run(|terminal| {
         measure_top(&mut app, terminal)?;
         event_loop(&mut app, terminal)
@@ -696,10 +701,11 @@ fn idle_targets(targets: &[Target]) -> Vec<usize> {
 /// Measure one group of non-overlapping targets. `false` means the user stopped.
 fn sweep_group(app: &mut App, terminal: &mut Term, group: &[(usize, Root)]) -> Result<bool> {
     let roots: Vec<Root> = group.iter().map(|(_, root)| root.clone()).collect();
+    let closed = app.closed.clone();
     let mut throttle = Throttle::new(live::REDRAW);
     let mut failure: Option<anyhow::Error> = None;
 
-    let swept = sweep::sweep_streaming(&roots, &[], &mut |progress| {
+    let swept = sweep::sweep_streaming(&roots, &[], &closed, &mut |progress| {
         match progress {
             Progress::Started { .. } | Progress::Tick => {}
             Progress::Scanned {
@@ -956,7 +962,8 @@ fn drill_in(app: &mut App, terminal: &mut Term) -> Result<()> {
 /// before the first walk starts, so the view the user asked for is what fills
 /// in, and Esc leaves with whatever has been counted.
 fn measure_dir(app: &mut App, terminal: &mut Term, dir: &Path) -> Result<()> {
-    let children = live::children_as_roots(dir);
+    let closed = app.closed.clone();
+    let children = live::children_as_roots(dir, &closed);
     let roots = children.roots.clone();
     // Directories occupy the first `roots.len()` entries in the same order, so
     // a root index from the sweep is an entry index here.
@@ -969,7 +976,9 @@ fn measure_dir(app: &mut App, terminal: &mut Term, dir: &Path) -> Result<()> {
             size: Size::Counting(0),
         })
         .collect();
-    entries.extend(loose_entries(dir));
+    if children.denied.is_none() {
+        entries.extend(loose_entries(dir));
+    }
     app.listings.insert(
         dir.to_path_buf(),
         Listing {
@@ -986,7 +995,7 @@ fn measure_dir(app: &mut App, terminal: &mut Term, dir: &Path) -> Result<()> {
     let mut throttle = Throttle::new(live::REDRAW);
     let mut failure: Option<anyhow::Error> = None;
 
-    let swept = sweep::sweep_streaming(&roots, &[], &mut |progress| {
+    let swept = sweep::sweep_streaming(&roots, &[], &closed, &mut |progress| {
         match progress {
             Progress::Started { .. } | Progress::Tick => {}
             Progress::Scanned {
@@ -1547,7 +1556,7 @@ mod tests {
             path: path.to_path_buf(),
         };
         let mut size = Size::Counting(0);
-        sweep::sweep_streaming(&[root], &[], &mut |progress| {
+        sweep::sweep_streaming(&[root], &[], &[], &mut |progress| {
             match progress {
                 Progress::Scanned { root_bytes, .. } => size = Size::Counting(root_bytes),
                 Progress::RootDone { denials, bytes, .. } => {
@@ -1757,7 +1766,7 @@ mod tests {
         assert!(tcc.contains("Full Disk Access"), "{tcc}");
         assert!(unix.contains("sudo"), "{unix}");
         assert!(closed.contains("closed"), "{closed}");
-        assert!(!closed.contains("Full Disk Access"), "{closed}");
+        assert!(closed.contains("Full Disk Access"), "{closed}");
         assert_ne!(tcc, unix);
         assert_ne!(closed, tcc);
     }
@@ -1906,7 +1915,7 @@ mod tests {
             "a file needs no walk"
         );
 
-        let children = live::children_as_roots(scratch.path());
+        let children = live::children_as_roots(scratch.path(), &[]);
         let listed = listing(
             vec![entry("sub", true, Size::known(4 * 1024))],
             children.loose_bytes,

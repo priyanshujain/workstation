@@ -65,7 +65,7 @@ pub fn remove(
                 .is_some_and(|p| p.to_string_lossy().contains("/Library/Containers/"))
         })
         .count();
-    if containers > 0 && !removal::has_full_disk_access() {
+    if containers > 0 && !disk::platform::has_full_disk_access() {
         println!();
         let subject = if containers == 1 {
             "One of these is an app container".to_string()

@@ -32,14 +32,6 @@ pub fn is_tcc_denial(err: &str) -> bool {
     e.contains("operation not permitted") || e.contains("permission to access")
 }
 
-/// Whether this process holds Full Disk Access, probed by reading a directory
-/// that is readable only with it.
-pub fn has_full_disk_access() -> bool {
-    dirs::home_dir()
-        .map(|h| std::fs::read_dir(h.join("Library/Application Support/com.apple.TCC")).is_ok())
-        .unwrap_or(false)
-}
-
 /// True if anything in `items` sits outside the user's control.
 pub fn requires_root(items: &[Leftover]) -> bool {
     items.iter().any(|l| l.needs_root)
