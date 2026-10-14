@@ -99,7 +99,7 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
+pub mod linux {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
 
@@ -139,6 +139,17 @@ mod linux {
             run("system-manager", &["switch", "--flake", &system, "--sudo"])?;
         }
 
+        let presets = preset_units();
+        if !presets.is_empty() {
+            step("systemctl preset");
+            println!("    {}", style(presets.join(" ")).dim());
+            if !dry_run {
+                let mut args = vec!["systemctl", "preset"];
+                args.extend(presets.iter().map(String::as_str));
+                run("sudo", &args)?;
+            }
+        }
+
         let pacman: Pacman = eval(target, "pacman")?;
         let aur: Aur = eval(target, "aur")?;
 
@@ -171,6 +182,46 @@ mod linux {
         let home = if dry_run { "build" } else { "switch" };
         step(&format!("home-manager {home} --flake {}", target.flake));
         run("home-manager", &[home, "--flake", &target.flake])
+    }
+
+    const STATE: &str = "/var/lib/system-manager/state/system-manager-state.json";
+
+    #[derive(Deserialize)]
+    struct State {
+        #[serde(rename = "fileTree")]
+        file_tree: FileTree,
+    }
+
+    #[derive(Deserialize)]
+    struct FileTree {
+        files: Vec<String>,
+    }
+
+    pub fn managed_files() -> Result<BTreeSet<String>> {
+        let state: State = serde_json::from_str(&std::fs::read_to_string(STATE)?)?;
+        Ok(state.file_tree.files.into_iter().collect())
+    }
+
+    /// Units enabled by the preset files system-manager manages in /etc/systemd/system-preset.
+    pub fn preset_units() -> Vec<String> {
+        let mut units = Vec::new();
+        for file in managed_files().unwrap_or_default() {
+            if !(file.starts_with("/etc/systemd/system-preset/") && file.ends_with(".preset")) {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for line in raw.lines() {
+                let mut words = line.split_whitespace();
+                if let (Some("enable"), Some(unit)) = (words.next(), words.next()) {
+                    units.push(unit.to_string());
+                }
+            }
+        }
+        units.sort();
+        units.dedup();
+        units
     }
 
     fn eval<T: serde::de::DeserializeOwned>(target: &Target, option: &str) -> Result<T> {
