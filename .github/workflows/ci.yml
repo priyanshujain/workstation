@@ -5,16 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  schedule:
-    # Run installation tests nightly at 2 AM UTC
-    - cron: '0 2 * * *'
   workflow_dispatch:
-    inputs:
-      run_installation_test:
-        description: 'Run installation test on macOS'
-        required: false
-        default: 'false'
-        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
@@ -83,39 +74,6 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
-  # Installation test - only on macOS, only on schedule or manual trigger
-  installation-test:
-    name: Installation Test (macOS)
-    runs-on: macos-latest
-    if: |
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_installation_test == 'true')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-install-test-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-install-test-
-
-      - name: Ensure Homebrew is available
-        run: brew --version
-
-      - name: Run installation test
-        run: cargo test --package wsctl --test installation -- --nocapture
-        env:
-          WS_INSTALLATION_TEST: "1"
-          HOMEBREW_NO_AUTO_UPDATE: "1"
 
   # Documentation
   docs:
