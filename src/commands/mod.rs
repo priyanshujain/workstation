@@ -2,8 +2,7 @@
 pub mod app;
 pub mod apply;
 pub mod audit;
-#[cfg(target_os = "macos")]
-pub mod disk_agent;
+pub mod disk;
 #[cfg(target_os = "macos")]
 pub mod display;
 pub mod doctor;

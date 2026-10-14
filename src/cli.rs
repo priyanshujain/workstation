@@ -68,10 +68,14 @@ pub enum Commands {
         flake: String,
     },
 
-    /// Inspect and clean up disk usage
+    /// Where the disk went, one line per kind of data
     Disk {
         #[command(subcommand)]
-        sub: DiskCommand,
+        sub: Option<DiskCommand>,
+
+        /// Rescan instead of reading the cached report, and refresh the cache
+        #[arg(long)]
+        no_cache: bool,
     },
 
     #[cfg(target_os = "macos")]
@@ -147,23 +151,19 @@ pub enum DisplayCommand {
 
 #[derive(Subcommand)]
 pub enum DiskCommand {
-    /// Where the space went: a read-only TUI that fills in as it measures,
-    /// or the plain text report when piped
-    Audit {
+    /// Browse usage folder by folder, or print the full report when piped
+    Browse {
         /// Rescan instead of reading the cached report, and refresh the cache
         #[arg(long)]
         no_cache: bool,
     },
 
     /// Browse and delete what is safe to remove, sizes filling in as it measures
-    Cleanup,
+    Clean,
 
-    #[cfg(target_os = "macos")]
-    /// Manage the scheduled refresh of the cached disk report
-    Agent {
-        #[command(subcommand)]
-        sub: DiskAgentCommand,
-    },
+    /// Rebuild the cached report without a terminal (what the scheduled job runs)
+    #[command(hide = true)]
+    Refresh,
 
     /// Build artifacts per project, with how long each has sat idle
     Projects {
@@ -195,24 +195,6 @@ pub enum DiskCommand {
         #[arg(long)]
         no_cache: bool,
     },
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Subcommand)]
-pub enum DiskAgentCommand {
-    /// Install and load the scheduled refresh
-    Enable,
-
-    /// Unload and remove the scheduled refresh
-    Disable,
-
-    /// Show cache age and whether the refresh is armed
-    Status,
-
-    /// Rebuild the cache without opening anything macOS would ask about
-    /// (what the launchd job runs)
-    #[command(hide = true)]
-    Refresh,
 }
 
 #[derive(Subcommand)]

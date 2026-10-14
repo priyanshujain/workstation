@@ -1370,7 +1370,7 @@ fn header(app: &App, width: u16) -> Paragraph<'static> {
     Paragraph::new(vec![
         Line::from(vec![
             Span::styled(
-                "  wsctl disk audit",
+                "  wsctl disk browse",
                 Style::default().fg(Color::Cyan).bold(),
             ),
             Span::raw("  "),
@@ -2735,7 +2735,7 @@ mod tests {
         let app = cached(vec![usage("Home", 4096, Denials::default())]);
         let screen = drawn(&app, 100, 10);
 
-        assert!(screen.contains("wsctl disk audit"), "{screen}");
+        assert!(screen.contains("wsctl disk browse"), "{screen}");
         assert!(screen.contains("Where the space is"), "{screen}");
         assert!(screen.contains("4h ago"), "{screen}");
     }

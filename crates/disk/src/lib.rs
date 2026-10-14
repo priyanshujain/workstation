@@ -1,5 +1,3 @@
-#[cfg(target_os = "macos")]
-pub mod agent;
 pub mod audit;
 pub mod cleanup;
 pub mod conventions;

@@ -1148,7 +1148,7 @@ fn render_browse(f: &mut Frame, app: &App) {
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
-            "  wsctl disk cleanup",
+            "  wsctl disk clean",
             Style::default().fg(Color::Cyan).bold(),
         ),
         Span::raw("  "),

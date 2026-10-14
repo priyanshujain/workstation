@@ -44,7 +44,6 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         display::agent::uninstall()?;
-        disk::agent::uninstall()?;
         bundle::remove()?;
     }
     if purge {
@@ -108,7 +107,6 @@ fn purge_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         paths.push(display::agent::log_path());
-        paths.push(disk::agent::log_path());
         if let Some(dir) = display::config::config_path().parent() {
             paths.push(dir.to_path_buf());
         }
@@ -166,7 +164,6 @@ mod tests {
         {
             let has = |suffix: &str| paths.iter().any(|p| p.ends_with(suffix));
             assert!(has("Library/Logs/wsctl-display.log"));
-            assert!(has("Library/Logs/wsctl-disk-report.log"));
             assert!(has(".config/wsctl"));
         }
         assert!(paths.contains(&dirs::data_dir().unwrap().join("wsctl")));

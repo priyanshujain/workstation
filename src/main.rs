@@ -8,12 +8,12 @@ use tracing_subscriber::EnvFilter;
 use std::io::IsTerminal;
 
 #[cfg(target_os = "macos")]
-use cli::{AppCommand, DiskAgentCommand, DisplayCommand};
+use cli::{AppCommand, DisplayCommand};
 use cli::{Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     // Rust ignores SIGPIPE, so println! panics once a reader goes away and
-    // `wsctl disk audit | head` ends in a backtrace instead of quietly.
+    // `wsctl disk browse | head` ends in a backtrace instead of quietly.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
 
     let cli = Cli::parse();
@@ -55,35 +55,30 @@ fn main() -> anyhow::Result<()> {
         } => {
             commands::update::run(&commands::apply::Target::parse(&flake)?, &inputs, snapshot)?;
         }
-        Commands::Disk { sub } => {
+        Commands::Disk { sub, no_cache } => {
             // Said before anything takes the screen, because a privileged run
             // writes its cache somewhere an unprivileged one would not.
             if let Some(notice) = disk::report::privileged_notice() {
                 tracing::warn!("{notice}");
             }
             match sub {
-                DiskCommand::Audit { no_cache } => {
+                None => commands::disk::summary(no_cache)?,
+                Some(DiskCommand::Browse { no_cache }) => {
                     if std::io::stdout().is_terminal() {
                         tui::audit::run(no_cache)?;
                     } else {
                         commands::audit::run_report(no_cache)?;
                     }
                 }
-                DiskCommand::Cleanup => {
+                Some(DiskCommand::Clean) => {
                     if std::io::stdout().is_terminal() {
                         tui::cleanup::run()?;
                     } else {
                         commands::audit::run_report(false)?;
                     }
                 }
-                #[cfg(target_os = "macos")]
-                DiskCommand::Agent { sub } => match sub {
-                    DiskAgentCommand::Enable => commands::disk_agent::enable()?,
-                    DiskAgentCommand::Disable => commands::disk_agent::disable()?,
-                    DiskAgentCommand::Status => commands::disk_agent::status()?,
-                    DiskAgentCommand::Refresh => commands::disk_agent::refresh()?,
-                },
-                DiskCommand::Projects {
+                Some(DiskCommand::Refresh) => commands::disk::refresh()?,
+                Some(DiskCommand::Projects {
                     roots,
                     idle_days,
                     min_size_mb,
@@ -91,7 +86,7 @@ fn main() -> anyhow::Result<()> {
                     dry_run,
                     yes,
                     no_cache,
-                } => {
+                }) => {
                     commands::projects::run(commands::projects::Options {
                         roots,
                         idle_days,
