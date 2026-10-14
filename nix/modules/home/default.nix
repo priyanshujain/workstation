@@ -13,6 +13,24 @@ in
       defaultText = lib.literalExpression "workstation.packages.\${system}.wsctl";
     };
 
+    agents = lib.mkOption {
+      default = [ ];
+      description = "Commands that start coding agents, and the environment variable each one sets in its children.";
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          command = lib.mkOption {
+            type = lib.types.str;
+            example = "claude";
+          };
+          marker = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "CLAUDE_CODE_SESSION_ID";
+          };
+        };
+      });
+    };
+
     jobs = lib.mkOption {
       default = { };
       description = "wsctl subcommands run on a timer as the user; each run exits when done.";
@@ -32,6 +50,10 @@ in
   };
 
   config = lib.mkMerge [
+    (lib.mkIf (cfg.agents != [ ]) {
+      xdg.configFile."wsctl/agents.json".text = builtins.toJSON { inherit (cfg) agents; };
+    })
+
     (lib.mkIf pkgs.stdenv.isDarwin {
       launchd.agents = lib.mapAttrs' (name: job: lib.nameValuePair "wsctl-${name}" {
         enable = true;
