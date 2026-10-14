@@ -25,7 +25,7 @@ impl Target {
         Ok(Self { flake, host })
     }
 
-    fn attr(&self) -> String {
+    pub fn attr(&self) -> String {
         format!("{}#{}", self.flake, self.host)
     }
 }
@@ -53,8 +53,7 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn output(program: &str, args: &[&str]) -> Result<String> {
+pub fn output(program: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(program)
         .args(args)
         .output()
