@@ -3,7 +3,7 @@
   arch = {
     users.root.shell = "/bin/bash";
     users.nobody = {
-      group = "nobody";
+      group = lib.mkForce "nobody";
       shell = "/usr/bin/nologin";
     };
     groups.nobody.gid = 65534;
