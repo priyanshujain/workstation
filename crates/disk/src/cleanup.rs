@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-use crate::platform;
 use crate::sweep::{Denials, Root};
 use crate::util::{allocated, dir_size};
 
@@ -14,6 +13,7 @@ pub struct Target {
     size: Size,
     measure: Measure,
     action: CleanAction,
+    owner_app: Option<String>,
 }
 
 /// What is known about a target's reclaimable bytes.
@@ -89,7 +89,6 @@ pub enum CleanAction {
     /// Delete a single file.
     RemoveFile(PathBuf),
     RunCommand(String, Vec<String>),
-    RemoveByExtension(PathBuf, String),
     /// Delete only those immediate children of `dir` that nothing has touched
     /// in `idle_days` and that no running process is using.
     ///
@@ -184,6 +183,7 @@ impl Target {
             size: Size::known(size),
             measure: Measure::Nothing,
             action,
+            owner_app: None,
         }
     }
 
@@ -200,6 +200,7 @@ impl Target {
             size: Size::Counting(0),
             measure,
             action,
+            owner_app: None,
         }
     }
 
@@ -218,6 +219,7 @@ impl Target {
             },
             measure: Measure::Nothing,
             action,
+            owner_app: None,
         }
     }
 
@@ -234,7 +236,17 @@ impl Target {
             size: Size::Unknown(0),
             measure: Measure::Nothing,
             action,
+            owner_app: None,
         }
+    }
+
+    pub fn owned_by_app(mut self, app: impl Into<String>) -> Self {
+        self.owner_app = Some(app.into());
+        self
+    }
+
+    pub fn owner_app(&self) -> Option<&str> {
+        self.owner_app.as_deref()
     }
 
     pub fn size(&self) -> Size {
@@ -259,6 +271,7 @@ impl Target {
         if self.size.denials().unattended > 0 {
             return Err(format!("{} left closed: needs Full Disk Access", self.name));
         }
+        self.refuse_if_in_use(&crate::liveness::Liveness::snapshot())?;
         match &self.action {
             CleanAction::RemoveContents(path) => {
                 let size = dir_size(path);
@@ -305,21 +318,24 @@ impl Target {
                 }
                 Ok(freed)
             }
-            CleanAction::RemoveByExtension(dir, ext) => {
-                let mut freed = 0u64;
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().is_some_and(|e| e == ext.as_str())
-                            && let Ok(meta) = path.metadata()
-                        {
-                            freed += meta.len();
-                            rm_rf(&path)?;
-                        }
-                    }
-                }
-                Ok(freed)
-            }
+        }
+    }
+}
+
+impl Target {
+    pub(crate) fn refuse_if_in_use(&self, live: &crate::liveness::Liveness) -> Result<(), String> {
+        if let Some(app) = &self.owner_app
+            && live.app_running(app)
+        {
+            return Err(format!("{}: quit {app} first", self.name));
+        }
+        let path = match &self.action {
+            CleanAction::RemoveContents(path) | CleanAction::RemoveDir(path) => path,
+            _ => return Ok(()),
+        };
+        match live.check(path).first() {
+            Some(busy) => Err(format!("{}: {busy}", self.name)),
+            None => Ok(()),
         }
     }
 }
@@ -341,48 +357,6 @@ fn rm_rf(path: &Path) -> Result<(), String> {
         return Err(format!("rm -rf {}: {}", path.display(), stderr.trim()));
     }
     Ok(())
-}
-
-/// The unified cleanup list, unmeasured: curated smart actions plus every
-/// declared-cleanable path that exists.
-///
-/// The audit categories are deliberately not the source here.
-/// [`platform::cleanable_paths`] is the whole of what this screen may delete, so
-/// a path added for accounting cannot pick up a delete key on the way in.
-/// Cleanable paths whose directory already appears as a curated
-/// `RemoveContents` target are skipped to avoid duplicate rows.
-///
-/// Nothing here walks a tree, so the list is ready in milliseconds and a caller
-/// can draw it before measuring anything. There is no useful order yet either:
-/// sorting is the caller's job, once sizes start arriving.
-pub fn discover_all_targets(closed: &[PathBuf]) -> Vec<Target> {
-    let mut targets = platform::cleanup_targets(closed);
-    push_cleanable(&mut targets, platform::cleanable_paths());
-    targets
-}
-
-/// Split out from discovery so a test can hand it declarations of its own: what
-/// matters is which rows a declaration turns into, not where it came from.
-fn push_cleanable(targets: &mut Vec<Target>, cleanable: Vec<(&str, &str, PathBuf)>) {
-    let curated_contents: HashSet<PathBuf> = targets
-        .iter()
-        .filter_map(|t| match &t.action {
-            CleanAction::RemoveContents(p) | CleanAction::RemoveDir(p) => Some(p.clone()),
-            _ => None,
-        })
-        .collect();
-
-    for (category, label, path) in cleanable {
-        if curated_contents.contains(&path) || !path.is_dir() {
-            continue;
-        }
-        targets.push(Target::pending(
-            format!("{category} > {label}"),
-            path.display().to_string(),
-            Measure::Tree(path.clone()),
-            CleanAction::RemoveContents(path),
-        ));
-    }
 }
 
 /// Sweep roots for every target with a tree to walk, grouped so that no two
@@ -421,41 +395,20 @@ fn overlaps(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn files_by_extension_size(dir: &std::path::Path, ext: &str) -> u64 {
-    let mut size = 0u64;
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == ext)
-                && let Ok(meta) = path.metadata()
-            {
-                size += meta.len();
-            }
-        }
-    }
-    size
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// Discovery against the real home, with nothing under it opened.
-    fn home_closed() -> Vec<PathBuf> {
-        vec![dirs::home_dir().unwrap()]
-    }
-
     #[test]
     fn a_target_holding_something_left_closed_is_never_cleaned() {
         let dir = tempdir().unwrap();
-        let file = dir.path().join("keep.dmg");
+        let file = dir.path().join("keep");
         fs::write(&file, b"x").unwrap();
         let target = Target::closed(
-            "DMG installers",
+            "Closed folder",
             "",
-            CleanAction::RemoveByExtension(dir.path().to_path_buf(), "dmg".into()),
+            CleanAction::RemoveContents(dir.path().to_path_buf()),
         );
 
         assert_eq!(target.size().total(), None, "unmeasured, not empty");
@@ -634,24 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn discovery_measures_nothing() {
-        // The screen has to draw before any of this is walked, so discovery is
-        // allowed to stat and nothing else.
-        let targets = discover_all_targets(&home_closed());
-        for target in &targets {
-            match target.measure() {
-                Measure::Tree(_) | Measure::IdleChildren { .. } => assert_eq!(
-                    target.size(),
-                    Size::Counting(0),
-                    "{} arrived already measured",
-                    target.name
-                ),
-                Measure::Nothing => {}
-            }
-        }
-    }
-
-    #[test]
     fn a_nested_pair_of_paths_is_measured_by_two_separate_walks() {
         // One sweep charges nested bytes to the innermost root only, which is
         // right for attribution and wrong for a cleanup row: emptying
@@ -811,170 +746,5 @@ mod tests {
 
         assert!(root.exists(), "parent dir must remain");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
-    }
-
-    /// The directory an action would empty outright, if it empties one at all.
-    /// A curated action that only takes `.dmg` files out of ~/Downloads, or only
-    /// idle children out of a scratch dir, is not one of these.
-    fn emptied_dir(action: &CleanAction) -> Option<&PathBuf> {
-        match action {
-            CleanAction::RemoveContents(path) | CleanAction::RemoveDir(path) => Some(path),
-            _ => None,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn audited_paths() -> Vec<PathBuf> {
-        platform::audit_categories()
-            .into_iter()
-            .flat_map(|(_, paths)| paths.into_iter().map(|(_, path)| path))
-            .collect()
-    }
-
-    #[test]
-    fn a_declared_cleanable_path_becomes_a_target() {
-        let dir = tempdir().unwrap();
-        let cache = dir.path().join("cache");
-        fs::create_dir(&cache).unwrap();
-
-        let mut targets = Vec::new();
-        push_cleanable(
-            &mut targets,
-            vec![
-                ("Test", "cache", cache.clone()),
-                ("Test", "absent", dir.path().join("absent")),
-            ],
-        );
-
-        assert_eq!(targets.len(), 1, "a path that does not exist got a row");
-        assert_eq!(targets[0].name, "Test > cache");
-        assert_eq!(emptied_dir(targets[0].action()), Some(&cache));
-    }
-
-    #[test]
-    fn a_curated_target_keeps_its_directory_from_getting_a_second_row() {
-        let dir = tempdir().unwrap();
-        let cache = dir.path().join("cache");
-        fs::create_dir(&cache).unwrap();
-
-        let mut targets = vec![Target::pending(
-            "Curated",
-            "",
-            Measure::Tree(cache.clone()),
-            CleanAction::RemoveContents(cache.clone()),
-        )];
-        push_cleanable(&mut targets, vec![("Test", "cache", cache.clone())]);
-
-        assert_eq!(targets.len(), 1, "duplicate row for {}", cache.display());
-        assert_eq!(targets[0].name, "Curated");
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn a_curated_directory_gets_exactly_one_row_in_the_real_list() {
-        let derived = dirs::home_dir()
-            .unwrap()
-            .join("Library/Developer/Xcode/DerivedData");
-        let targets = discover_all_targets(&home_closed());
-        let rows: Vec<&str> = targets
-            .iter()
-            .filter(|t| emptied_dir(t.action()) == Some(&derived))
-            .map(|t| t.name.as_str())
-            .collect();
-
-        assert_eq!(rows.len(), 1, "{rows:?}");
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn no_accounting_only_path_is_offered_for_deletion() {
-        // Accounting-only is everything the audit names and the cleanable list
-        // does not, so a new audit category is undeletable by default.
-        let cleanable: HashSet<PathBuf> = platform::cleanable_paths()
-            .into_iter()
-            .map(|(_, _, path)| path)
-            .collect();
-        let accounting_only: HashSet<PathBuf> = audited_paths()
-            .into_iter()
-            .filter(|path| !cleanable.contains(path))
-            .collect();
-
-        for target in discover_all_targets(&home_closed()) {
-            if let Some(path) = emptied_dir(target.action()) {
-                assert!(
-                    !accounting_only.contains(path),
-                    "{} would empty {}, which is accounted for and not cleanable",
-                    target.name,
-                    path.display()
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn the_directories_that_hold_work_have_no_delete_key() {
-        // Named one by one so reintroducing any of them fails loudly. Emptying
-        // a source tree or someone's Documents is data loss, not cleanup.
-        let home = dirs::home_dir().unwrap();
-        let targets = discover_all_targets(&home_closed());
-
-        for relative in ["Documents", "dotfiles", "Desktop", "Downloads", "go/src"] {
-            let path = home.join(relative);
-            let rows: Vec<&str> = targets
-                .iter()
-                .filter(|t| emptied_dir(t.action()) == Some(&path))
-                .map(|t| t.name.as_str())
-                .collect();
-            assert!(rows.is_empty(), "~/{relative} can be emptied by {rows:?}");
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn the_audit_still_accounts_for_what_cleanup_will_not_delete() {
-        // Nothing moved out of the audit: these paths lost their delete key,
-        // not their place in "where did the bytes go".
-        let home = dirs::home_dir().unwrap();
-        let audited = audited_paths();
-
-        for relative in [
-            "Documents",
-            "dotfiles",
-            "Desktop",
-            "Downloads",
-            "go/src",
-            "go/bin",
-            "sdk",
-            ".cargo",
-            ".rustup",
-            ".android",
-            ".android/avd",
-            "Library/pnpm",
-            "Library/Application Support/Google",
-            "Library/Group Containers/group.net.whatsapp.WhatsApp.shared",
-        ] {
-            let path = home.join(relative);
-            assert!(
-                audited.contains(&path),
-                "~/{relative} dropped out of the audit"
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn every_cleanable_path_is_one_the_audit_accounts_for() {
-        // Otherwise the two lists drift into a row that can be deleted while
-        // nothing explains where its bytes came from.
-        let audited = audited_paths();
-
-        for (category, label, path) in platform::cleanable_paths() {
-            assert!(
-                audited.iter().any(|counted| path.starts_with(counted)),
-                "{category} > {label} ({}) is cleanable but unaccounted for",
-                path.display()
-            );
-        }
     }
 }

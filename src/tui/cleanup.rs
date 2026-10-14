@@ -20,9 +20,9 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use disk::cleanup::{
-    CleanAction, Measure, Size, Target, discover_all_targets, idle_candidates, idle_child,
-    measurement_groups,
+    CleanAction, Measure, Size, Target, idle_candidates, idle_child, measurement_groups,
 };
+use disk::offers::offers;
 use disk::sweep::{self, Denial, Denials, Flow, Progress, Root};
 use disk::util::{allocated, format_size};
 use ratatui::{prelude::*, widgets::*};
@@ -108,6 +108,7 @@ struct PendingOp {
     label: String,
     size: Size,
     action: CleanAction,
+    owner_app: Option<String>,
 }
 
 struct CleanResult {
@@ -276,6 +277,16 @@ impl App {
                 content_roots.push(p.clone());
             }
         }
+        let owner_of = |path: &Path| {
+            self.targets.iter().find_map(|t| match t.action() {
+                CleanAction::RemoveContents(p) | CleanAction::RemoveDir(p)
+                    if path.starts_with(p) =>
+                {
+                    t.owner_app().map(str::to_string)
+                }
+                _ => None,
+            })
+        };
 
         for &i in &self.marked_targets {
             let Some(t) = self.targets.get(i) else {
@@ -285,6 +296,7 @@ impl App {
                 label: format!("{}: {}", t.name, t.description),
                 size: t.size(),
                 action: clone_action(t.action()),
+                owner_app: t.owner_app().map(str::to_string),
             });
         }
 
@@ -301,6 +313,7 @@ impl App {
                 label: path.display().to_string(),
                 size: info.size,
                 action,
+                owner_app: owner_of(path),
             });
         }
 
@@ -642,9 +655,6 @@ fn clone_action(action: &CleanAction) -> CleanAction {
         CleanAction::RemoveDir(p) => CleanAction::RemoveDir(p.clone()),
         CleanAction::RemoveFile(p) => CleanAction::RemoveFile(p.clone()),
         CleanAction::RunCommand(c, a) => CleanAction::RunCommand(c.clone(), a.clone()),
-        CleanAction::RemoveByExtension(d, e) => {
-            CleanAction::RemoveByExtension(d.clone(), e.clone())
-        }
         CleanAction::RemoveIdleChildren { dir, idle_days } => CleanAction::RemoveIdleChildren {
             dir: dir.clone(),
             idle_days: *idle_days,
@@ -654,7 +664,13 @@ fn clone_action(action: &CleanAction) -> CleanAction {
 
 pub fn run() -> Result<()> {
     let closed = disk::platform::closed_paths();
-    let mut app = App::new(discover_all_targets(&closed));
+    let projects = disk::report::load(std::time::SystemTime::now())
+        .map(|report| report.to_projects())
+        .unwrap_or_default();
+    let targets = disk::conventions::Places::current()
+        .map(|places| offers(&places, &closed, &projects, std::time::SystemTime::now()))
+        .unwrap_or_default();
+    let mut app = App::new(targets);
     app.closed = closed;
     super::run(|terminal| {
         measure_top(&mut app, terminal)?;
@@ -1118,7 +1134,10 @@ fn run_ops(app: &mut App, terminal: &mut Term) -> Result<()> {
     for op in ops {
         terminal.draw(|f| render(f, app))?;
         let known = !matches!(op.action, CleanAction::RunCommand(_, _));
-        let target = Target::new(&op.label, "", op.size.bytes(), op.action);
+        let mut target = Target::new(&op.label, "", op.size.bytes(), op.action);
+        if let Some(app) = op.owner_app {
+            target = target.owned_by_app(app);
+        }
         let outcome = target.clean();
         app.results.push(CleanResult {
             label: op.label,
@@ -1373,7 +1392,6 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
             CleanAction::RemoveDir(_) => "delete",
             CleanAction::RemoveFile(_) => "delete file",
             CleanAction::RunCommand(_, _) => "run",
-            CleanAction::RemoveByExtension(_, _) => "delete by ext",
             CleanAction::RemoveIdleChildren { .. } => "delete idle",
         };
         lines.push(Line::from(vec![

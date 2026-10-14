@@ -80,6 +80,19 @@ impl Liveness {
     pub fn is_busy(&self, path: &Path) -> bool {
         !self.check(path).is_empty()
     }
+
+    #[cfg(test)]
+    pub(crate) fn running_from_test(command: &str) -> Self {
+        Self {
+            cwds: Vec::new(),
+            argv: vec![(1, "test".into(), command.into())],
+        }
+    }
+
+    pub fn app_running(&self, app: &str) -> bool {
+        let bundle = format!("/{app}.app/Contents/");
+        self.argv.iter().any(|(_, _, cmd)| cmd.contains(&bundle))
+    }
 }
 
 fn process_cwds() -> Vec<(i32, String, PathBuf)> {
@@ -183,6 +196,20 @@ mod tests {
 
     /// Retry the snapshot until `pid` shows up: spawn returns before exec has
     /// necessarily happened, so a single sample can race.
+    #[test]
+    fn an_app_is_running_when_a_process_runs_from_its_bundle() {
+        let live = Liveness {
+            cwds: Vec::new(),
+            argv: vec![(
+                1,
+                "Editor".into(),
+                "/Applications/Editor.app/Contents/MacOS/Editor --flag".into(),
+            )],
+        };
+        assert!(live.app_running("Editor"));
+        assert!(!live.app_running("Edit"));
+    }
+
     fn snapshot_seeing(pid: i32) -> Liveness {
         for _ in 0..40 {
             let live = Liveness::snapshot();

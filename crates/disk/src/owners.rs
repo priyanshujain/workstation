@@ -75,6 +75,10 @@ impl InstalledApps {
         }
     }
 
+    pub fn has_app(&self, name: &str) -> bool {
+        self.names.values().any(|app| app == name)
+    }
+
     fn app_for(&self, id: &str) -> Option<&String> {
         let mut prefix = id;
         loop {
