@@ -153,6 +153,13 @@ pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
         }
     }
 
+    for tagged in tagged_caches(home, closed)
+        .into_iter()
+        .filter(|tagged| !tagged.starts_with(&places.xdg_cache))
+    {
+        rules.push(rule(Kind::Caches, project_name(&tagged), tagged));
+    }
+
     for dir in &places.temp {
         rules.push(rule(Kind::Temp, owner_of(dir), dir.clone()));
     }
@@ -180,6 +187,47 @@ fn last_rule_per_path(rules: Vec<Rule>) -> Vec<Rule> {
         .collect();
     kept.reverse();
     kept
+}
+
+const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+const TAG_DEPTH: usize = 4;
+
+fn tagged_caches(home: &Path, closed: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for top in children(home, closed) {
+        let hidden = top
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with('.'));
+        if !hidden {
+            continue;
+        }
+        let mut walk = walkdir::WalkDir::new(&top)
+            .follow_links(false)
+            .max_depth(TAG_DEPTH)
+            .into_iter();
+        while let Some(Ok(entry)) = walk.next() {
+            if !entry.file_type().is_dir() {
+                continue;
+            }
+            if is_closed(entry.path(), closed) {
+                walk.skip_current_dir();
+                continue;
+            }
+            if has_cachedir_tag(entry.path()) {
+                found.push(entry.into_path());
+                walk.skip_current_dir();
+            }
+        }
+    }
+    found
+}
+
+fn has_cachedir_tag(dir: &Path) -> bool {
+    use std::io::Read;
+    let mut signature = [0u8; CACHEDIR_SIGNATURE.len()];
+    std::fs::File::open(dir.join("CACHEDIR.TAG"))
+        .and_then(|mut file| file.read_exact(&mut signature))
+        .is_ok_and(|_| signature == CACHEDIR_SIGNATURE)
 }
 
 pub fn build_output_rule(project_root: &Path, artifact: PathBuf) -> Rule {
@@ -432,6 +480,33 @@ mod tests {
             "app/src-tauri"
         );
         assert_eq!(project_name(Path::new("/tool")), "tool");
+    }
+
+    #[test]
+    fn a_folder_carrying_a_valid_cachedir_tag_is_a_cache() {
+        let home = tempfile::tempdir().unwrap();
+        let tagged = home.path().join(".tool/caches");
+        let nested = tagged.join("inner");
+        let forged = home.path().join(".tool/notes");
+        let visible = home.path().join("work/caches");
+        for dir in [&nested, &forged, &visible] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let signed = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache\n";
+        fs::write(tagged.join("CACHEDIR.TAG"), signed).unwrap();
+        fs::write(nested.join("CACHEDIR.TAG"), signed).unwrap();
+        fs::write(visible.join("CACHEDIR.TAG"), signed).unwrap();
+        fs::write(forged.join("CACHEDIR.TAG"), "not a tag").unwrap();
+
+        let rules = rules(&places(home.path(), false), &[]);
+        let caches: Vec<&Path> = rules
+            .iter()
+            .filter(|r| r.category == "Caches" && r.path.starts_with(home.path()))
+            .map(|r| r.path.as_path())
+            .collect();
+
+        assert_eq!(caches, vec![tagged.as_path()]);
+        assert_eq!(find(&rules, &tagged).unwrap().label, ".tool/caches");
     }
 
     #[test]
