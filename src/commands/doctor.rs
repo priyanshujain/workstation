@@ -585,9 +585,21 @@ mod os {
             };
             presets.contains(&canonical) || presets.contains(&template)
         };
+        let declared = preset_units();
+        let also: BTreeSet<String> = declared
+            .iter()
+            .flat_map(|unit| {
+                output("systemctl", &["cat", unit])
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|l| l.trim().strip_prefix("Also="))
+                    .flat_map(|v| v.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         let mut not_enabled = Vec::new();
-        for unit in preset_units() {
-            let state = output("systemctl", &["is-enabled", &unit]).unwrap_or_default();
+        for unit in declared.iter() {
+            let state = output("systemctl", &["is-enabled", unit]).unwrap_or_default();
             if state.trim() != "enabled" {
                 not_enabled.push(format!("declared but {} {unit}", state.trim()));
             }
@@ -619,7 +631,11 @@ mod os {
                 let (Some(unit), Some(preset)) = (cols.first(), cols.get(2)) else {
                     continue;
                 };
-                if *preset == "enabled" || managed_units.contains(unit) || preset_enabled(unit) {
+                if *preset == "enabled"
+                    || managed_units.contains(unit)
+                    || also.contains(*unit)
+                    || preset_enabled(unit)
+                {
                     continue;
                 }
                 undeclared.push(format!("{state} {unit}"));
