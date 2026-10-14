@@ -306,6 +306,7 @@ mod os {
             ));
         }
         let copies = copied_files();
+        let static_env = static_env();
         let mut drift = Vec::new();
         for file in managed {
             let path = Path::new(file);
@@ -325,8 +326,18 @@ mod os {
                 if meta.file_type().is_symlink() || !same {
                     drift.push(format!("edited {file}"));
                 }
-            } else if !resolved(path).is_some_and(|p| p.starts_with("/nix/store")) {
-                drift.push(format!("replaced {file}"));
+            } else {
+                let expected = file
+                    .strip_prefix("/etc/")
+                    .and_then(|rel| resolved(&static_env.join(rel)));
+                let live = resolved(path);
+                let ok = match expected {
+                    Some(expected) => live.as_deref() == Some(expected.as_str()),
+                    None => live.is_some_and(|p| p.starts_with("/nix/store")),
+                };
+                if !ok {
+                    drift.push(format!("replaced {file}"));
+                }
             }
         }
         Ok(if drift.is_empty() {
@@ -341,6 +352,14 @@ mod os {
                 drift,
             )
         })
+    }
+
+    /// The tree the active generation links /etc entries from.
+    fn static_env() -> std::path::PathBuf {
+        let raw = std::fs::read_to_string(format!("{PROFILE}/etcFiles/etcFiles.json"))
+            .unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        std::path::PathBuf::from(json["staticEnv"].as_str().unwrap_or_default())
     }
 
     /// Entries the active generation copies into /etc rather than links, with their sources.
