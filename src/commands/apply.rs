@@ -190,16 +190,38 @@ pub mod linux {
     struct State {
         #[serde(rename = "fileTree")]
         file_tree: FileTree,
+        services: BTreeMap<String, Service>,
     }
 
     #[derive(Deserialize)]
     struct FileTree {
         files: Vec<String>,
+        #[serde(rename = "backedUpFiles", default)]
+        backed_up_files: Vec<String>,
     }
 
+    #[derive(Deserialize)]
+    struct Service {
+        masked: bool,
+    }
+
+    fn state() -> Result<State> {
+        Ok(serde_json::from_str(&std::fs::read_to_string(STATE)?)?)
+    }
+
+    /// Every /etc path system-manager owns, including the ones it replaced.
     pub fn managed_files() -> Result<BTreeSet<String>> {
-        let state: State = serde_json::from_str(&std::fs::read_to_string(STATE)?)?;
-        Ok(state.file_tree.files.into_iter().collect())
+        let tree = state()?.file_tree;
+        Ok(tree.files.into_iter().chain(tree.backed_up_files).collect())
+    }
+
+    pub fn masked_units() -> Result<BTreeSet<String>> {
+        Ok(state()?
+            .services
+            .into_iter()
+            .filter(|(_, s)| s.masked)
+            .map(|(name, _)| name)
+            .collect())
     }
 
     /// Units enabled by the preset files system-manager manages in /etc/systemd/system-preset.
