@@ -6,12 +6,10 @@ pub mod config;
 pub mod key;
 pub mod names;
 pub mod platform;
-pub mod resource;
 pub mod spaces;
 
 pub use arrange::{DisplayInfo, Move, current_main, has_duplicate_key, plan_moves, position_label};
 pub use key::DisplayKey;
-pub use resource::{MainDisplay, SeparateSpaces};
 
 use anyhow::Result;
 

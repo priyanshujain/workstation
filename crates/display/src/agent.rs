@@ -24,7 +24,7 @@ const LEGACY_LABELS: [&str; 4] = [
 ///
 /// This is an implementation detail rather than documented API. The supported alternative,
 /// `CGDisplayRegisterReconfigurationCallback`, does not deliver to a plain binary even after
-/// a successful `NSApplicationLoad`, and would mean a resident process. See docs/displays.md.
+/// a successful `NSApplicationLoad`, and would mean a resident process.
 pub const WATCHED_PATH: &str = "/Library/Preferences/com.apple.windowserver.displays.plist";
 
 /// launchd also re-runs the check on this interval, and that is what actually makes this

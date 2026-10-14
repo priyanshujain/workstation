@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// macOS renumbers `CGDirectDisplayID` on every reconnect, so it cannot be persisted.
 /// Vendor, product and serial survive unplugging and are what the display UUID is built
-/// from. The serial here is the same value `docs/displays.md` records in hex.
+/// from. The serial here is the decimal form of the EDID serial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DisplayKey {
     pub vendor: u32,
@@ -25,12 +25,12 @@ impl DisplayKey {
         }
     }
 
-    /// EDID serial in the hex form `system_profiler` and `docs/displays.md` use.
+    /// EDID serial in the hex form `system_profiler` uses.
     pub fn serial_hex(&self) -> String {
         format!("{:08x}", self.serial)
     }
 
-    /// EDID product id in the hex form `docs/displays.md` uses.
+    /// EDID product id in hex.
     pub fn model_hex(&self) -> String {
         format!("{:04x}", self.model)
     }
