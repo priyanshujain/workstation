@@ -290,7 +290,7 @@ pub mod linux {
             if dry_run {
                 return Ok(());
             }
-            let mut args = vec!["pacman", "-Syyuu", "--needed"];
+            let mut args = vec!["pacman", "-Syyuu", "--needed", "--noconfirm"];
             args.extend(pacman.packages.iter().map(String::as_str));
             run("sudo", &args)?;
         } else if !missing.is_empty() {
@@ -299,7 +299,7 @@ pub mod linux {
                 style(format!("install {}", missing.join(" "))).dim()
             );
             if !dry_run {
-                let mut args = vec!["pacman", "-S", "--needed"];
+                let mut args = vec!["pacman", "-S", "--needed", "--noconfirm"];
                 args.extend(&missing);
                 run("sudo", &args)?;
             }
@@ -414,7 +414,7 @@ pub mod linux {
         if dry_run {
             return Ok(());
         }
-        let mut args = vec!["pacman", flag];
+        let mut args = vec!["pacman", flag, "--noconfirm"];
         args.extend(&undeclared);
         run("sudo", &args)
     }
