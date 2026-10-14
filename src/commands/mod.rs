@@ -6,5 +6,6 @@ pub mod audit;
 pub mod disk_agent;
 #[cfg(target_os = "macos")]
 pub mod display;
+pub mod doctor;
 pub mod projects;
 pub mod self_cmd;
