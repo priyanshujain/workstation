@@ -19,6 +19,17 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Apply the flake's configuration: the platform switch, distro packages and home-manager
+    Apply {
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, default_value = ".")]
+        flake: String,
+
+        /// Build and show what would change without changing anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+
     /// Inspect and clean up disk usage
     Disk {
         #[command(subcommand)]

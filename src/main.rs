@@ -32,6 +32,10 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     match cli.command {
+        Commands::Apply { flake, dry_run } => {
+            let target = commands::apply::Target::parse(&flake)?;
+            commands::apply::run_apply(&target, dry_run)?;
+        }
         Commands::Disk { sub } => {
             // Said before anything takes the screen, because a privileged run
             // writes its cache somewhere an unprivileged one would not.
