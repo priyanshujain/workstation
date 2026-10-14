@@ -183,7 +183,19 @@ fn last_rule_per_path(rules: Vec<Rule>) -> Vec<Rule> {
 }
 
 pub fn build_output_rule(project_root: &Path, artifact: PathBuf) -> Rule {
-    rule(Kind::BuildOutput, owner_of(project_root), artifact)
+    rule(Kind::BuildOutput, project_name(project_root), artifact)
+}
+
+pub fn project_name(root: &Path) -> String {
+    let mut parts: Vec<String> = root
+        .components()
+        .rev()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .take(2)
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts.reverse();
+    parts.join("/")
 }
 
 fn owned_rule(apps: &InstalledApps, kind: Kind, path: PathBuf) -> Rule {
@@ -411,6 +423,15 @@ mod tests {
         let rules = rules(&places(home.path(), true), &[]);
 
         assert_eq!(find(&rules, &fresh).unwrap().category, "App data");
+    }
+
+    #[test]
+    fn a_project_is_named_by_its_folder_and_the_one_holding_it() {
+        assert_eq!(
+            project_name(Path::new("/home/u/app/src-tauri")),
+            "app/src-tauri"
+        );
+        assert_eq!(project_name(Path::new("/tool")), "tool");
     }
 
     #[test]

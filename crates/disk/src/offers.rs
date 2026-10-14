@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::cleanup::{CleanAction, Measure, Target};
@@ -33,7 +33,10 @@ pub fn offers(
         }
         for artifact in &project.artifacts {
             targets.push(Target::new(
-                format!("Build output > {}", name_of(&project.root)),
+                format!(
+                    "Build output > {}",
+                    conventions::project_name(&project.root)
+                ),
                 artifact.path.display().to_string(),
                 artifact.size,
                 CleanAction::RemoveDir(artifact.path.clone()),
@@ -87,12 +90,6 @@ fn offer(kind: Kind, owner: &str, path: PathBuf) -> Option<Target> {
     Some(target)
 }
 
-fn name_of(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
 fn on_path(command: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(command).is_file()))
@@ -104,6 +101,7 @@ mod tests {
     use crate::owners::InstalledApps;
     use crate::projects::{Artifact, ProjectKind};
     use std::fs;
+    use std::path::Path;
     use std::time::Duration;
 
     fn places(home: &Path) -> Places {
@@ -208,7 +206,10 @@ mod tests {
         assert_eq!(
             offered,
             vec![(
-                "Build output > old".to_string(),
+                format!(
+                    "Build output > {}/old",
+                    home.path().file_name().unwrap().to_string_lossy()
+                ),
                 format!("delete {}", home.path().join("old/target").display())
             )]
         );
