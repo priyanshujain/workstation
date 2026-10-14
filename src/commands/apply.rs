@@ -283,15 +283,14 @@ pub mod linux {
             .collect();
 
         if let Some(date) = &pacman.snapshot {
-            println!("    {}", style(format!("snapshot {date}")).dim());
+            println!(
+                "    {}",
+                style(format!("sync to the Arch Linux Archive of {date}")).dim()
+            );
             if dry_run {
                 return Ok(());
             }
-            let conf = snapshot_conf(date)?;
-            let conf_path = std::env::temp_dir().join("wsctl-pacman.conf");
-            std::fs::write(&conf_path, conf)?;
-            let conf_path = conf_path.display().to_string();
-            let mut args = vec!["pacman", "--config", &conf_path, "-Syuu", "--needed"];
+            let mut args = vec!["pacman", "-Syyuu", "--needed"];
             args.extend(pacman.packages.iter().map(String::as_str));
             run("sudo", &args)?;
         } else if !missing.is_empty() {
@@ -325,25 +324,6 @@ pub mod linux {
             }
         }
         Ok(())
-    }
-
-    fn snapshot_conf(date: &str) -> Result<String> {
-        let (y, rest) = date.split_once('-').context("snapshot is not YYYY-MM-DD")?;
-        let (m, d) = rest.split_once('-').context("snapshot is not YYYY-MM-DD")?;
-        let server =
-            format!("Server = https://archive.archlinux.org/repos/{y}/{m}/{d}/$repo/os/$arch");
-        let conf = std::fs::read_to_string("/etc/pacman.conf")?;
-        Ok(conf
-            .lines()
-            .map(|l| {
-                if l.trim() == "Include = /etc/pacman.d/mirrorlist" {
-                    server.clone()
-                } else {
-                    l.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
     }
 
     fn apply_aur(aur: &Aur, dry_run: bool) -> Result<()> {
