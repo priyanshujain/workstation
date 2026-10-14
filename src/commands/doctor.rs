@@ -215,12 +215,11 @@ mod os {
     use std::path::Path;
 
     use anyhow::Result;
-    use serde::Deserialize;
 
     use super::{Check, Target, eval_names, generation, output, package_check, resolved};
+    use crate::commands::apply::linux::{managed_files, preset_units};
 
     const PROFILE: &str = "/nix/var/nix/profiles/system-manager-profiles/system-manager";
-    const STATE: &str = "/var/lib/system-manager/state/system-manager-state.json";
 
     // Files the installer and the running system own; editing them is expected.
     const MACHINE_FILES: &[&str] = &[
@@ -236,16 +235,8 @@ mod os {
         "/etc/subuid",
     ];
 
-    #[derive(Deserialize)]
-    struct State {
-        #[serde(rename = "fileTree")]
-        file_tree: FileTree,
-    }
-
-    #[derive(Deserialize)]
-    struct FileTree {
-        files: Vec<String>,
-    }
+    // The Nix installer hooks the daemon profile into these.
+    const NIX_INSTALLER_FILES: &[&str] = &["/etc/bash.bashrc", "/etc/zsh/zshrc"];
 
     pub fn checks(target: &Target) -> Vec<Check> {
         let managed = managed_files().unwrap_or_default();
@@ -261,7 +252,8 @@ mod os {
                 ),
             ),
             Check::from_result("/etc drift", etc_drift(&managed)),
-            Check::from_result("modified /etc", modified_etc()),
+            Check::from_result("modified /etc", modified_etc(&managed)),
+            Check::from_result("pacnew", pacnew(&managed)),
             Check::from_result("failed units", failed_units()),
             Check::from_result("system units", system_units(&managed)),
             Check::from_result("user units", user_units()),
@@ -270,11 +262,6 @@ mod os {
             Check::from_result("users", users(target)),
             Check::from_result("groups", groups()),
         ]
-    }
-
-    fn managed_files() -> Result<BTreeSet<String>> {
-        let state: State = serde_json::from_str(&std::fs::read_to_string(STATE)?)?;
-        Ok(state.file_tree.files.into_iter().collect())
     }
 
     fn etc_drift(managed: &BTreeSet<String>) -> Result<Check> {
@@ -310,13 +297,17 @@ mod os {
         })
     }
 
-    fn modified_etc() -> Result<Check> {
+    fn modified_etc(managed: &BTreeSet<String>) -> Result<Check> {
         let raw = output("pacman", &["-Qii"])?;
         let mut modified: Vec<String> = raw
             .lines()
             .filter_map(|l| l.trim().strip_suffix(" [modified]"))
             .map(|l| l.trim_start_matches("Backup Files    :").trim().to_string())
-            .filter(|f| !MACHINE_FILES.contains(&f.as_str()))
+            .filter(|f| {
+                !MACHINE_FILES.contains(&f.as_str())
+                    && !NIX_INSTALLER_FILES.contains(&f.as_str())
+                    && !managed.contains(f)
+            })
             .collect();
         modified.sort();
         modified.dedup();
@@ -330,6 +321,46 @@ mod os {
                     modified.len()
                 ),
                 modified,
+            )
+        })
+    }
+
+    fn pacnew(managed: &BTreeSet<String>) -> Result<Check> {
+        let mut found = Vec::new();
+        let mut stack = vec![std::path::PathBuf::from("/etc")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path.display().to_string();
+                let Some(base) = name
+                    .strip_suffix(".pacnew")
+                    .or_else(|| name.strip_suffix(".pacsave"))
+                else {
+                    continue;
+                };
+                if !managed.contains(base) {
+                    found.push(name);
+                }
+            }
+        }
+        found.sort();
+        Ok(if found.is_empty() {
+            Check::pass("pacnew", "no unmerged .pacnew or .pacsave files")
+        } else {
+            Check::warn(
+                "pacnew",
+                format!("{} unmerged .pacnew or .pacsave files", found.len()),
+                found,
             )
         })
     }
@@ -358,6 +389,40 @@ mod os {
             .iter()
             .filter_map(|f| f.rsplit('/').next())
             .collect();
+        let mut presets = BTreeSet::new();
+        for line in output("systemctl", &["list-unit-files", "--no-legend", "--plain"])?.lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.get(2) == Some(&"enabled") {
+                presets.insert(cols[0].to_string());
+            }
+        }
+        let preset_enabled = |unit: &str| {
+            let canonical = output("systemctl", &["show", "-P", "Id", unit])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            let template = match canonical.split_once('@') {
+                Some((head, rest)) => format!("{head}@{}", &rest[rest.find('.').unwrap_or(0)..]),
+                None => canonical.clone(),
+            };
+            presets.contains(&canonical) || presets.contains(&template)
+        };
+        let mut not_enabled = Vec::new();
+        for unit in preset_units() {
+            let state = output("systemctl", &["is-enabled", &unit]).unwrap_or_default();
+            if state.trim() != "enabled" {
+                not_enabled.push(format!("declared but {} {unit}", state.trim()));
+            }
+        }
+        if !not_enabled.is_empty() {
+            return Ok(Check::fail(
+                "system units",
+                format!(
+                    "{} declared units not enabled, run wsctl apply",
+                    not_enabled.len()
+                ),
+                not_enabled,
+            ));
+        }
         let mut undeclared = Vec::new();
         for state in ["enabled", "masked"] {
             let raw = output(
@@ -375,7 +440,7 @@ mod os {
                 let (Some(unit), Some(preset)) = (cols.first(), cols.get(2)) else {
                     continue;
                 };
-                if *preset == "enabled" || managed_units.contains(unit) {
+                if *preset == "enabled" || managed_units.contains(unit) || preset_enabled(unit) {
                     continue;
                 }
                 undeclared.push(format!("{state} {unit}"));
