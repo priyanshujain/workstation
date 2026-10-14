@@ -365,7 +365,7 @@ pub mod linux {
         Ok(())
     }
 
-    fn srcinfo_version(src: &Path) -> Result<String> {
+    pub fn srcinfo_version(src: &Path) -> Result<String> {
         let path = src.join(".SRCINFO");
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("could not read {}", path.display()))?;

@@ -745,6 +745,30 @@ mod os {
             &installed(&["-Qqen"])?,
             &declared,
         );
+        let drifted: Vec<String> = output("pacman", &["-Sl"])?
+            .lines()
+            .filter_map(|l| {
+                let (head, installed) = l.split_once(" [installed: ")?;
+                let mut cols = head.split_whitespace();
+                let (_, name, version) = (cols.next()?, cols.next()?, cols.next()?);
+                Some(format!(
+                    "{name} {} installed, {version} pinned",
+                    installed.trim_end_matches(']')
+                ))
+            })
+            .collect();
+        if !drifted.is_empty() {
+            let mut details = drifted;
+            details.extend(check.details);
+            return Ok(Check::fail(
+                "pacman",
+                format!(
+                    "{} packages differ from the pinned repositories, run wsctl apply",
+                    details.len()
+                ),
+                details,
+            ));
+        }
         if snapshot.is_none() && check.level == super::Level::Pass {
             check = Check::warn(
                 "pacman",
@@ -775,11 +799,36 @@ mod os {
         )?;
         let declared: BTreeSet<String> = serde_json::from_str(&raw)?;
         let foreign = installed(&["-Qqm"])?;
-        Ok(package_check(
+        let check = package_check("AUR", &foreign, &installed(&["-Qqem"])?, &declared);
+        let sources: std::collections::BTreeMap<String, String> = serde_json::from_str(&output(
+            "nix",
+            &[
+                "eval",
+                "--json",
+                &format!(
+                    "{}#systemConfigs.{}.config.aur.packages",
+                    target.flake, target.host
+                ),
+            ],
+        )?)?;
+        let mut drifted = Vec::new();
+        for (name, src) in &sources {
+            let pinned = crate::commands::apply::linux::srcinfo_version(Path::new(src))?;
+            let live = output("pacman", &["-Q", name])
+                .ok()
+                .and_then(|l| l.split_whitespace().nth(1).map(str::to_string));
+            if let Some(live) = live.filter(|v| *v != pinned) {
+                drifted.push(format!("{name} {live} installed, {pinned} pinned"));
+            }
+        }
+        if drifted.is_empty() {
+            return Ok(check);
+        }
+        drifted.extend(check.details);
+        Ok(Check::fail(
             "AUR",
-            &foreign,
-            &installed(&["-Qqem"])?,
-            &declared,
+            "installed versions differ from the pinned sources, run wsctl apply",
+            drifted,
         ))
     }
 
