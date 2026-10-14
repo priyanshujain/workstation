@@ -217,7 +217,7 @@ mod os {
     use anyhow::Result;
 
     use super::{Check, Target, eval_names, generation, output, package_check, resolved};
-    use crate::commands::apply::linux::{managed_files, preset_units};
+    use crate::commands::apply::linux::{managed_files, masked_units, preset_units};
 
     const PROFILE: &str = "/nix/var/nix/profiles/system-manager-profiles/system-manager";
 
@@ -272,15 +272,28 @@ mod os {
                 vec!["run wsctl apply".into()],
             ));
         }
+        let copies = copied_files();
         let mut drift = Vec::new();
         for file in managed {
             let path = Path::new(file);
-            match path.symlink_metadata() {
-                Err(_) => drift.push(format!("missing {file}")),
-                Ok(_) if !resolved(path).is_some_and(|p| p.starts_with("/nix/store")) => {
-                    drift.push(format!("replaced {file}"))
+            let meta = match path.symlink_metadata() {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    drift.push(format!("missing {file}"));
+                    continue;
                 }
-                Ok(_) => {}
+                Err(_) => continue,
+            };
+            if let Some(source) = copies.get(file.as_str()) {
+                let same = match (std::fs::read(path), std::fs::read(source)) {
+                    (Ok(live), Ok(wanted)) => live == wanted,
+                    _ => true,
+                };
+                if meta.file_type().is_symlink() || !same {
+                    drift.push(format!("edited {file}"));
+                }
+            } else if !resolved(path).is_some_and(|p| p.starts_with("/nix/store")) {
+                drift.push(format!("replaced {file}"));
             }
         }
         Ok(if drift.is_empty() {
@@ -295,6 +308,29 @@ mod os {
                 drift,
             )
         })
+    }
+
+    /// Entries the active generation copies into /etc rather than links, with their sources.
+    fn copied_files() -> std::collections::BTreeMap<String, String> {
+        let raw = std::fs::read_to_string(format!("{PROFILE}/etcFiles/etcFiles.json"))
+            .unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        let mut copies = std::collections::BTreeMap::new();
+        if let Some(entries) = json["entries"].as_object() {
+            for entry in entries.values() {
+                let (Some(mode), Some(target), Some(source)) = (
+                    entry["mode"].as_str(),
+                    entry["target"].as_str(),
+                    entry["source"].as_str(),
+                ) else {
+                    continue;
+                };
+                if mode != "symlink" {
+                    copies.insert(format!("/etc/{target}"), source.to_string());
+                }
+            }
+        }
+        copies
     }
 
     fn modified_etc(managed: &BTreeSet<String>) -> Result<Check> {
@@ -385,9 +421,11 @@ mod os {
     }
 
     fn system_units(managed: &BTreeSet<String>) -> Result<Check> {
+        let masked = masked_units().unwrap_or_default();
         let managed_units: BTreeSet<&str> = managed
             .iter()
             .filter_map(|f| f.rsplit('/').next())
+            .chain(masked.iter().map(String::as_str))
             .collect();
         let mut presets = BTreeSet::new();
         for line in output("systemctl", &["list-unit-files", "--no-legend", "--plain"])?.lines() {
