@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 
-/// Whether this process holds Full Disk Access. The probe opens a directory
-/// only Full Disk Access opens. macOS never asks about that grant, so without
-/// it the open fails with EPERM and no dialog appears.
+const TCC_DIR: &str = "/Library/Application Support/com.apple.TCC";
+
 pub fn has_full_disk_access() -> bool {
-    dirs::home_dir().is_some_and(|home| holds_full_disk_access(&home))
+    can_list(Path::new(TCC_DIR))
 }
 
-fn holds_full_disk_access(home: &Path) -> bool {
-    std::fs::read_dir(home.join("Library/Application Support/com.apple.TCC")).is_ok()
+fn can_list(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok()
 }
 
 /// What every walk leaves unopened: nothing with Full Disk Access, every
@@ -17,7 +16,7 @@ pub fn closed_paths() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    closed_paths_in(&home, holds_full_disk_access(&home))
+    closed_paths_in(&home, has_full_disk_access())
 }
 
 fn closed_paths_in(home: &Path, full_disk_access: bool) -> Vec<PathBuf> {
@@ -139,15 +138,11 @@ mod tests {
     }
 
     #[test]
-    fn the_probe_reads_the_tcc_directory_and_nothing_else() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(!holds_full_disk_access(home.path()));
-        std::fs::create_dir_all(
-            home.path()
-                .join("Library/Application Support/com.apple.TCC"),
-        )
-        .unwrap();
-        assert!(holds_full_disk_access(home.path()));
+    fn the_probe_answers_from_the_system_tcc_directory() {
+        assert!(Path::new(TCC_DIR).is_dir(), "macOS moved {TCC_DIR}");
+        assert_eq!(has_full_disk_access(), can_list(Path::new(TCC_DIR)));
+        let missing = tempfile::tempdir().unwrap().path().join("gone");
+        assert!(!can_list(&missing));
     }
 
     #[test]
