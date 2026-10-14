@@ -11,7 +11,7 @@ use crate::sweep::{Denial, Denials, Root, RootUsage, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 6;
+pub const SCHEMA: u32 = 7;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
