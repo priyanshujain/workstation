@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod elevate;
 mod tui;
 
 use clap::Parser;
@@ -56,10 +57,16 @@ fn main() -> anyhow::Result<()> {
             commands::update::run(&commands::apply::Target::parse(&flake)?, &inputs, snapshot)?;
         }
         Commands::Disk { sub, no_cache } => {
-            // Said before anything takes the screen, because a privileged run
-            // writes its cache somewhere an unprivileged one would not.
+            let walks = match &sub {
+                None => no_cache || disk::report::load(std::time::SystemTime::now()).is_none(),
+                Some(DiskCommand::Browse { .. } | DiskCommand::Clean) => true,
+                Some(DiskCommand::Refresh | DiskCommand::Projects { .. }) => false,
+            };
+            if walks {
+                elevate::rerun_as_root();
+            }
             if let Some(notice) = disk::report::privileged_notice() {
-                tracing::warn!("{notice}");
+                tracing::info!("{notice}");
             }
             match sub {
                 None => commands::disk::summary(no_cache)?,

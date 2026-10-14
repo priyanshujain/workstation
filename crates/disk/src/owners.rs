@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+pub const USER_PATH: &str = "WSCTL_USER_PATH";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Owner {
     App(String),
@@ -23,7 +25,8 @@ impl InstalledApps {
         ];
         dirs.extend(dirs::home_dir().map(|home| home.join("Applications")));
         let mut apps = InstalledApps::from_bundles(dirs.iter().flat_map(|dir| app_bundles(dir, 2)));
-        for dir in std::env::var_os("PATH")
+        for dir in std::env::var_os(USER_PATH)
+            .or_else(|| std::env::var_os("PATH"))
             .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
             .unwrap_or_default()
         {
