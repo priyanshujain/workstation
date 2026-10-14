@@ -19,40 +19,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[cfg(target_os = "macos")]
-    /// Install/update packages for a profile
-    Apply {
-        /// Profile to apply
-        profile: String,
-
-        /// Dry-run mode (show what would change without making changes)
-        #[arg(short = 'n', long)]
-        dry_run: bool,
-
-        /// Don't ask for confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    #[cfg(target_os = "macos")]
-    /// Preview what would change
-    Diff {
-        /// Profile to diff
-        profile: String,
-
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    #[cfg(target_os = "macos")]
-    /// List available profiles and scopes
-    Profiles {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
     /// Inspect and clean up disk usage
     Disk {
         #[command(subcommand)]
@@ -112,12 +78,6 @@ pub enum AppCommand {
 pub enum DisplayCommand {
     /// Show connected displays and their keys
     List,
-
-    /// Pin the panel that should always hold the menu bar (defaults to the current one)
-    Pin {
-        /// Display key as vendor:model:serial, from `wsctl display list`
-        key: Option<String>,
-    },
 
     /// Move the menu bar back to the pinned panel now
     Apply,

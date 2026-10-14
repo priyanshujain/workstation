@@ -1,9 +1,5 @@
-#[cfg(target_os = "macos")]
-mod builder;
 mod cli;
 mod commands;
-#[cfg(target_os = "macos")]
-mod config;
 mod tui;
 
 use clap::Parser;
@@ -35,26 +31,7 @@ fn main() -> anyhow::Result<()> {
         .without_time()
         .init();
 
-    #[cfg(target_os = "macos")]
-    let workstation = config::config();
-
     match cli.command {
-        #[cfg(target_os = "macos")]
-        Commands::Apply {
-            profile,
-            dry_run,
-            yes,
-        } => {
-            commands::apply::run(&workstation, &profile, dry_run, yes)?;
-        }
-        #[cfg(target_os = "macos")]
-        Commands::Diff { profile, json } => {
-            commands::diff::run(&workstation, &profile, json)?;
-        }
-        #[cfg(target_os = "macos")]
-        Commands::Profiles { json } => {
-            commands::profiles::run(&workstation, json)?;
-        }
         Commands::Disk { sub } => {
             // Said before anything takes the screen, because a privileged run
             // writes its cache somewhere an unprivileged one would not.
@@ -107,7 +84,6 @@ fn main() -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]
         Commands::Display { sub } => match sub {
             DisplayCommand::List => commands::display::list()?,
-            DisplayCommand::Pin { key } => commands::display::pin(key)?,
             DisplayCommand::Apply => commands::display::apply()?,
             DisplayCommand::Status => commands::display::status()?,
             DisplayCommand::Enable => commands::display::enable()?,

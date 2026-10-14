@@ -1,10 +1,9 @@
 use std::io::IsTerminal;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use console::style;
-use display::{DisplayKey, Outcome, agent, arrange, config, names, platform, spaces};
+use display::{Outcome, agent, arrange, config, names, platform, spaces};
 
 /// How often the watcher re-reads the display layout.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -82,70 +81,12 @@ pub fn list() -> Result<()> {
 
     if pinned.is_none() {
         println!(
-            "  {} Nothing pinned yet. Run {} while the right panel holds the menu bar.",
+            "  {} Nothing pinned yet. Declare a key from this list as {} in {}.",
             style("i").blue(),
-            style("wsctl display pin").bold()
+            style("preferred_main").bold(),
+            style(config::config_path().display()).bold()
         );
         println!();
-    }
-
-    Ok(())
-}
-
-pub fn pin(key: Option<String>) -> Result<()> {
-    let displays = platform::list_displays()?;
-
-    let target = match key {
-        Some(raw) => DisplayKey::from_str(&raw).context("invalid display key")?,
-        None => {
-            arrange::current_main(&displays)
-                .context("no main display found; pass a key from `wsctl display list`")?
-                .key
-        }
-    };
-
-    if !displays.iter().any(|d| d.key == target) {
-        println!(
-            "  {} {} is not connected right now. Pinning it anyway.",
-            style("!").yellow(),
-            style(target.to_string()).bold()
-        );
-    }
-
-    if target.is_ambiguous() {
-        println!(
-            "  {} This panel reports no EDID serial, so an identical model cannot be told apart from it.",
-            style("!").yellow()
-        );
-    }
-
-    if arrange::has_duplicate_key(&displays, target) {
-        println!(
-            "  {} Two connected panels share this key, so which one wins is arbitrary.",
-            style("!").yellow()
-        );
-    }
-
-    let mut prefs = config::load()?;
-    prefs.preferred_main = Some(target);
-    config::save(&prefs)?;
-
-    println!(
-        "  {} Pinned {} as the main display.",
-        style("✓").green(),
-        style(target.to_string()).bold()
-    );
-    println!("    {}", style(config::config_path().display()).dim());
-
-    report(display::enforce()?);
-
-    if !agent::is_installed() {
-        println!();
-        println!(
-            "  {} Run {} to keep it pinned across dock reconnects.",
-            style("i").blue(),
-            style("wsctl display enable").bold()
-        );
     }
 
     Ok(())
@@ -168,7 +109,10 @@ pub fn watch() -> Result<()> {
 
 pub fn enable() -> Result<()> {
     if config::load()?.preferred_main.is_none() {
-        anyhow::bail!("nothing pinned yet; run `wsctl display pin` first");
+        anyhow::bail!(
+            "nothing pinned yet; declare preferred_main in {}",
+            config::config_path().display()
+        );
     }
 
     let exe = std::env::current_exe()
@@ -305,9 +249,10 @@ fn report(outcome: Outcome) {
 
     match outcome {
         Outcome::NotConfigured => println!(
-            "  {} Nothing pinned yet. Run {} first.",
+            "  {} Nothing pinned yet. Declare {} in {}.",
             style("!").yellow(),
-            style("wsctl display pin").bold()
+            style("preferred_main").bold(),
+            style(config::config_path().display()).bold()
         ),
         Outcome::Disconnected => println!(
             "  {} Pinned panel is not connected; leaving the layout alone.",
