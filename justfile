@@ -33,10 +33,10 @@ install:
 uninstall *FLAGS:
     wsctl self uninstall {{FLAGS}}
 
-# Audit disk usage — shows space consumed by toolchains, caches, apps
-audit:
-    cargo run -- audit
+# Browse disk usage folder by folder
+browse:
+    cargo run -- disk browse
 
 # Interactive TUI to select and run disk cleanups
-cleanup:
-    cargo run -- cleanup
+clean:
+    cargo run -- disk clean
