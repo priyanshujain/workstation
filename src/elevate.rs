@@ -21,10 +21,17 @@ pub fn rerun_as_root() {
     if is_root() || !interactive {
         return;
     }
-    let authorised = Command::new("sudo")
-        .args(["-v", "-p", "Password to also measure root-owned folders: "])
-        .status()
-        .is_ok_and(|status| status.success());
+    let sudo = |args: &[&str]| {
+        Command::new("sudo")
+            .args(args)
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let authorised = sudo(&[
+        "-p",
+        "Password to also measure root-owned folders: ",
+        "true",
+    ]) && sudo(&["-n", "true"]);
     if !authorised {
         eprintln!("Continuing without root: root-owned folders stay unmeasured.");
         return;
