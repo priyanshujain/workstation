@@ -1141,7 +1141,12 @@ fn event_loop(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
 /// finishes, which is what keeps the screen answering keys.
 fn sweep_live(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let roots = sweep::discover_roots();
-    let rules = attribution_rules();
+    let projects = disk::projects::discover(
+        &disk::projects::default_roots(),
+        disk::projects::MAX_DEPTH,
+        &app.closed,
+    );
+    let rules = attribution_rules(&app.closed, &projects);
     let Some(audit) = measure_volume(app, terminal, &roots, &rules, &mut pressed)? else {
         return Ok(());
     };
@@ -1151,7 +1156,7 @@ fn sweep_live(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
     // caller.
     app.status = Status::Saving;
     terminal.draw(|f| render(f, app))?;
-    save(audit, &app.closed);
+    save(audit, projects);
 
     app.status = Status::Idle;
     app.age = Some(Duration::ZERO);
@@ -1237,14 +1242,8 @@ where
     }
 }
 
-fn save(audit: Audit, closed: &[PathBuf]) {
-    let report = report::from_audit(
-        audit,
-        &disk::projects::default_roots(),
-        disk::projects::MAX_DEPTH,
-        SystemTime::now(),
-        closed,
-    );
+fn save(audit: Audit, projects: Vec<disk::projects::Project>) {
+    let report = report::from_audit(audit, projects, SystemTime::now());
     if let Err(e) = report::save(&report) {
         tracing::warn!("could not write disk report cache: {e}");
     }
@@ -2625,9 +2624,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
     fn the_naming_view_has_its_rows_before_a_walk_can_size_them() {
-        let rules = attribution_rules();
+        let rules = vec![Rule {
+            category: "Caches".into(),
+            label: "some-tool".into(),
+            path: PathBuf::from("/nonexistent/some-tool"),
+        }];
         let mut app = blank(None);
         app.begin_scan(&rules);
         app.toggle();

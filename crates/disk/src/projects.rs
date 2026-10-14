@@ -117,13 +117,7 @@ impl Project {
 
 /// Where projects are looked for when no explicit root is given.
 pub fn default_roots() -> Vec<PathBuf> {
-    let Some(home) = dirs::home_dir() else {
-        return Vec::new();
-    };
-    [home.join("Workspace"), home.join("go/src")]
-        .into_iter()
-        .filter(|p| p.is_dir())
-        .collect()
+    dirs::home_dir().into_iter().collect()
 }
 
 /// Maximum directory depth the project walk descends.
@@ -137,6 +131,7 @@ pub const MAX_DEPTH: usize = 8;
 /// Nothing in `closed` is opened, at any depth.
 pub fn discover(roots: &[PathBuf], max_depth: usize, closed: &[PathBuf]) -> Vec<Project> {
     let mut found = Vec::new();
+    let library = dirs::home_dir().map(|home| home.join("Library"));
 
     for root in roots {
         if crate::sweep::is_closed(root, closed) || !root.is_dir() {
@@ -155,7 +150,10 @@ pub fn discover(roots: &[PathBuf], max_depth: usize, closed: &[PathBuf]) -> Vec<
                     return false;
                 }
                 let name = e.file_name().to_string_lossy();
-                !(e.file_type().is_dir() && PRUNE.contains(&name.as_ref()))
+                let is_dir = e.file_type().is_dir();
+                let hidden = name.starts_with('.');
+                let in_library = library.as_deref() == Some(e.path());
+                !(is_dir && (hidden || in_library || PRUNE.contains(&name.as_ref())))
             });
 
         for entry in walk.flatten() {
@@ -358,6 +356,20 @@ mod tests {
         let idle = found[0].idle_days(SystemTime::now()).unwrap();
 
         assert!(idle >= 29, "expected ~30 days idle, got {idle}");
+    }
+
+    #[test]
+    fn hidden_directories_are_not_searched_for_projects() {
+        let dir = tempdir().unwrap();
+        write(&dir.path().join(".tool/app/package.json"), 2);
+        write(&dir.path().join(".tool/app/node_modules/x.js"), 8192);
+        write(&dir.path().join("app/package.json"), 2);
+        write(&dir.path().join("app/node_modules/x.js"), 8192);
+
+        let found = discover(&[dir.path().to_path_buf()], 6, &[]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].root, dir.path().join("app"));
     }
 
     #[test]

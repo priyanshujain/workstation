@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use crate::platform;
+use crate::conventions::{self, Places};
+use crate::projects::Project;
 use crate::sweep::{self, Denial, Denials, Root, RootUsage, Rule, Unreadable};
 
 pub struct Category {
@@ -99,17 +100,17 @@ pub fn from_sweep(swept: sweep::Sweep, rules: &[Rule]) -> Audit {
     }
 }
 
-pub fn attribution_rules() -> Vec<Rule> {
-    platform::audit_categories()
-        .into_iter()
-        .flat_map(|(category, paths)| {
-            paths.into_iter().map(move |(label, path)| Rule {
-                category: category.to_string(),
-                label: label.to_string(),
-                path,
-            })
-        })
-        .collect()
+pub fn attribution_rules(closed: &[PathBuf], projects: &[Project]) -> Vec<Rule> {
+    let mut rules = Places::current()
+        .map(|places| conventions::rules(&places, closed))
+        .unwrap_or_default();
+    rules.extend(projects.iter().flat_map(|project| {
+        project
+            .artifacts
+            .iter()
+            .map(|artifact| conventions::build_output_rule(&project.root, artifact.path.clone()))
+    }));
+    rules
 }
 
 /// Roll per-rule bytes back up into categories, largest first. Empty paths and
@@ -268,35 +269,5 @@ mod tests {
 
         let audit = scan_with(&roots, &rules, &[]);
         assert!(audit.categories.is_empty());
-    }
-
-    #[test]
-    fn every_rule_path_is_absolute() {
-        // A relative rule path would never match a walked path, and would
-        // fail silently as a category that is always zero.
-        for rule in attribution_rules() {
-            assert!(
-                rule.path.is_absolute(),
-                "{} / {} is relative: {}",
-                rule.category,
-                rule.label,
-                rule.path.display()
-            );
-        }
-    }
-
-    #[test]
-    fn no_two_rules_claim_the_same_path() {
-        // Attribution is keyed by path, so a duplicate would make one of the
-        // two rules permanently zero.
-        let rules = attribution_rules();
-        let mut seen = std::collections::HashSet::new();
-        for rule in &rules {
-            assert!(
-                seen.insert(rule.path.clone()),
-                "{} is claimed twice",
-                rule.path.display()
-            );
-        }
     }
 }

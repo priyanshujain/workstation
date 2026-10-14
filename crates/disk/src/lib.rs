@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod audit;
 pub mod cleanup;
+pub mod conventions;
 pub mod liveness;
 pub mod overview;
 pub mod platform;

@@ -466,9 +466,10 @@ fn measure(
     now: SystemTime,
     closed: &[PathBuf],
 ) -> Report {
-    let rules = crate::audit::attribution_rules();
+    let projects = crate::projects::discover(project_roots, max_depth, closed);
+    let rules = crate::audit::attribution_rules(closed, &projects);
     let audit = crate::audit::scan_with(roots, &rules, closed);
-    from_audit(audit, project_roots, max_depth, now, closed)
+    from_audit(audit, projects, now)
 }
 
 /// What the scheduled refresh runs. The walk leaves closed whatever macOS
@@ -489,13 +490,7 @@ fn write_back(report: &Report) {
 /// The same report from a measurement that has already been taken, so a caller
 /// that walked the volume itself can write the cache back instead of walking it
 /// a second time.
-pub fn from_audit(
-    audit: Audit,
-    project_roots: &[PathBuf],
-    max_depth: usize,
-    now: SystemTime,
-    closed: &[PathBuf],
-) -> Report {
+pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Report {
     let roots = audit
         .roots
         .into_iter()
@@ -531,7 +526,7 @@ pub fn from_audit(
         })
         .collect();
 
-    let projects = crate::projects::discover(project_roots, max_depth, closed)
+    let projects = projects
         .into_iter()
         .map(|p| ProjectSnap {
             root: p.root,
