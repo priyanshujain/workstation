@@ -30,6 +30,13 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Check the live machine against the flake; any failure exits nonzero
+    Doctor {
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, default_value = ".")]
+        flake: String,
+    },
+
     /// Inspect and clean up disk usage
     Disk {
         #[command(subcommand)]

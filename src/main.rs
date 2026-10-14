@@ -36,6 +36,12 @@ fn main() -> anyhow::Result<()> {
             let target = commands::apply::Target::parse(&flake)?;
             commands::apply::run_apply(&target, dry_run)?;
         }
+        Commands::Doctor { flake } => {
+            let target = commands::apply::Target::parse(&flake)?;
+            if !commands::doctor::run(&target)? {
+                std::process::exit(1);
+            }
+        }
         Commands::Disk { sub } => {
             // Said before anything takes the screen, because a privileged run
             // writes its cache somewhere an unprivileged one would not.
