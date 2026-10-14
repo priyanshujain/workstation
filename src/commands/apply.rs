@@ -49,7 +49,9 @@ fn step(what: &str) {
 /// Runs from a scratch directory, because the switch and build tools leave a `result` link in
 /// whatever directory they start in.
 fn run(program: &str, args: &[&str]) -> Result<()> {
-    let scratch = std::env::temp_dir().join("wsctl");
+    let scratch = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("wsctl");
     std::fs::create_dir_all(&scratch)?;
     let status = Command::new(program)
         .args(args)
