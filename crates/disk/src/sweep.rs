@@ -21,7 +21,15 @@ use serde::{Deserialize, Serialize};
 /// Everything `df` counts for the data volume hangs off here, firmlinks
 /// included. Walking `/` instead would cross into the read-only system volume
 /// and count bytes that are not on this volume at all.
+#[cfg(target_os = "macos")]
 const DATA_VOLUME: &str = "/System/Volumes/Data";
+#[cfg(not(target_os = "macos"))]
+const DATA_VOLUME: &str = "/";
+
+#[cfg(target_os = "macos")]
+const USERS: &str = "Users";
+#[cfg(not(target_os = "macos"))]
+const USERS: &str = "home";
 
 /// Per root, so one pathological tree cannot fill the report.
 const MAX_UNREADABLE_LISTED: usize = 20;
@@ -337,8 +345,7 @@ pub fn discover_roots() -> Vec<Root> {
             let Some(name) = child.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name == "Users" {
-                roots.extend(user_roots());
+            if name == USERS {
                 continue;
             }
             if name == "Volumes" {
@@ -353,9 +360,7 @@ pub fn discover_roots() -> Vec<Root> {
         }
     }
 
-    if roots.is_empty() {
-        roots = user_roots();
-    }
+    roots.extend(user_roots());
     roots.sort_by_key(|r| (display_rank(&r.name), r.name.clone()));
     roots
 }
@@ -384,10 +389,12 @@ fn display_rank(name: &str) -> u8 {
 fn user_roots() -> Vec<Root> {
     let mut roots = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        roots.push(Root {
-            name: "User Library".into(),
-            path: home.join("Library"),
-        });
+        if cfg!(target_os = "macos") {
+            roots.push(Root {
+                name: "User Library".into(),
+                path: home.join("Library"),
+            });
+        }
         roots.push(Root {
             name: "Home".into(),
             path: home,
@@ -395,7 +402,7 @@ fn user_roots() -> Vec<Root> {
     }
     roots.push(Root {
         name: "Other users".into(),
-        path: PathBuf::from("/Users"),
+        path: Path::new("/").join(USERS),
     });
     roots
 }

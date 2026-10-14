@@ -33,8 +33,9 @@ impl DiskOverview {
 /// `df`. They are not interchangeable: `df` reports one volume's slice of a
 /// shared container, so on APFS its "total" and "free" describe something
 /// narrower than the disk the user is looking at.
+#[cfg(target_os = "macos")]
 pub fn disk_overview() -> Option<DiskOverview> {
-    let (df_total, data_used, df_free) = statfs(df_path())?;
+    let (df_total, data_used, df_free) = statfs(Path::new(df_path()))?;
 
     let plist = diskutil_plist(df_path());
     let total = plist
@@ -54,8 +55,32 @@ pub fn disk_overview() -> Option<DiskOverview> {
     })
 }
 
-fn statfs(path: &str) -> Option<(u64, u64, u64)> {
-    let output = Command::new("df").args(["-k", path]).output().ok()?;
+#[cfg(not(target_os = "macos"))]
+pub fn disk_overview() -> Option<DiskOverview> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut devices = std::collections::HashSet::new();
+    let (mut total, mut used, mut free) = (0, 0, 0);
+    let home = dirs::home_dir();
+    for path in std::iter::once(Path::new("/")).chain(home.as_deref()) {
+        let device = std::fs::metadata(path).ok()?.dev();
+        if devices.insert(device) {
+            let (t, u, f) = statfs(path)?;
+            total += t;
+            used += u;
+            free += f;
+        }
+    }
+    Some(DiskOverview {
+        total,
+        free,
+        data_used: used,
+        other_volumes: total.saturating_sub(free).saturating_sub(used),
+    })
+}
+
+fn statfs(path: &Path) -> Option<(u64, u64, u64)> {
+    let output = Command::new("df").arg("-k").arg(path).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -72,6 +97,7 @@ fn statfs(path: &str) -> Option<(u64, u64, u64)> {
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn diskutil_plist(path: &str) -> Option<String> {
     let output = Command::new("diskutil")
         .args(["info", "-plist", path])
@@ -86,6 +112,7 @@ fn diskutil_plist(path: &str) -> Option<String> {
 /// Pull one integer out of an XML plist. Deliberately not a plist parser: the
 /// value has to be the tag immediately after its key, so a key appearing as
 /// someone else's string value cannot hijack the lookup.
+#[cfg(any(target_os = "macos", test))]
 fn plist_u64(plist: &str, key: &str) -> Option<u64> {
     let needle = format!("<key>{key}</key>");
     let after = &plist[plist.find(&needle)? + needle.len()..];
@@ -102,12 +129,6 @@ fn df_path() -> &'static str {
     } else {
         "/"
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn df_path() -> &'static str {
-    let _ = Path::new("/");
-    "/"
 }
 
 #[cfg(test)]

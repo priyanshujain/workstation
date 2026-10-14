@@ -57,7 +57,11 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
         }
         if overview.other_volumes > 0 {
             lines.push(Line {
-                name: "Other volumes".into(),
+                name: if cfg!(target_os = "macos") {
+                    "Other volumes".into()
+                } else {
+                    "Reserved".into()
+                },
                 size: overview.other_volumes,
                 owners: Vec::new(),
             });
@@ -190,7 +194,17 @@ mod tests {
             .collect();
         assert_eq!(
             tail,
-            vec![("Not reached", 10 * GB), ("Other volumes", 10 * GB)]
+            vec![
+                ("Not reached", 10 * GB),
+                (
+                    if cfg!(target_os = "macos") {
+                        "Other volumes"
+                    } else {
+                        "Reserved"
+                    },
+                    10 * GB
+                )
+            ]
         );
         let listed: u64 = lines.iter().map(|l| l.size).sum();
         assert_eq!(listed, overview.used());
