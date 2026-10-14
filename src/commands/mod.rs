@@ -1,3 +1,4 @@
+pub mod agents;
 #[cfg(target_os = "macos")]
 pub mod app;
 pub mod apply;

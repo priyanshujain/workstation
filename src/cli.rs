@@ -78,6 +78,12 @@ pub enum Commands {
         no_cache: bool,
     },
 
+    /// Running coding agents, the processes they orphaned and the clones they left
+    Agents {
+        #[command(subcommand)]
+        sub: Option<AgentsCommand>,
+    },
+
     #[cfg(target_os = "macos")]
     /// Remove an application and the support files it leaves behind
     App {
@@ -195,6 +201,15 @@ pub enum DiskCommand {
         #[arg(long)]
         no_cache: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum AgentsCommand {
+    /// List orphaned processes, temp clones and unused worktrees without touching them
+    Leftovers,
+
+    /// Ask about each leftover, then stop or remove it
+    Clean,
 }
 
 #[derive(Subcommand)]

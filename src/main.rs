@@ -8,9 +8,9 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
+use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand};
 #[cfg(target_os = "macos")]
 use cli::{AppCommand, DisplayCommand};
-use cli::{Cli, Commands, DiskCommand, SelfCommand};
 
 fn main() -> anyhow::Result<()> {
     // Rust ignores SIGPIPE, so println! panics once a reader goes away and
@@ -106,6 +106,11 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Agents { sub } => match sub {
+            None => commands::agents::list()?,
+            Some(AgentsCommand::Leftovers) => commands::agents::leftovers()?,
+            Some(AgentsCommand::Clean) => commands::agents::clean()?,
+        },
         #[cfg(target_os = "macos")]
         Commands::Display { sub } => match sub {
             DisplayCommand::List => commands::display::list()?,
