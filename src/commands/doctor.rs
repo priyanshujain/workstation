@@ -134,6 +134,15 @@ fn stray_binaries() -> Check {
         home().join(".cargo/bin"),
         home().join(".bun/bin"),
     ];
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let nix = dir.starts_with(home().join(".nix-profile"))
+            || dir.starts_with(home().join(".local/state/nix"))
+            || dir.starts_with("/nix")
+            || dir.starts_with("/run");
+        if dir.starts_with(home()) && !nix && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
     if let Ok(prefix) = output("npm", &["prefix", "-g"]) {
         let bin = PathBuf::from(prefix.trim()).join("bin");
         if !bin.starts_with("/nix/store") {
