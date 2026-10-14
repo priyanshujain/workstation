@@ -42,6 +42,19 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+        Commands::Why { query, flake } => {
+            commands::why::run(&commands::apply::Target::parse(&flake)?, &query)?;
+        }
+        Commands::Outdated { flake } => {
+            commands::outdated::run(&commands::apply::Target::parse(&flake)?)?;
+        }
+        Commands::Update {
+            inputs,
+            snapshot,
+            flake,
+        } => {
+            commands::update::run(&commands::apply::Target::parse(&flake)?, &inputs, snapshot)?;
+        }
         Commands::Disk { sub } => {
             // Said before anything takes the screen, because a privileged run
             // writes its cache somewhere an unprivileged one would not.

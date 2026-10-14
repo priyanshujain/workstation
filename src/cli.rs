@@ -37,6 +37,37 @@ pub enum Commands {
         flake: String,
     },
 
+    /// Show where an option or a package is declared, and its value
+    Why {
+        /// Option path such as `pacman.packages`, or a package name
+        query: String,
+
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, default_value = ".")]
+        flake: String,
+    },
+
+    /// Compare every pin with its source: flake inputs, the pacman snapshot, Homebrew
+    Outdated {
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, default_value = ".")]
+        flake: String,
+    },
+
+    /// Move the pins: update flake inputs, or the pacman snapshot to today
+    Update {
+        /// Inputs to update; all of them when none are given
+        inputs: Vec<String>,
+
+        /// Move pacman.snapshot to today instead of updating flake inputs
+        #[arg(long)]
+        snapshot: bool,
+
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, default_value = ".")]
+        flake: String,
+    },
+
     /// Inspect and clean up disk usage
     Disk {
         #[command(subcommand)]
