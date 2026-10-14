@@ -5,6 +5,7 @@ pub mod cleanup;
 pub mod conventions;
 pub mod liveness;
 pub mod overview;
+pub mod owners;
 pub mod platform;
 pub mod projects;
 pub mod report;

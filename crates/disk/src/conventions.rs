@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use crate::owners::{InstalledApps, Owner};
 use crate::sweep::{Rule, is_closed};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +15,7 @@ pub enum Kind {
     Nix,
     Temp,
     Trash,
+    RemovedApps,
 }
 
 impl Kind {
@@ -27,6 +30,7 @@ impl Kind {
             Kind::Nix => "Nix",
             Kind::Temp => "Temp",
             Kind::Trash => "Trash",
+            Kind::RemovedApps => "Removed apps",
         }
     }
 
@@ -35,7 +39,7 @@ impl Kind {
     }
 }
 
-pub const ALL: [Kind; 9] = [
+pub const ALL: [Kind; 10] = [
     Kind::Caches,
     Kind::Logs,
     Kind::AppData,
@@ -45,6 +49,7 @@ pub const ALL: [Kind; 9] = [
     Kind::Nix,
     Kind::Temp,
     Kind::Trash,
+    Kind::RemovedApps,
 ];
 
 #[derive(Debug, Clone)]
@@ -55,6 +60,7 @@ pub struct Places {
     pub xdg_state: PathBuf,
     pub temp: Vec<PathBuf>,
     pub package_prefixes: Vec<PathBuf>,
+    pub apps: InstalledApps,
     pub macos: bool,
 }
 
@@ -76,6 +82,11 @@ impl Places {
                 .map(PathBuf::from)
                 .into_iter()
                 .collect(),
+            apps: if cfg!(target_os = "macos") {
+                InstalledApps::scan()
+            } else {
+                InstalledApps::default()
+            },
             macos: cfg!(target_os = "macos"),
             home,
         })
@@ -99,7 +110,7 @@ pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
         rules.extend(
             children(parent, closed)
                 .into_iter()
-                .map(|child| rule(kind, owner_of(&child), child)),
+                .map(|child| owned_rule(&places.apps, kind, child)),
         );
     };
 
@@ -125,14 +136,20 @@ pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
 
     if places.macos {
         for container in children(&home.join("Library/Containers"), closed) {
-            let owner = owner_of(&container);
+            let folder = owner_of(&container);
             let data = container.join("Data");
-            rules.push(rule(
+            rules.push(owned_by(
+                &places.apps,
                 Kind::Caches,
-                owner.clone(),
+                &folder,
                 data.join("Library/Caches"),
             ));
-            rules.push(rule(Kind::Temp, owner, data.join("tmp")));
+            rules.push(owned_by(
+                &places.apps,
+                Kind::Temp,
+                &folder,
+                data.join("tmp"),
+            ));
         }
     }
 
@@ -167,6 +184,32 @@ fn last_rule_per_path(rules: Vec<Rule>) -> Vec<Rule> {
 
 pub fn build_output_rule(project_root: &Path, artifact: PathBuf) -> Rule {
     rule(Kind::BuildOutput, owner_of(project_root), artifact)
+}
+
+fn owned_rule(apps: &InstalledApps, kind: Kind, path: PathBuf) -> Rule {
+    let folder = owner_of(&path);
+    owned_by(apps, kind, &folder, path)
+}
+
+fn owned_by(apps: &InstalledApps, kind: Kind, folder: &str, path: PathBuf) -> Rule {
+    match apps.resolve(folder) {
+        Owner::App(name) => rule(kind, name, path),
+        Owner::Removed if !changed_within(&path, REMOVED_AFTER) => {
+            rule(Kind::RemovedApps, folder.to_string(), path)
+        }
+        Owner::Removed => rule(kind, folder.to_string(), path),
+        Owner::Unresolved => rule(kind, folder.to_string(), path),
+    }
+}
+
+const REMOVED_AFTER: Duration = Duration::from_secs(30 * 86_400);
+
+fn changed_within(path: &Path, age: Duration) -> bool {
+    std::fs::symlink_metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_none_or(|elapsed| elapsed < age)
 }
 
 fn rule(kind: Kind, label: String, path: PathBuf) -> Rule {
@@ -213,6 +256,7 @@ mod tests {
             xdg_state: home.join(".local/state"),
             temp: Vec::new(),
             package_prefixes: Vec::new(),
+            apps: InstalledApps::default(),
             macos,
         }
     }
@@ -257,7 +301,9 @@ mod tests {
             fs::create_dir_all(library.join(dir)).unwrap();
         }
 
-        let rules = rules(&places(home.path(), true), &[]);
+        let mut places = places(home.path(), true);
+        places.apps.add("com.example.App", "App");
+        let rules = rules(&places, &[]);
         let kind = |p: &str| find(&rules, &library.join(p)).map(|r| r.category.clone());
 
         assert_eq!(kind("Caches/com.example.App").as_deref(), Some("Caches"));
@@ -317,6 +363,54 @@ mod tests {
         let matching: Vec<_> = rules.iter().filter(|r| r.path == trash).collect();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].category, "Trash");
+    }
+
+    #[test]
+    fn folders_of_installed_apps_carry_the_app_name_and_removed_ones_their_own_kind() {
+        let home = tempfile::tempdir().unwrap();
+        let library = home.path().join("Library");
+        fs::create_dir_all(library.join("Caches/com.example.Editor")).unwrap();
+        fs::create_dir_all(library.join("Application Support/net.gone.Player")).unwrap();
+        fs::create_dir_all(library.join("Containers/net.gone.Player")).unwrap();
+        let old = filetime::FileTime::from_unix_time(1_000_000_000, 0);
+        for gone in [
+            "Application Support/net.gone.Player",
+            "Containers/net.gone.Player/Data/Library/Caches",
+        ] {
+            fs::create_dir_all(library.join(gone)).unwrap();
+            filetime::set_file_mtime(library.join(gone), old).unwrap();
+        }
+        let mut places = places(home.path(), true);
+        places.apps.add("com.example.Editor", "Editor");
+
+        let rules = rules(&places, &[]);
+        let at = |p: &str| {
+            let r = find(&rules, &library.join(p)).unwrap();
+            (r.category.as_str(), r.label.as_str())
+        };
+
+        assert_eq!(at("Caches/com.example.Editor"), ("Caches", "Editor"));
+        assert_eq!(
+            at("Application Support/net.gone.Player"),
+            ("Removed apps", "net.gone.Player")
+        );
+        assert_eq!(
+            at("Containers/net.gone.Player/Data/Library/Caches"),
+            ("Removed apps", "net.gone.Player")
+        );
+    }
+
+    #[test]
+    fn a_removed_app_folder_changed_this_month_is_not_called_removed() {
+        let home = tempfile::tempdir().unwrap();
+        let fresh = home
+            .path()
+            .join("Library/Application Support/net.gone.Player");
+        fs::create_dir_all(&fresh).unwrap();
+
+        let rules = rules(&places(home.path(), true), &[]);
+
+        assert_eq!(find(&rules, &fresh).unwrap().category, "App data");
     }
 
     #[test]
