@@ -17,6 +17,9 @@ pub fn summary(no_cache: bool) -> Result<()> {
     let lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
 
     print!("{}", summary::render(&lines, overview.as_ref()));
+    if let Some(line) = super::agents::disk_line() {
+        println!("{}", style(line).yellow());
+    }
     if let Source::Cache { age } = source {
         println!(
             "{}",

@@ -78,6 +78,33 @@ pub fn clean() -> Result<()> {
     Ok(())
 }
 
+pub fn disk_line() -> Option<String> {
+    let config = config::load()
+        .ok()
+        .filter(|config| !config.agents.is_empty())?;
+    let table = Table::snapshot();
+    let found = leftovers::find(&agent_cwds(&table, &config), &Liveness::snapshot());
+    if found.is_empty() {
+        return None;
+    }
+    let bytes: u64 = found
+        .iter()
+        .map(|leftover| disk::util::dir_size(&leftover.path))
+        .sum();
+    Some(format!(
+        "agent leftovers  {} in {} places, `wsctl agents clean` to review",
+        format_size(bytes),
+        found.len()
+    ))
+}
+
+fn agent_cwds(table: &Table, config: &Config) -> Vec<PathBuf> {
+    running::agents(table, config)
+        .into_iter()
+        .filter_map(|agent| agent.cwd)
+        .collect()
+}
+
 struct Found {
     table: Table,
     orphans: Vec<Orphan>,
@@ -88,12 +115,8 @@ impl Found {
     fn scan() -> Result<Self> {
         let config = load_config()?;
         let table = Table::snapshot();
-        let cwds: Vec<PathBuf> = running::agents(&table, &config)
-            .into_iter()
-            .filter_map(|agent| agent.cwd)
-            .collect();
         let orphans = running::orphans(&table, &config);
-        let leftovers = leftovers::find(&cwds, &Liveness::snapshot());
+        let leftovers = leftovers::find(&agent_cwds(&table, &config), &Liveness::snapshot());
         Ok(Self {
             table,
             orphans,
