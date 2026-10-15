@@ -50,6 +50,8 @@ in
   };
 
   config = lib.mkMerge [
+    { home.packages = [ cfg.package ]; }
+
     (lib.mkIf (cfg.agents != [ ]) {
       xdg.configFile."wsctl/agents.json".text = builtins.toJSON { inherit (cfg) agents; };
     })
