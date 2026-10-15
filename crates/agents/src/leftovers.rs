@@ -83,7 +83,7 @@ fn clones_under(root: &Path) -> Vec<PathBuf> {
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
-        .arg("-C")
+        .args(["-c", "safe.directory=*", "-C"])
         .arg(dir)
         .args(args)
         .output()
