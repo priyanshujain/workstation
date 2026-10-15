@@ -28,7 +28,7 @@ pub fn find(agent_cwds: &[PathBuf], live: &Liveness) -> Vec<Leftover> {
     let mut found: Vec<Leftover> = temp_roots()
         .iter()
         .flat_map(|root| clones_under(root))
-        .filter(|path| !live.is_busy(path))
+        .filter(|path| is_abandoned(path, live))
         .map(|path| Leftover {
             path,
             kind: Kind::TempClone,
@@ -38,7 +38,7 @@ pub fn find(agent_cwds: &[PathBuf], live: &Liveness) -> Vec<Leftover> {
     let repos: BTreeSet<PathBuf> = agent_cwds.iter().filter_map(|cwd| main_repo(cwd)).collect();
     for repo in repos {
         for path in linked_worktrees(&repo) {
-            if !live.is_busy(&path) && !found.iter().any(|leftover| leftover.path == path) {
+            if is_abandoned(&path, live) && !found.iter().any(|leftover| leftover.path == path) {
                 found.push(Leftover {
                     path,
                     kind: Kind::Worktree { repo: repo.clone() },
@@ -47,6 +47,10 @@ pub fn find(agent_cwds: &[PathBuf], live: &Liveness) -> Vec<Leftover> {
         }
     }
     found
+}
+
+fn is_abandoned(path: &Path, live: &Liveness) -> bool {
+    !live.is_busy(path) && unsaved_work(path).is_none()
 }
 
 fn clones_under(root: &Path) -> Vec<PathBuf> {
