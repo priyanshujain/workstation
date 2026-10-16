@@ -2,7 +2,7 @@
 
 Part of the Margin family of software. A personal desktop manager for developers who want control over their machines and workspace configuration.
 
-`wsctl` is its Rust CLI, currently focused on macOS: declarative setup, packages, apps, displays and disk tools. Audio and Android moved to [audioctl](https://github.com/priyanshujain/audioctl) and [android-mux](https://github.com/priyanshujain/android-mux).
+`wsctl` is its Rust CLI for macOS and Linux: declarative setup through Nix, doctor, disk and agent hygiene. Audio and Android moved to [audioctl](https://github.com/priyanshujain/audioctl) and [android-mux](https://github.com/priyanshujain/android-mux).
 
 ## Install
 
