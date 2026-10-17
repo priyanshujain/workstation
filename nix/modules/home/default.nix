@@ -1,9 +1,10 @@
 self:
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, osConfig ? null, ... }:
 
 let
   cfg = config.services.wsctl;
   program = job: [ (lib.getExe cfg.package) ] ++ job.command;
+  launchdFromDarwin = osConfig.services.wsctl.agentsFromHome or false;
 in
 {
   options.services.wsctl = {
@@ -71,7 +72,7 @@ in
       xdg.configFile."wsctl/agents.json".text = builtins.toJSON { inherit (cfg) agents; };
     })
 
-    (lib.mkIf pkgs.stdenv.isDarwin {
+    (lib.mkIf (pkgs.stdenv.isDarwin && !launchdFromDarwin) {
       launchd.agents = lib.mapAttrs' (name: job: lib.nameValuePair "wsctl-${name}" {
         enable = true;
         config = {
@@ -91,7 +92,7 @@ in
         lib.optionalAttrs (cfg.display.preferredMain != null) { preferred_main = cfg.display.preferredMain; }
       );
 
-      launchd.agents.wsctl-display = {
+      launchd.agents.wsctl-display = lib.mkIf (!launchdFromDarwin) {
         enable = true;
         config = {
           ProgramArguments = [ (lib.getExe cfg.package) "-v" "display" "apply" ];
