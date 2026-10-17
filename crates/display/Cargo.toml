@@ -7,7 +7,6 @@ authors.workspace = true
 description = "Pin the macOS main display to a chosen panel across reconnects"
 
 [dependencies]
-wsctl-core.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
 serde.workspace = true
