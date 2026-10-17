@@ -33,7 +33,6 @@
       systemModules.default = ./nix/modules/linux;
 
       homeModules.default = import ./nix/modules/home self;
-      darwinModules.default = ./nix/modules/darwin;
 
       systemConfigs.arch = system-manager.lib.makeSystemConfig {
         modules = [
