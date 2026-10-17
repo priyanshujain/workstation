@@ -145,7 +145,7 @@ fn stray_binaries() -> Check {
     }
     if let Ok(prefix) = output("npm", &["prefix", "-g"]) {
         let bin = PathBuf::from(prefix.trim()).join("bin");
-        if !bin.starts_with("/nix/store") {
+        if !bin.starts_with("/nix/store") && !dirs.contains(&bin) {
             dirs.push(bin);
         }
     }
