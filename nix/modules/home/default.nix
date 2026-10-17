@@ -31,6 +31,21 @@ in
       });
     };
 
+    display = {
+      enable = lib.mkEnableOption "keeping the menu bar on the preferred display (macOS)";
+      preferredMain = lib.mkOption {
+        type = lib.types.nullOr (lib.types.submodule {
+          options = {
+            vendor = lib.mkOption { type = lib.types.int; };
+            model = lib.mkOption { type = lib.types.int; };
+            serial = lib.mkOption { type = lib.types.int; };
+          };
+        });
+        default = null;
+        description = "Display that should hold the menu bar whenever it is connected.";
+      };
+    };
+
     jobs = lib.mkOption {
       default = { };
       description = "wsctl subcommands run on a timer as the user; each run exits when done.";
@@ -69,6 +84,25 @@ in
           StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/wsctl-${name}.log";
         };
       }) cfg.jobs;
+    })
+
+    (lib.mkIf (pkgs.stdenv.isDarwin && cfg.display.enable) {
+      xdg.configFile."wsctl/display.json".text = builtins.toJSON (
+        lib.optionalAttrs (cfg.display.preferredMain != null) { preferred_main = cfg.display.preferredMain; }
+      );
+
+      launchd.agents.wsctl-display = {
+        enable = true;
+        config = {
+          ProgramArguments = [ (lib.getExe cfg.package) "-v" "display" "apply" ];
+          RunAtLoad = true;
+          WatchPaths = [ "/Library/Preferences/com.apple.windowserver.displays.plist" ];
+          StartInterval = 5;
+          ProcessType = "Background";
+          StandardOutPath = "${config.home.homeDirectory}/Library/Logs/wsctl-display.log";
+          StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/wsctl-display.log";
+        };
+      };
     })
 
     (lib.mkIf pkgs.stdenv.isLinux {
