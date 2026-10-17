@@ -149,6 +149,7 @@ fn stray_binaries() -> Check {
             dirs.push(bin);
         }
     }
+    let agent_dirs = agent_install_dirs(&dirs);
     let mut found = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -156,7 +157,10 @@ fn stray_binaries() -> Check {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if resolved(&path).is_some_and(|p| p.starts_with("/nix/store")) {
+            if resolved(&path).is_some_and(|p| {
+                p.starts_with("/nix/store")
+                    || agent_dirs.iter().any(|dir| Path::new(&p).starts_with(dir))
+            }) {
                 continue;
             }
             let executable = std::fs::metadata(&path).is_ok_and(|m| {
@@ -179,6 +183,18 @@ fn stray_binaries() -> Check {
             found,
         )
     }
+}
+
+fn agent_install_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let config = agents::config::load().unwrap_or_default();
+    config
+        .agents
+        .iter()
+        .flat_map(|agent| dirs.iter().map(move |dir| dir.join(&agent.command)))
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .filter(|path| !path.starts_with("/nix/store"))
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
