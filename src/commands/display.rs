@@ -1,12 +1,8 @@
 use std::io::IsTerminal;
-use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use display::{Outcome, agent, arrange, config, names, platform, spaces};
-
-/// How often the watcher re-reads the display layout.
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn list() -> Result<()> {
     let displays = platform::list_displays()?;
@@ -97,68 +93,6 @@ pub fn apply() -> Result<()> {
     Ok(())
 }
 
-/// Long-running mode used by the launchd agent.
-pub fn watch() -> Result<()> {
-    tracing::info!("watching for display changes");
-    platform::watch(POLL_INTERVAL, || match display::enforce() {
-        Ok(Outcome::Moved(key)) => tracing::info!("restored {key} as the main display"),
-        Ok(outcome) => tracing::debug!("no change needed ({outcome:?})"),
-        Err(e) => tracing::error!("could not enforce the main display: {e:#}"),
-    })
-}
-
-pub fn enable() -> Result<()> {
-    if config::load()?.preferred_main.is_none() {
-        anyhow::bail!(
-            "nothing pinned yet; declare preferred_main in {}",
-            config::config_path().display()
-        );
-    }
-
-    let exe = std::env::current_exe()
-        .context("could not determine the wsctl binary path")?
-        .canonicalize()
-        .context("could not resolve the wsctl binary path")?;
-
-    if exe.components().any(|c| c.as_os_str() == "target") {
-        println!(
-            "  {} Registering a build-directory binary at {}. Re-run this after `just install`.",
-            style("!").yellow(),
-            style(exe.display()).dim()
-        );
-    }
-
-    let installed = agent::install(&exe)?;
-
-    println!(
-        "  {} Armed. launchd will re-apply the pin whenever the display layout changes.",
-        style("✓").green()
-    );
-    println!("    {}", style(installed.plist.display()).dim());
-    println!("    {}", style(agent::log_path().display()).dim());
-    println!(
-        "    {}",
-        style(format!("signed as {}", installed.signed_as)).dim()
-    );
-    if !installed.approved {
-        println!(
-            "  {} macOS is holding it until Margin Workstation is allowed under System Settings > Login Items.",
-            style("!").yellow()
-        );
-    }
-    Ok(())
-}
-
-pub fn disable() -> Result<()> {
-    agent::uninstall()?;
-    println!("  {} Trigger removed.", style("✓").green());
-    println!(
-        "    {}",
-        style("Your pinned panel is kept; run `wsctl display enable` to resume.").dim()
-    );
-    Ok(())
-}
-
 pub fn status() -> Result<()> {
     let prefs = config::load()?;
     let displays = platform::list_displays()?;
@@ -210,10 +144,10 @@ pub fn status() -> Result<()> {
     };
     println!("  {}  {}", style("spaces ").dim(), spaces);
 
-    let trigger = match (agent::is_installed(), agent::is_loaded()) {
-        (true, true) => style("armed").green(),
-        (true, false) => style("installed but not loaded").yellow(),
-        (false, _) => style("not enabled").dim(),
+    let trigger = if agent::is_loaded() {
+        style("loaded").green()
+    } else {
+        style("not loaded, enable services.wsctl.display").yellow()
     };
     println!("  {}  {}", style("trigger").dim(), trigger);
     println!(

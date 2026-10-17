@@ -1,6 +1,5 @@
 use std::ffi::c_void;
 use std::ptr;
-use std::time::Duration;
 
 use anyhow::{Result, bail};
 
@@ -118,20 +117,6 @@ pub fn apply_moves(moves: &[Move]) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Run `handler` at startup and on every polling interval. Never returns.
-///
-/// This polls rather than using `CGDisplayRegisterReconfigurationCallback`. That callback
-/// registers successfully in a plain command-line process but is never delivered, because
-/// notifications only reach processes with a full GUI connection to the WindowServer.
-/// Verified against a real mirror toggle: zero callbacks. Polling a handful of CoreGraphics
-/// getters costs nothing and works under launchd, which is where this actually runs.
-pub fn watch(interval: Duration, mut handler: impl FnMut()) -> Result<()> {
-    loop {
-        handler();
-        std::thread::sleep(interval);
-    }
 }
 
 #[cfg(test)]

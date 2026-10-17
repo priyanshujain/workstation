@@ -141,18 +141,8 @@ pub enum DisplayCommand {
     /// Move the menu bar back to the pinned panel now
     Apply,
 
-    /// Show what is pinned and whether the watcher is running
+    /// Show what is pinned and whether the launchd job is loaded
     Status,
-
-    /// Start watching for display changes in the background (launchd agent)
-    Enable,
-
-    /// Stop watching for display changes
-    Disable,
-
-    /// Run the watcher in the foreground (used by the launchd agent)
-    #[command(hide = true)]
-    Watch,
 }
 
 #[derive(Subcommand)]
@@ -221,7 +211,7 @@ pub enum SelfCommand {
         yes: bool,
     },
 
-    /// Uninstall the wsctl binary, its launchd jobs and the Margin Workstation app
+    /// Uninstall the wsctl binary
     Uninstall {
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
@@ -231,20 +221,4 @@ pub enum SelfCommand {
         #[arg(long)]
         purge: bool,
     },
-
-    #[cfg(target_os = "macos")]
-    /// Register a job of the Workstation bundle with launchd. Run by the bundled copy:
-    /// the Service Management API registers jobs of the calling app only.
-    #[command(hide = true)]
-    RegisterAgent { label: String },
-
-    #[cfg(target_os = "macos")]
-    /// Unregister a job of the Workstation bundle. Run by the bundled copy.
-    #[command(hide = true)]
-    UnregisterAgent { label: String },
-
-    #[cfg(target_os = "macos")]
-    /// Print the SMAppService status of a job of the Workstation bundle. Run by the bundled copy.
-    #[command(hide = true)]
-    AgentStatus { label: String },
 }

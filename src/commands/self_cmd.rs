@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use console::style;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(target_os = "macos")]
-use wsctl_core::bundle;
 
 const INSTALLER_URL: &str =
     "https://raw.githubusercontent.com/priyanshujain/workstation/main/install.sh";
@@ -13,13 +11,11 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = path.canonicalize().unwrap_or(path);
 
     println!(
-        "{} This will remove the {} binary, and on macOS its launchd jobs and the Margin Workstation app:",
+        "{} This will remove the {} binary:",
         style("→").cyan(),
         style("wsctl").bold()
     );
     println!("    {}", style(path.display()).dim());
-    #[cfg(target_os = "macos")]
-    println!("    {}", style(bundle::app_path().display()).dim());
 
     let data: Vec<PathBuf> = purge
         .then(purge_paths)
@@ -40,12 +36,6 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Jobs first: with the binary gone they would keep running the bundled copy.
-    #[cfg(target_os = "macos")]
-    {
-        display::agent::uninstall()?;
-        bundle::remove()?;
-    }
     if purge {
         remove_paths(&data)?;
     }
@@ -100,7 +90,7 @@ fn delete_binary(path: &Path) -> Result<()> {
     std::fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))
 }
 
-/// The data wsctl leaves behind once the binary, jobs and bundle are gone: the job logs,
+/// The data wsctl leaves behind once the binary is gone: the job logs,
 /// the disk report in Application Support, and the display pin in ~/.config.
 fn purge_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();

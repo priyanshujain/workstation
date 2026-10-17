@@ -116,9 +116,6 @@ fn main() -> anyhow::Result<()> {
             DisplayCommand::List => commands::display::list()?,
             DisplayCommand::Apply => commands::display::apply()?,
             DisplayCommand::Status => commands::display::status()?,
-            DisplayCommand::Enable => commands::display::enable()?,
-            DisplayCommand::Disable => commands::display::disable()?,
-            DisplayCommand::Watch => commands::display::watch()?,
         },
         #[cfg(target_os = "macos")]
         Commands::App { sub } => match sub {
@@ -136,14 +133,6 @@ fn main() -> anyhow::Result<()> {
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
             SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
-            #[cfg(target_os = "macos")]
-            SelfCommand::RegisterAgent { label } => wsctl_core::bundle::register_here(&label)?,
-            #[cfg(target_os = "macos")]
-            SelfCommand::UnregisterAgent { label } => wsctl_core::bundle::unregister_here(&label)?,
-            #[cfg(target_os = "macos")]
-            SelfCommand::AgentStatus { label } => {
-                println!("{}", wsctl_core::bundle::status_here(&label))
-            }
         },
     }
 
