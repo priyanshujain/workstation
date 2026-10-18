@@ -7,6 +7,8 @@ use serde::Deserialize;
 
 mod workspace;
 
+const UNASSIGNABLE: &[&str] = &["public.data", "public.item", "public.content"];
+
 #[derive(Deserialize)]
 struct Rules {
     #[serde(default)]
@@ -118,7 +120,12 @@ pub fn report() -> Result<Option<Report>> {
                 };
                 wanted.insert(found, (app.clone(), label));
             }
-            None => unmapped.push(key.clone()),
+            None => unmapped.push(format!("macOS has no content type for .{key}")),
+        }
+    }
+    for base in UNASSIGNABLE {
+        if wanted.remove(*base).is_some() {
+            unmapped.push(format!("macOS will not reassign {base}"));
         }
     }
     let mismatches = wanted

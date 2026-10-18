@@ -958,10 +958,7 @@ mod os {
         let Some(report) = report()? else {
             return Ok(Check::pass("default apps", "none declared"));
         };
-        let unmapped = report
-            .unmapped
-            .iter()
-            .map(|key| format!("macOS has no content type for .{key}"));
+        let unmapped = report.unmapped.iter().cloned();
         if report.mismatches.is_empty() {
             return Ok(Check {
                 details: unmapped.collect(),
