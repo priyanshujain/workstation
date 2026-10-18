@@ -160,6 +160,11 @@ static FINISHED: AtomicBool = AtomicBool::new(false);
 static FAILURE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 unsafe extern "C" fn finished(_block: *const Block, error: Id) {
+    let error = if error.is_null() {
+        error
+    } else {
+        send(error, "retain")
+    };
     FAILURE.store(error, Ordering::SeqCst);
     FINISHED.store(true, Ordering::SeqCst);
 }
