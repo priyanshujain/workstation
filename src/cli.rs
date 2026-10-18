@@ -22,7 +22,7 @@ pub enum Commands {
     /// Apply the flake's configuration: the platform switch, distro packages and home-manager
     Apply {
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value_t = default_flake())]
         flake: String,
 
         /// Build and show what would change without changing anything
@@ -33,7 +33,7 @@ pub enum Commands {
     /// Check the live machine against the flake; any failure exits nonzero
     Doctor {
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value_t = default_flake())]
         flake: String,
     },
 
@@ -43,14 +43,14 @@ pub enum Commands {
         query: String,
 
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value_t = default_flake())]
         flake: String,
     },
 
     /// Compare every pin with its source: flake inputs, the pacman snapshot, Homebrew
     Outdated {
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value_t = default_flake())]
         flake: String,
     },
 
@@ -64,7 +64,7 @@ pub enum Commands {
         snapshot: bool,
 
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value_t = default_flake())]
         flake: String,
     },
 
@@ -225,4 +225,13 @@ pub enum SelfCommand {
         #[arg(long)]
         purge: bool,
     },
+}
+
+fn default_flake() -> String {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
+        .join("home-manager")
+        .display()
+        .to_string()
 }
