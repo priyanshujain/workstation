@@ -134,7 +134,7 @@ fn setting(words: &[String]) -> Result<Option<Setting>> {
     }))
 }
 
-fn statements(script: &str) -> Vec<Vec<String>> {
+pub fn statements(script: &str) -> Vec<Vec<String>> {
     let mut statements = Vec::new();
     let mut words = Vec::new();
     let mut word = String::new();

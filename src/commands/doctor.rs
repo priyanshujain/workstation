@@ -944,6 +944,8 @@ mod os {
             Check::from_result("casks", casks(target)),
             Check::from_result("remote login", remote_login(target)),
             Check::from_result("settings", super::defaults::check(target)),
+            Check::from_result("power", power(target)),
+            Check::from_result("firewall", firewall(target)),
         ]
     }
 
@@ -1023,5 +1025,118 @@ mod os {
                 Vec::new(),
             ),
         })
+    }
+
+    fn power(target: &Target) -> Result<Check> {
+        let script = output(
+            "nix",
+            &[
+                "eval",
+                "--raw",
+                &option(target, "system.activationScripts.postActivation.text"),
+            ],
+        )?;
+        let live = output("pmset", &["-g", "custom"])?;
+        let mut sources: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
+        for line in live.lines() {
+            match line.strip_suffix(':') {
+                Some(source) => sources.push((source, Vec::new())),
+                None => {
+                    if let (Some((_, pairs)), Some((key, value))) =
+                        (sources.last_mut(), line.trim().rsplit_once(' '))
+                    {
+                        pairs.push((key.trim(), value.trim()));
+                    }
+                }
+            }
+        }
+
+        let mut total = 0;
+        let mut drift = Vec::new();
+        for words in super::defaults::statements(&script) {
+            let Some(start) = words.iter().position(|w| w == "pmset") else {
+                continue;
+            };
+            let mut words = words[start + 1..].iter().map(String::as_str);
+            let wanted_sources: &[&str] = match words.next() {
+                Some("-b") => &["Battery Power"],
+                Some("-c") => &["AC Power"],
+                Some("-a") => &["Battery Power", "AC Power"],
+                other => anyhow::bail!("unsupported pmset call {other:?}"),
+            };
+            let words: Vec<&str> = words.collect();
+            for pair in words.chunks(2) {
+                let [key, want] = pair else {
+                    anyhow::bail!("pmset {} has no value", pair[0]);
+                };
+                for source in wanted_sources {
+                    total += 1;
+                    let have = sources
+                        .iter()
+                        .find(|(name, _)| name == source)
+                        .and_then(|(_, pairs)| pairs.iter().find(|(k, _)| k == key))
+                        .map(|(_, v)| *v);
+                    if have != Some(*want) {
+                        drift.push(format!(
+                            "{source} {key}: want {want}, have {}",
+                            have.unwrap_or("unset")
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(if drift.is_empty() {
+            Check::pass("power", format!("{total} declared pmset values match"))
+        } else {
+            Check::fail(
+                "power",
+                format!("{} of {total} declared pmset values differ", drift.len()),
+                drift,
+            )
+        })
+    }
+
+    fn firewall(target: &Target) -> Result<Check> {
+        let raw = output(
+            "nix",
+            &[
+                "eval",
+                "--json",
+                &option(target, "networking.applicationFirewall"),
+                "--apply",
+                "f: { inherit (f) enable enableStealthMode; }",
+            ],
+        )?;
+        let declared: serde_json::Value = serde_json::from_str(&raw)?;
+        let live = output(
+            "/usr/libexec/ApplicationFirewall/socketfilterfw",
+            &["--getglobalstate", "--getstealthmode"],
+        )?;
+        let enabled = live.contains("Firewall is enabled");
+        let stealth = live.contains("stealth mode is on");
+        let mut drift = Vec::new();
+        for (name, key, have) in [
+            ("firewall", "enable", enabled),
+            ("stealth mode", "enableStealthMode", stealth),
+        ] {
+            if let Some(want) = declared[key].as_bool()
+                && want != have
+            {
+                drift.push(format!("{name}: want {}, have {}", on(want), on(have)));
+            }
+        }
+        Ok(if drift.is_empty() {
+            Check::pass("firewall", "matches networking.applicationFirewall")
+        } else {
+            Check::fail(
+                "firewall",
+                "differs from networking.applicationFirewall",
+                drift,
+            )
+        })
+    }
+
+    fn on(value: bool) -> &'static str {
+        if value { "on" } else { "off" }
     }
 }
