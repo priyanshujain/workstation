@@ -10,6 +10,7 @@ use super::apply::{Target, output};
 mod dconf;
 #[cfg(target_os = "macos")]
 mod defaults;
+mod merges;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -242,6 +243,8 @@ fn package_check(
 fn platform_checks(target: &Target) -> Vec<Check> {
     let mut checks = os::checks(target);
     checks.push(home_manager(target));
+    checks.push(Check::from_result("app settings", merges::merges()));
+    checks.push(Check::from_result("declared state", merges::checks()));
     checks.push(stray_binaries());
     checks
 }
