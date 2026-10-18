@@ -87,21 +87,46 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
         return run("darwin-rebuild", &["build", "--flake", &attr]);
     }
     step(&format!("darwin-rebuild switch --flake {attr}"));
-    let darwin_rebuild = std::env::var_os("PATH")
-        .iter()
-        .flat_map(std::env::split_paths)
-        .map(|dir| dir.join("darwin-rebuild"))
-        .find(|p| p.is_file())
-        .context("darwin-rebuild not found on PATH")?;
-    run(
-        "sudo",
-        &[
-            &darwin_rebuild.display().to_string(),
-            "switch",
-            "--flake",
-            &attr,
-        ],
-    )
+    with_sudo_kept_alive(|| {
+        let darwin_rebuild = std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join("darwin-rebuild"))
+            .find(|p| p.is_file())
+            .context("darwin-rebuild not found on PATH")?;
+        run(
+            "sudo",
+            &[
+                &darwin_rebuild.display().to_string(),
+                "switch",
+                "--flake",
+                &attr,
+            ],
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
+    use std::process::Stdio;
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::time::Duration;
+
+    run("sudo", &["-v"])?;
+    let (stop, stopped) = channel::<()>();
+    let refresher = std::thread::spawn(move || {
+        while stopped.recv_timeout(Duration::from_secs(60)) == Err(RecvTimeoutError::Timeout) {
+            let _ = Command::new("sudo")
+                .args(["-n", "-v"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    });
+    let result = work();
+    drop(stop);
+    let _ = refresher.join();
+    result
 }
 
 #[cfg(target_os = "linux")]
