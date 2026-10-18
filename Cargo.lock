@@ -2559,6 +2559,7 @@ dependencies = [
  "indicatif",
  "libc",
  "packages",
+ "plist",
  "ratatui",
  "serde",
  "serde_json",
