@@ -949,7 +949,38 @@ mod os {
             Check::from_result("settings", super::defaults::check(target)),
             Check::from_result("power", power(target)),
             Check::from_result("firewall", firewall(target)),
+            Check::from_result("default apps", default_apps()),
         ]
+    }
+
+    fn default_apps() -> Result<Check> {
+        use crate::commands::default_apps::{describe, report};
+        let Some(report) = report()? else {
+            return Ok(Check::pass("default apps", "none declared"));
+        };
+        let unmapped = report
+            .unmapped
+            .iter()
+            .map(|key| format!("macOS has no content type for .{key}"));
+        if report.mismatches.is_empty() {
+            return Ok(Check {
+                details: unmapped.collect(),
+                ..Check::pass(
+                    "default apps",
+                    format!("{} types open in their declared app", report.managed),
+                )
+            });
+        }
+        Ok(Check::fail(
+            "default apps",
+            "types open in the wrong app, run wsctl default-apps",
+            report
+                .mismatches
+                .iter()
+                .map(describe)
+                .chain(unmapped)
+                .collect(),
+        ))
     }
 
     fn option(target: &Target, path: &str) -> String {
