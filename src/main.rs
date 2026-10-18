@@ -118,6 +118,8 @@ fn main() -> anyhow::Result<()> {
             DisplayCommand::Status => commands::display::status()?,
         },
         #[cfg(target_os = "macos")]
+        Commands::DefaultApps => commands::default_apps::run()?,
+        #[cfg(target_os = "macos")]
         Commands::App { sub } => match sub {
             AppCommand::Remove {
                 name,
