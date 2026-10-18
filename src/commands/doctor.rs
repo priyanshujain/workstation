@@ -6,6 +6,8 @@ use console::style;
 
 use super::apply::{Target, output};
 
+#[cfg(target_os = "linux")]
+mod dconf;
 #[cfg(target_os = "macos")]
 mod defaults;
 
@@ -329,6 +331,7 @@ mod os {
             Check::from_result("AUR", aur(target)),
             Check::from_result("users", users(target)),
             Check::from_result("groups", groups()),
+            Check::from_result("settings", super::dconf::check(target)),
         ]
     }
 
