@@ -6,6 +6,9 @@ use console::style;
 
 use super::apply::{Target, output};
 
+#[cfg(target_os = "macos")]
+mod defaults;
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Pass,
@@ -937,6 +940,7 @@ mod os {
             Check::from_result("brews", brews(target)),
             Check::from_result("casks", casks(target)),
             Check::from_result("remote login", remote_login(target)),
+            Check::from_result("settings", super::defaults::check(target)),
         ]
     }
 
