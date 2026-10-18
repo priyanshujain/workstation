@@ -46,6 +46,31 @@ in
       };
     };
 
+    merges = lib.mkOption {
+      default = { };
+      description = "Scripts run on every activation that merge declared settings into files apps also write; doctor reruns them on copies to find drift.";
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          script = lib.mkOption {
+            type = lib.types.package;
+            description = "Executable that edits the files under $HOME in place.";
+          };
+          files = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            description = "Files the script edits, relative to $HOME; shell globs allowed.";
+          };
+        };
+      });
+    };
+
+    checks = lib.mkOption {
+      default = { };
+      description = "Shell commands doctor runs; each exits 0 when the live state matches what is declared elsewhere.";
+      type = lib.types.attrsOf (lib.types.submodule {
+        options.command = lib.mkOption { type = lib.types.str; };
+      });
+    };
+
     jobs = lib.mkOption {
       default = { };
       description = "wsctl subcommands run on a timer as the user; each run exits when done.";
@@ -69,6 +94,19 @@ in
 
     (lib.mkIf (cfg.agents != [ ]) {
       xdg.configFile."wsctl/agents.json".text = builtins.toJSON { inherit (cfg) agents; };
+    })
+
+    (lib.mkIf (cfg.merges != { }) {
+      xdg.configFile."wsctl/merges.json".text = builtins.toJSON (lib.mapAttrs (_: merge: {
+        script = "${merge.script}";
+        inherit (merge) files;
+      }) cfg.merges);
+      home.activation = lib.mapAttrs' (name: merge: lib.nameValuePair "wsctl-merge-${name}"
+        (lib.hm.dag.entryAfter [ "linkGeneration" ] "run ${merge.script}")) cfg.merges;
+    })
+
+    (lib.mkIf (cfg.checks != { }) {
+      xdg.configFile."wsctl/checks.json".text = builtins.toJSON (lib.mapAttrs (_: check: check.command) cfg.checks);
     })
 
     (lib.mkIf pkgs.stdenv.isDarwin {
