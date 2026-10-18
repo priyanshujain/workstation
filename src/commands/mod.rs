@@ -3,6 +3,8 @@ pub mod agents;
 pub mod app;
 pub mod apply;
 pub mod audit;
+#[cfg(target_os = "macos")]
+pub mod default_apps;
 pub mod disk;
 #[cfg(target_os = "macos")]
 pub mod display;
