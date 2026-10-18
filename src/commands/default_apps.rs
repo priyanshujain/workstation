@@ -17,6 +17,7 @@ struct Rules {
 
 pub struct Mismatch {
     pub content_type: String,
+    pub label: String,
     pub current: Option<String>,
     pub wanted: String,
 }
@@ -102,7 +103,7 @@ pub fn report() -> Result<Option<Report>> {
     for (from, to) in &rules.replace {
         for declared in declared_types(from)? {
             if workspace::handler(&declared).is_some_and(|h| same_app(&h, from)) {
-                wanted.insert(declared, to.clone());
+                wanted.insert(declared.clone(), (to.clone(), declared));
             }
         }
     }
@@ -110,18 +111,24 @@ pub fn report() -> Result<Option<Report>> {
     for (key, app) in &rules.types {
         match content_type(key) {
             Some(found) => {
-                wanted.insert(found, app.clone());
+                let label = if key.contains('.') {
+                    key.clone()
+                } else {
+                    format!(".{key}")
+                };
+                wanted.insert(found, (app.clone(), label));
             }
             None => unmapped.push(key.clone()),
         }
     }
     let mismatches = wanted
         .iter()
-        .filter_map(|(found, app)| {
+        .filter_map(|(found, (app, label))| {
             let current = workspace::handler(found);
             let matches = current.as_deref().is_some_and(|c| same_app(c, app));
             (!matches).then(|| Mismatch {
                 content_type: found.clone(),
+                label: label.clone(),
                 current,
                 wanted: app.clone(),
             })
@@ -137,7 +144,7 @@ pub fn report() -> Result<Option<Report>> {
 pub fn describe(mismatch: &Mismatch) -> String {
     format!(
         "{}: {} -> {}",
-        mismatch.content_type,
+        mismatch.label,
         mismatch.current.as_deref().unwrap_or("nothing"),
         mismatch.wanted
     )
@@ -166,14 +173,14 @@ pub fn run() -> Result<()> {
                 if workspace::handler(&mismatch.content_type)
                     .is_some_and(|h| same_app(&h, &mismatch.wanted)) =>
             {
-                println!("{} {}", style("✓").green(), mismatch.content_type);
+                println!("{} {}", style("✓").green(), mismatch.label);
             }
             Ok(()) => println!(
                 "{} {} kept its old app",
                 style("!").yellow(),
-                mismatch.content_type
+                mismatch.label
             ),
-            Err(e) => println!("{} {e:#}", style("×").red()),
+            Err(e) => println!("{} {}: {e:#}", style("×").red(), mismatch.label),
         }
     }
     Ok(())
