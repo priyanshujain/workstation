@@ -71,6 +71,21 @@ in
       });
     };
 
+    defaultApps = {
+      types = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = "Content types or filename extensions, each mapped to the bundle id of the app that opens it (macOS).";
+        example = { "public.plain-text" = "dev.zed.Zed"; yaml = "dev.zed.Zed"; };
+      };
+      replace = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = "Apps that must not stay a default handler, each mapped to the app that takes the types it holds (macOS).";
+        example = { "com.apple.TextEdit" = "dev.zed.Zed"; };
+      };
+    };
+
     jobs = lib.mkOption {
       default = { };
       description = "wsctl subcommands run on a timer as the user; each run exits when done.";
@@ -107,6 +122,10 @@ in
 
     (lib.mkIf (cfg.checks != { }) {
       xdg.configFile."wsctl/checks.json".text = builtins.toJSON (lib.mapAttrs (_: check: check.command) cfg.checks);
+    })
+
+    (lib.mkIf (pkgs.stdenv.isDarwin && (cfg.defaultApps.types != { } || cfg.defaultApps.replace != { })) {
+      xdg.configFile."wsctl/default-apps.json".text = builtins.toJSON cfg.defaultApps;
     })
 
     (lib.mkIf pkgs.stdenv.isDarwin {
