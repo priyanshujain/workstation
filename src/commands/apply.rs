@@ -13,8 +13,8 @@ pub struct Target {
 impl Target {
     pub fn parse(raw: &str) -> Result<Self> {
         let (flake, host) = match raw.split_once('#') {
-            Some((flake, host)) => (flake.to_string(), host.to_string()),
-            None => (raw.to_string(), hostname()?),
+            Some((flake, host)) => (flake, Some(host.to_string())),
+            None => (raw, None),
         };
         let flake = match flake.strip_prefix("~/") {
             Some(rest) => dirs::home_dir()
@@ -22,17 +22,48 @@ impl Target {
                 .join(rest)
                 .display()
                 .to_string(),
-            None => flake,
+            None => flake.to_string(),
         };
         let flake = match std::fs::canonicalize(&flake) {
             Ok(path) if !flake.contains(':') => path.display().to_string(),
             _ => flake,
+        };
+        let host = match host {
+            Some(host) => host,
+            None => default_host(&flake)?,
         };
         Ok(Self { flake, host })
     }
 
     pub fn attr(&self) -> String {
         format!("{}#{}", self.flake, self.host)
+    }
+}
+
+fn default_host(flake: &str) -> Result<String> {
+    let hostname = hostname()?;
+    let configurations = if cfg!(target_os = "macos") {
+        "darwinConfigurations"
+    } else {
+        "systemConfigs"
+    };
+    let attr = format!("{flake}#{configurations}");
+    let Ok(raw) = output(
+        "nix",
+        &["eval", "--json", &attr, "--apply", "builtins.attrNames"],
+    ) else {
+        return Ok(hostname);
+    };
+    let hosts: Vec<String> = serde_json::from_str(&raw)?;
+    if hosts.contains(&hostname) {
+        return Ok(hostname);
+    }
+    match hosts.as_slice() {
+        [only] => Ok(only.clone()),
+        _ => bail!(
+            "{flake} has no {configurations}.{hostname}; pass --flake {flake}#<host>, one of: {}",
+            hosts.join(", ")
+        ),
     }
 }
 
