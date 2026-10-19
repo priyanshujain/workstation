@@ -270,7 +270,23 @@ fn platform_checks(target: &Target) -> Vec<Check> {
     checks.push(Check::from_result("app settings", merges::merges()));
     checks.push(Check::from_result("declared state", merges::checks()));
     checks.push(stray_binaries());
+    checks.push(agent_daemons());
     checks
+}
+
+fn agent_daemons() -> Check {
+    let stale = super::stale_daemons::find(&agents::process::Table::snapshot());
+    if stale.is_empty() {
+        return Check::pass("agent daemons", "none older than the applied config");
+    }
+    Check::warn(
+        "agent daemons",
+        "started before the last apply, restart them",
+        stale
+            .iter()
+            .map(|daemon| format!("{} {}", daemon.name, daemon.pid))
+            .collect(),
+    )
 }
 
 #[cfg(target_os = "linux")]
