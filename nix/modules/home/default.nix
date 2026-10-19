@@ -86,6 +86,13 @@ in
       };
     };
 
+    trackInputs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Flake inputs `wsctl apply` moves to their latest commit; every other input moves only on `wsctl upgrade`.";
+      example = [ "workstation" ];
+    };
+
     jobs = lib.mkOption {
       default = { };
       description = "wsctl subcommands run on a timer as the user; each run exits when done.";
