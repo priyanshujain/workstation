@@ -16,7 +16,8 @@ pub fn pull(target: &Target) -> Result<()> {
     if !is_checkout(target) {
         return Ok(());
     }
-    git(target, &["pull", "--ff-only", "--quiet"])
+    git(target, &["fetch", "--quiet"])?;
+    git(target, &["merge", "--ff-only", "--quiet", "@{upstream}"])
 }
 
 pub fn select(target: &Target, pins: Pins, named: &[String]) -> Result<Vec<String>> {
