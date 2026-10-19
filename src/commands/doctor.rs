@@ -147,6 +147,16 @@ fn home_manager(target: &Target) -> Check {
     )
 }
 
+fn built_from_local_checkout(binary: &Path) -> bool {
+    let Ok(info) = output("go", &["version", "-m", &binary.display().to_string()]) else {
+        return false;
+    };
+    info.lines()
+        .find_map(|line| line.trim().strip_prefix("mod\t"))
+        .and_then(|rest| rest.split('\t').next())
+        .is_some_and(|module| home().join("go/src").join(module).is_dir())
+}
+
 fn stray_binaries() -> Check {
     let mut dirs = vec![
         home().join(".local/bin"),
@@ -187,7 +197,7 @@ fn stray_binaries() -> Check {
                 use std::os::unix::fs::PermissionsExt;
                 m.is_file() && m.permissions().mode() & 0o111 != 0
             });
-            if !executable {
+            if !executable || built_from_local_checkout(&path) {
                 continue;
             }
             found.push(path.display().to_string());
