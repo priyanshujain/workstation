@@ -69,3 +69,21 @@ fn is_agent(process: &Process, config: &Config) -> bool {
         .iter()
         .any(|agent| agent.command == process.name)
 }
+
+pub fn daemons(table: &Table, config: &Config) -> Vec<Process> {
+    let is_daemon = |process: &Process| process.detached && is_agent(process, config);
+    table
+        .processes
+        .values()
+        .filter(|process| is_daemon(process))
+        .filter(|process| !table.ancestors(process.pid).any(is_daemon))
+        .cloned()
+        .collect()
+}
+
+pub fn has_session(table: &Table, name: &str) -> bool {
+    table
+        .processes
+        .values()
+        .any(|process| process.name == name && !process.detached)
+}
