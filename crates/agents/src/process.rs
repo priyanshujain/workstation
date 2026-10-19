@@ -8,6 +8,7 @@ pub struct Process {
     pub ppid: i32,
     pub elapsed_secs: u64,
     pub rss_bytes: u64,
+    pub detached: bool,
     pub name: String,
     pub args: String,
 }
@@ -19,7 +20,7 @@ pub struct Table {
 impl Table {
     pub fn snapshot() -> Self {
         let out = Command::new("ps")
-            .args(["-eww", "-o", "pid=,ppid=,etime=,rss=,args="])
+            .args(["-eww", "-o", "pid=,ppid=,etime=,rss=,tty=,args="])
             .output()
             .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
             .unwrap_or_default();
@@ -63,6 +64,7 @@ fn parse_line(line: &str) -> Option<Process> {
     let ppid = fields.next()?.parse().ok()?;
     let elapsed_secs = parse_etime(fields.next()?)?;
     let rss_bytes = fields.next()?.parse::<u64>().ok()? * 1024;
+    let detached = fields.next()?.starts_with('?');
     let args = fields.collect::<Vec<_>>().join(" ");
     let argv0 = executable(&args)?;
     let name = Path::new(argv0)
@@ -74,6 +76,7 @@ fn parse_line(line: &str) -> Option<Process> {
         ppid,
         elapsed_secs,
         rss_bytes,
+        detached,
         name,
         args,
     })
