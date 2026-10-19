@@ -101,22 +101,37 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
     }
     step(&format!("darwin-rebuild switch --flake {attr}"));
     with_sudo_kept_alive(|| {
-        let darwin_rebuild = std::env::var_os("PATH")
-            .iter()
-            .flat_map(std::env::split_paths)
-            .map(|dir| dir.join("darwin-rebuild"))
-            .find(|p| p.is_file())
-            .context("darwin-rebuild not found on PATH")?;
+        let system = build_darwin_system(target)?;
         run(
             "sudo",
             &[
-                &darwin_rebuild.display().to_string(),
-                "switch",
-                "--flake",
-                &attr,
+                "nix-env",
+                "-p",
+                "/nix/var/nix/profiles/system",
+                "--set",
+                &system,
             ],
-        )
+        )?;
+        run("sudo", &[&format!("{system}/activate")])
     })
+}
+
+/// Builds as the user, so private inputs fetch with the user's SSH key; root only activates.
+#[cfg(target_os = "macos")]
+fn build_darwin_system(target: &Target) -> Result<String> {
+    let attr = format!(
+        "{}#darwinConfigurations.{}.system",
+        target.flake, target.host
+    );
+    let out = Command::new("nix")
+        .args(["build", "--no-link", "--print-out-paths", &attr])
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .context("could not run nix")?;
+    if !out.status.success() {
+        bail!("nix build {attr} failed with {}", out.status);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 #[cfg(target_os = "macos")]
