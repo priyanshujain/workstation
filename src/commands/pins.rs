@@ -40,11 +40,24 @@ pub fn update(target: &Target, inputs: &[String]) -> Result<()> {
     let mut args = vec!["flake", "update", "--flake", target.flake.as_str()];
     args.extend(inputs.iter().map(String::as_str));
     println!("{} nix {}", style("→").cyan(), args.join(" "));
-    let status = Command::new("nix").args(&args).status()?;
+    let mut nix = Command::new("nix");
+    if let Some(token) = github_token() {
+        let inherited = std::env::var("NIX_CONFIG").unwrap_or_default();
+        nix.env(
+            "NIX_CONFIG",
+            format!("{inherited}\naccess-tokens = github.com={token}"),
+        );
+    }
+    let status = nix.args(&args).status()?;
     if !status.success() {
         bail!("nix flake update failed with {status}");
     }
     Ok(())
+}
+
+fn github_token() -> Option<String> {
+    let token = output("gh", &["auth", "token"]).ok()?;
+    Some(token.trim().to_string()).filter(|token| !token.is_empty())
 }
 
 pub fn commit_lock(target: &Target, inputs: &[String]) -> Result<()> {
