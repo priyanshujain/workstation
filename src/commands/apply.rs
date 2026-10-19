@@ -3,6 +3,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use console::style;
 
+use super::pins::{self, Pins};
+
 pub struct Target {
     pub flake: String,
     pub host: String,
@@ -77,6 +79,17 @@ pub fn output(program: &str, args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub fn sync(target: &Target, pins: Pins, named: &[String], dry_run: bool) -> Result<()> {
+    if dry_run {
+        return run_apply(target, true);
+    }
+    pins::pull(target)?;
+    let inputs = pins::select(target, pins, named)?;
+    pins::update(target, &inputs)?;
+    run_apply(target, false)?;
+    pins::commit_lock(target, &inputs)
 }
 
 #[cfg(target_os = "macos")]
