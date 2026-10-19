@@ -120,13 +120,27 @@ fn generation(name: &'static str, attr: &str, active: &Path, apply_hint: &str) -
 }
 
 fn home_manager(target: &Target) -> Check {
-    let attr = format!(
-        "{}#homeConfigurations.\"{}@{}\".activationPackage",
-        target.flake,
-        user(),
-        target.host
-    );
-    let active = home().join(".local/state/nix/profiles/home-manager");
+    let (attr, active) = if cfg!(target_os = "macos") {
+        (
+            format!(
+                "{}#darwinConfigurations.{}.config.home-manager.users.{}.home.activationPackage",
+                target.flake,
+                target.host,
+                user()
+            ),
+            home().join(".local/state/home-manager/gcroots/current-home"),
+        )
+    } else {
+        (
+            format!(
+                "{}#homeConfigurations.\"{}@{}\".activationPackage",
+                target.flake,
+                user(),
+                target.host
+            ),
+            home().join(".local/state/nix/profiles/home-manager"),
+        )
+    };
     Check::from_result(
         "home-manager",
         generation("home-manager", &attr, &active, "run wsctl apply"),
