@@ -19,8 +19,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Apply the flake's configuration: the platform switch, distro packages and home-manager
+    /// Move your tracked repos to their latest commit, then switch: platform, distro packages, home-manager
     Apply {
+        /// Tracked inputs to move; all of them when none are given
+        inputs: Vec<String>,
+
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
         #[arg(long, default_value_t = default_flake())]
         flake: String,
@@ -54,14 +57,18 @@ pub enum Commands {
         flake: String,
     },
 
-    /// Move the pins: update flake inputs, or the pacman snapshot to today
-    Update {
-        /// Inputs to update; all of them when none are given
+    /// Move third-party pins to their latest, then switch
+    Upgrade {
+        /// Inputs to move; every untracked input when none are given
         inputs: Vec<String>,
 
-        /// Move pacman.snapshot to today instead of updating flake inputs
+        /// Move pacman.snapshot to today instead of flake inputs
         #[arg(long)]
         snapshot: bool,
+
+        /// Build and show what would change without moving pins or switching
+        #[arg(short = 'n', long)]
+        dry_run: bool,
 
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
         #[arg(long, default_value_t = default_flake())]
@@ -105,7 +112,7 @@ pub enum Commands {
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
     Packages,
 
-    /// Manage the wsctl binary itself (update, uninstall)
+    /// Manage the wsctl binary itself (uninstall)
     #[command(name = "self", subcommand)]
     SelfCmd(SelfCommand),
 }
@@ -208,13 +215,6 @@ pub enum AgentsCommand {
 
 #[derive(Subcommand)]
 pub enum SelfCommand {
-    /// Update wsctl to the latest release
-    Update {
-        /// Don't ask for confirmation
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
     /// Uninstall the wsctl binary
     Uninstall {
         /// Don't ask for confirmation

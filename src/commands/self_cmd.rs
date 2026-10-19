@@ -1,10 +1,6 @@
 use anyhow::{Context, Result};
 use console::style;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-const INSTALLER_URL: &str =
-    "https://raw.githubusercontent.com/priyanshujain/workstation/main/install.sh";
 
 pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = std::env::current_exe().context("could not determine current executable path")?;
@@ -45,43 +41,6 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     println!(
         "{} If you added the install dir to PATH manually, you may want to remove that line too.",
         style("i").blue()
-    );
-    Ok(())
-}
-
-pub fn update(yes: bool) -> Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
-    println!(
-        "{} Current version: {}",
-        style("→").cyan(),
-        style(current).bold()
-    );
-    println!(
-        "{} Re-running installer from {}",
-        style("→").cyan(),
-        INSTALLER_URL
-    );
-    println!();
-
-    if !confirm("Download and install the latest release?", yes)? {
-        println!("{} Aborted.", style("×").red());
-        return Ok(());
-    }
-
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!("curl -fsSL {INSTALLER_URL} | sh"))
-        .status()
-        .context("failed to launch installer (is curl installed?)")?;
-
-    if !status.success() {
-        anyhow::bail!("installer exited with status {status}");
-    }
-
-    println!();
-    println!(
-        "{} Update complete. Run `wsctl --version` to confirm.",
-        style("✓").green()
     );
     Ok(())
 }

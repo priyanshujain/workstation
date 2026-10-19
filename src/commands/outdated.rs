@@ -129,7 +129,10 @@ fn inputs(target: &Target) -> Result<()> {
     }
     println!(
         "    {}",
-        style(format!("{behind} behind upstream; wsctl update moves them")).dim()
+        style(format!(
+            "{behind} behind upstream; wsctl apply or wsctl upgrade moves them"
+        ))
+        .dim()
     );
     println!();
     Ok(())
@@ -158,7 +161,7 @@ mod os {
             );
             println!(
                 "    {}",
-                style("wsctl update --snapshot moves it to today").dim()
+                style("wsctl upgrade --snapshot moves it to today").dim()
             );
             return Ok(());
         }

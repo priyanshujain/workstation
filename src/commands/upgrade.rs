@@ -1,25 +1,15 @@
 use anyhow::{Result, bail};
 use console::style;
 
-use super::apply::{Target, output};
+use super::apply::{Target, output, run_apply, sync};
+use super::pins::Pins;
 
-pub fn run(target: &Target, inputs: &[String], snapshot: bool) -> Result<()> {
+pub fn run(target: &Target, inputs: &[String], snapshot: bool, dry_run: bool) -> Result<()> {
     if snapshot {
         move_snapshot(target)?;
-    } else {
-        let mut args = vec!["flake", "update", "--flake", target.flake.as_str()];
-        args.extend(inputs.iter().map(String::as_str));
-        println!("{} nix {}", style("→").cyan(), args.join(" "));
-        let status = std::process::Command::new("nix").args(&args).status()?;
-        if !status.success() {
-            bail!("nix flake update failed with {status}");
-        }
+        return run_apply(target, dry_run);
     }
-    println!(
-        "    {}",
-        style("review the diff, then run wsctl apply").dim()
-    );
-    Ok(())
+    sync(target, Pins::Upstream, inputs, dry_run)
 }
 
 fn move_snapshot(target: &Target) -> Result<()> {

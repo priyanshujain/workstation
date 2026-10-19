@@ -33,9 +33,13 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     match cli.command {
-        Commands::Apply { flake, dry_run } => {
+        Commands::Apply {
+            inputs,
+            flake,
+            dry_run,
+        } => {
             let target = commands::apply::Target::parse(&flake)?;
-            commands::apply::run_apply(&target, dry_run)?;
+            commands::apply::sync(&target, commands::pins::Pins::Tracked, &inputs, dry_run)?;
         }
         Commands::Doctor { flake } => {
             let target = commands::apply::Target::parse(&flake)?;
@@ -49,12 +53,14 @@ fn main() -> anyhow::Result<()> {
         Commands::Outdated { flake } => {
             commands::outdated::run(&commands::apply::Target::parse(&flake)?)?;
         }
-        Commands::Update {
+        Commands::Upgrade {
             inputs,
             snapshot,
+            dry_run,
             flake,
         } => {
-            commands::update::run(&commands::apply::Target::parse(&flake)?, &inputs, snapshot)?;
+            let target = commands::apply::Target::parse(&flake)?;
+            commands::upgrade::run(&target, &inputs, snapshot, dry_run)?;
         }
         Commands::Disk { sub, no_cache } => {
             let walks = match &sub {
@@ -133,7 +139,6 @@ fn main() -> anyhow::Result<()> {
             tui::packages::run()?;
         }
         Commands::SelfCmd(sub) => match sub {
-            SelfCommand::Update { yes } => commands::self_cmd::update(yes)?,
             SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
         },
     }
