@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use console::style;
 
 use super::pins::{self, Pins};
+use super::stale_daemons;
 
 pub struct Target {
     pub flake: String,
@@ -120,6 +121,7 @@ pub fn sync(target: &Target, pins: Pins, named: &[String], dry_run: bool) -> Res
     let inputs = pins::select(target, pins, named)?;
     pins::update(target, &inputs)?;
     run_apply(target, false)?;
+    stale_daemons::restart_unused();
     pins::commit_lock(target, &inputs)
 }
 
