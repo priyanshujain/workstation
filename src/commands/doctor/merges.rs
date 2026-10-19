@@ -76,7 +76,8 @@ fn rerun(name: &str, merge: &Merge) -> Result<Vec<String>> {
         let mut changed = Vec::new();
         for file in expand(&scratch, &merge.files)? {
             let after = std::fs::read(scratch.join(&file))?;
-            if std::fs::read(home.join(&file)).ok().as_ref() != Some(&after) {
+            let before = std::fs::read(home.join(&file)).ok();
+            if !before.is_some_and(|before| same_content(&before, &after)) {
                 changed.push(file);
             }
         }
@@ -84,6 +85,19 @@ fn rerun(name: &str, merge: &Merge) -> Result<Vec<String>> {
     })();
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+fn same_content(before: &[u8], after: &[u8]) -> bool {
+    if before == after {
+        return true;
+    }
+    match (
+        serde_json::from_slice::<serde_json::Value>(before),
+        serde_json::from_slice::<serde_json::Value>(after),
+    ) {
+        (Ok(before), Ok(after)) => before == after,
+        _ => false,
+    }
 }
 
 fn expand(root: &Path, patterns: &[String]) -> Result<Vec<String>> {
