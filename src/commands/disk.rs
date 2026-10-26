@@ -17,6 +17,7 @@ pub fn summary(no_cache: bool) -> Result<()> {
     let home = dirs::home_dir();
     let mut lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
     summary::split_volumes(&mut lines, &other_volumes());
+    summary::split_nix_garbage(&mut lines, report.nix_garbage);
 
     print!("{}", summary::render(&lines, overview.as_ref()));
     if let Some(line) = super::agents::disk_line() {

@@ -114,7 +114,11 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
         .iter()
         .filter(|v| v.used > 0)
         .map(|v| Line {
-            name: format!("{} volume", v.name),
+            name: if v.nix_store {
+                Kind::Nix.label().to_string()
+            } else {
+                format!("{} volume", v.name)
+            },
             size: v.used,
             owners: Vec::new(),
             notes: Vec::new(),
@@ -137,6 +141,27 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
         });
     }
     lines.splice(index..index, named);
+}
+
+pub fn split_nix_garbage(lines: &mut Vec<Line>, garbage: Option<u64>) {
+    let Some(garbage) = garbage.filter(|bytes| *bytes > 0) else {
+        return;
+    };
+    let Some(index) = lines.iter().position(|l| l.name == Kind::Nix.label()) else {
+        return;
+    };
+    let garbage = garbage.min(lines[index].size);
+    lines[index].size -= garbage;
+    lines.insert(
+        index + 1,
+        Line {
+            name: "Nix garbage".into(),
+            size: garbage,
+            owners: Vec::new(),
+            recovery: Recovery::Safe,
+            notes: vec!["store paths no generation or GC root uses".into()],
+        },
+    );
 }
 
 pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {

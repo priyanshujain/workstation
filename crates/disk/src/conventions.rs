@@ -34,7 +34,7 @@ impl Kind {
             Kind::SavedState => "Saved state",
             Kind::BuildOutput => "Build output",
             Kind::Packages => "Packages",
-            Kind::Nix => "Nix",
+            Kind::Nix => "Nix store",
             Kind::Temp => "Temp",
             Kind::Trash => "Trash",
             Kind::RemovedApps => "Removed apps",
