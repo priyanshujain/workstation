@@ -82,6 +82,7 @@ pub fn disk_overview() -> Option<DiskOverview> {
 pub struct Volume {
     pub name: String,
     pub used: u64,
+    pub nix_store: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -104,8 +105,16 @@ pub fn other_volumes() -> Vec<Volume> {
         return Vec::new();
     };
     plist::Value::from_reader_xml(output.stdout.as_slice())
-        .map(|list| volumes_besides_data(&list))
+        .map(|list| volumes_besides_data(&list, nix_device().as_deref()))
         .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn nix_device() -> Option<String> {
+    let output = Command::new("df").arg("/nix").output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let device = stdout.lines().nth(1)?.split_whitespace().next()?;
+    Some(device.trim_start_matches("/dev/").to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -114,7 +123,7 @@ pub fn other_volumes() -> Vec<Volume> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn volumes_besides_data(list: &plist::Value) -> Vec<Volume> {
+fn volumes_besides_data(list: &plist::Value, nix_device: Option<&str>) -> Vec<Volume> {
     let volumes = list
         .as_dictionary()
         .and_then(|d| d.get("Containers"))
@@ -142,7 +151,13 @@ fn volumes_besides_data(list: &plist::Value) -> Vec<Volume> {
                 _ => volume.get("Name")?.as_string()?.to_string(),
             };
             let used = volume.get("CapacityInUse")?.as_unsigned_integer()?;
-            Some(Volume { name, used })
+            let device = volume.get("DeviceIdentifier").and_then(|d| d.as_string());
+            let nix_store = roles.is_empty() && device.is_some() && device == nix_device;
+            Some(Volume {
+                name,
+                used,
+                nix_store,
+            })
         })
         .collect()
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::audit::Audit;
+use crate::conventions::{Kind, Recovery};
 use crate::overview::{DiskOverview, Volume};
 use crate::util::format_size;
 
@@ -12,6 +13,11 @@ pub struct Line {
     pub name: String,
     pub size: u64,
     pub owners: Vec<(String, u64)>,
+    pub recovery: Recovery,
+}
+
+fn recovery_of(name: &str) -> Recovery {
+    Kind::from_label(name).map_or(Recovery::Unknown, Kind::recovery)
 }
 
 pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>) -> Vec<Line> {
@@ -24,6 +30,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
                 *owners.entry(path.label.as_str()).or_default() += path.size;
             }
             Line {
+                recovery: recovery_of(&category.name),
                 name: category.name.clone(),
                 size: category.total_size,
                 owners: biggest(owners.into_iter().map(|(o, s)| (o.to_string(), s))),
@@ -34,6 +41,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
     if audit.unattributed() > 0 {
         lines.push(Line {
             name: "Other".into(),
+            recovery: Recovery::Unknown,
             size: audit.unattributed(),
             owners: biggest(
                 audit
@@ -51,6 +59,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
         if unreached > 0 {
             lines.push(Line {
                 name: "Not reached".into(),
+                recovery: Recovery::Unknown,
                 size: unreached,
                 owners: Vec::new(),
             });
@@ -63,6 +72,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
                     "Reserved".into()
                 },
                 size: overview.other_volumes,
+                recovery: Recovery::System,
                 owners: Vec::new(),
             });
         }
@@ -91,6 +101,11 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
             name: format!("{} volume", v.name),
             size: v.used,
             owners: Vec::new(),
+            recovery: if v.nix_store {
+                Recovery::Refetch
+            } else {
+                Recovery::System
+            },
         })
         .collect();
     named.sort_by_key(|l| std::cmp::Reverse(l.size));
@@ -100,6 +115,7 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
             name: "Other volumes".into(),
             size: rest,
             owners: Vec::new(),
+            recovery: Recovery::System,
         });
     }
     lines.splice(index..index, named);
@@ -123,9 +139,10 @@ pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {
             .collect();
         out.push_str(
             format!(
-                "{:<width$}  {:>9}  {}",
+                "{:<width$}  {:>9}  {:<7}  {}",
                 line.name,
                 format_size(line.size),
+                line.recovery.label(),
                 owners.join(", ")
             )
             .trim_end(),

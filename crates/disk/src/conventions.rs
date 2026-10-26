@@ -34,8 +34,43 @@ impl Kind {
         }
     }
 
+    pub fn recovery(self) -> Recovery {
+        match self {
+            Kind::Caches
+            | Kind::Logs
+            | Kind::SavedState
+            | Kind::BuildOutput
+            | Kind::Temp
+            | Kind::Trash
+            | Kind::RemovedApps => Recovery::Safe,
+            Kind::Packages | Kind::Nix => Recovery::Refetch,
+            Kind::AppData => Recovery::Keep,
+        }
+    }
+
     pub fn from_label(label: &str) -> Option<Kind> {
         ALL.into_iter().find(|kind| kind.label() == label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    Safe,
+    Refetch,
+    Keep,
+    System,
+    Unknown,
+}
+
+impl Recovery {
+    pub fn label(self) -> &'static str {
+        match self {
+            Recovery::Safe => "safe",
+            Recovery::Refetch => "refetch",
+            Recovery::Keep => "keep",
+            Recovery::System => "system",
+            Recovery::Unknown => "unknown",
+        }
     }
 }
 
