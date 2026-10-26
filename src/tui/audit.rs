@@ -2591,11 +2591,13 @@ mod tests {
                         label: "cargo registry".into(),
                         path: PathBuf::from("/tmp/cargo"),
                         size: 2 * 4096,
+                        times: Default::default(),
                     },
                     CategoryPath {
                         label: "rustup".into(),
                         path: PathBuf::from("/tmp/rustup"),
                         size: 4096,
+                        times: Default::default(),
                     },
                 ],
             }],

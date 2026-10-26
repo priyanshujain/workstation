@@ -180,6 +180,7 @@ mod tests {
             label: label.into(),
             path: PathBuf::from(format!("/x/{label}")),
             size,
+            times: Default::default(),
         };
         Audit {
             roots: vec![RootUsage {

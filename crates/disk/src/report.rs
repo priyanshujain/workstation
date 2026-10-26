@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{Audit, Category, CategoryPath};
 use crate::projects::{Artifact, Project, ProjectKind};
-use crate::sweep::{Denial, Denials, Root, RootUsage, Unreadable};
+use crate::sweep::{Denial, Denials, Root, RootUsage, Times, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 7;
+pub const SCHEMA: u32 = 8;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -67,6 +67,7 @@ pub struct PathSnap {
     pub label: String,
     pub path: PathBuf,
     pub size: u64,
+    pub times: Times,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -110,6 +111,7 @@ impl Report {
                         label: p.label.clone(),
                         path: p.path.clone(),
                         size: p.size,
+                        times: p.times,
                     })
                     .collect(),
             })
@@ -521,6 +523,7 @@ pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Repo
                     label: p.label,
                     path: p.path,
                     size: p.size,
+                    times: p.times,
                 })
                 .collect(),
         })

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::conventions::{self, Places};
 use crate::projects::Project;
-use crate::sweep::{self, Denial, Denials, Root, RootUsage, Rule, Unreadable};
+use crate::sweep::{self, Denial, Denials, Root, RootUsage, Rule, Times, Unreadable};
 
 pub struct Category {
     pub name: String,
@@ -14,6 +14,7 @@ pub struct CategoryPath {
     pub label: String,
     pub path: PathBuf,
     pub size: u64,
+    pub times: Times,
 }
 
 /// One pass over the volume, read two ways: by root, which always adds up to
@@ -96,7 +97,7 @@ pub fn from_sweep(swept: sweep::Sweep, rules: &[Rule]) -> Audit {
     roots.sort_by_key(|r| std::cmp::Reverse(r.total));
     Audit {
         roots,
-        categories: group(rules, &swept.rule_sizes),
+        categories: group(rules, &swept.rule_sizes, &swept.rule_times),
     }
 }
 
@@ -139,10 +140,10 @@ fn system_roots() -> Vec<Rule> {
 /// empty categories are dropped: a rule that matched nothing is noise, and
 /// unlike the old code this no longer loses anything, because the bytes it
 /// would have hidden are already counted in the root totals.
-fn group(rules: &[Rule], sizes: &[u64]) -> Vec<Category> {
+fn group(rules: &[Rule], sizes: &[u64], times: &[Times]) -> Vec<Category> {
     let mut categories: Vec<Category> = Vec::new();
 
-    for (rule, &size) in rules.iter().zip(sizes) {
+    for ((rule, &size), &times) in rules.iter().zip(sizes).zip(times) {
         if size == 0 {
             continue;
         }
@@ -150,6 +151,7 @@ fn group(rules: &[Rule], sizes: &[u64]) -> Vec<Category> {
             label: rule.label.clone(),
             path: rule.path.clone(),
             size,
+            times,
         };
         match categories.iter_mut().find(|c| c.name == rule.category) {
             Some(existing) => {
