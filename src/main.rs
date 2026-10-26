@@ -64,12 +64,17 @@ fn main() -> anyhow::Result<()> {
             let target = commands::apply::Target::parse(&flake)?;
             commands::upgrade::run(&target, &inputs, snapshot, dry_run)?;
         }
-        Commands::Disk { sub, no_cache } => {
+        Commands::Disk {
+            sub,
+            no_cache,
+            refresh,
+        } => {
+            let cache_missing = || disk::report::load(std::time::SystemTime::now()).is_none();
             let walks = match &sub {
-                None => no_cache || disk::report::load(std::time::SystemTime::now()).is_none(),
-                Some(DiskCommand::List { no_cache, .. }) => {
-                    *no_cache || disk::report::load(std::time::SystemTime::now()).is_none()
-                }
+                None => no_cache || !refresh.is_empty() || cache_missing(),
+                Some(DiskCommand::List {
+                    no_cache, refresh, ..
+                }) => *no_cache || !refresh.is_empty() || cache_missing(),
                 Some(DiskCommand::Browse { .. } | DiskCommand::Clean) => true,
                 Some(DiskCommand::Refresh | DiskCommand::Projects { .. }) => false,
             };
@@ -80,7 +85,7 @@ fn main() -> anyhow::Result<()> {
                 tracing::info!("{notice}");
             }
             match sub {
-                None => commands::disk::summary(no_cache)?,
+                None => commands::disk::summary(no_cache, &refresh)?,
                 Some(DiskCommand::Browse { no_cache }) => {
                     if std::io::stdout().is_terminal() {
                         tui::audit::run(no_cache)?;
@@ -96,9 +101,11 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 Some(DiskCommand::Refresh) => commands::disk::refresh()?,
-                Some(DiskCommand::List { kind, no_cache }) => {
-                    commands::disk::list(kind.as_deref(), no_cache)?
-                }
+                Some(DiskCommand::List {
+                    kind,
+                    no_cache,
+                    refresh,
+                }) => commands::disk::list(kind.as_deref(), no_cache, &refresh)?,
                 Some(DiskCommand::Projects {
                     roots,
                     idle_days,

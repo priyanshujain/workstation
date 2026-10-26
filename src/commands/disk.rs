@@ -2,17 +2,22 @@ use std::time::Instant;
 
 use anyhow::Result;
 use console::style;
-use disk::conventions::{Kind, Recovery};
+use disk::conventions::{ALL, Kind, Recovery};
 use disk::overview::{disk_overview, other_volumes};
 use disk::projects;
 use disk::report::{self, Source};
 use disk::summary;
 use disk::util::format_size;
 
-pub fn summary(no_cache: bool) -> Result<()> {
+pub fn summary(no_cache: bool, refresh: &[String]) -> Result<()> {
+    known_kinds(refresh.iter().map(String::as_str))?;
     let overview = disk_overview();
-    let (report, source) =
-        report::load_or_refresh(&projects::default_roots(), projects::MAX_DEPTH, no_cache);
+    let (report, source) = report::load_refreshing(
+        &projects::default_roots(),
+        projects::MAX_DEPTH,
+        no_cache,
+        refresh,
+    );
     let audit = report.to_audit();
     let home = dirs::home_dir();
     let mut lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
@@ -36,9 +41,14 @@ pub fn summary(no_cache: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn list(kind: Option<&str>, no_cache: bool) -> Result<()> {
-    let (report, _) =
-        report::load_or_refresh(&projects::default_roots(), projects::MAX_DEPTH, no_cache);
+pub fn list(kind: Option<&str>, no_cache: bool, refresh: &[String]) -> Result<()> {
+    known_kinds(refresh.iter().map(String::as_str).chain(kind))?;
+    let (report, _) = report::load_refreshing(
+        &projects::default_roots(),
+        projects::MAX_DEPTH,
+        no_cache,
+        refresh,
+    );
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let mut rows: Vec<_> = report
         .to_categories()
@@ -67,6 +77,17 @@ pub fn list(kind: Option<&str>, no_cache: bool) -> Result<()> {
             ago(now, path.times.created),
             path.path.display()
         );
+    }
+    Ok(())
+}
+
+fn known_kinds<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    for name in names {
+        let known = ALL.iter().any(|k| k.label().eq_ignore_ascii_case(name));
+        if !known {
+            let labels: Vec<&str> = ALL.iter().map(|k| k.label()).collect();
+            anyhow::bail!("unknown kind {name:?}; kinds are: {}", labels.join(", "));
+        }
     }
     Ok(())
 }

@@ -88,6 +88,10 @@ pub enum Commands {
         /// Rescan instead of reading the cached report, and refresh the cache
         #[arg(long)]
         no_cache: bool,
+
+        /// Rescan only this kind, by its label, and patch the cache (repeatable)
+        #[arg(long = "refresh", value_name = "KIND")]
+        refresh: Vec<String>,
     },
 
     /// Running coding agents, the processes they orphaned and the clones they left
@@ -182,6 +186,10 @@ pub enum DiskCommand {
         /// Rescan instead of reading the cached report, and refresh the cache
         #[arg(long)]
         no_cache: bool,
+
+        /// Rescan only this kind, by its label, and patch the cache (repeatable)
+        #[arg(long = "refresh", value_name = "KIND")]
+        refresh: Vec<String>,
     },
 
     /// Rebuild the cached report without a terminal (what the scheduled job runs)
