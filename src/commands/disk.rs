@@ -23,6 +23,12 @@ pub fn summary(no_cache: bool, refresh: &[String]) -> Result<()> {
     let mut lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
     summary::split_volumes(&mut lines, &other_volumes());
     summary::split_nix_garbage(&mut lines, report.nix_garbage);
+    if let Some(at) = report.root_only_at
+        && at != report.generated_at
+    {
+        let carried = report.root_only.iter().map(|(_, size)| size).sum();
+        summary::split_root_only(&mut lines, carried, &age_of(at));
+    }
 
     print!("{}", summary::render(&lines, overview.as_ref()));
     if let Some(line) = super::agents::disk_line() {
@@ -36,6 +42,17 @@ pub fn summary(no_cache: bool, refresh: &[String]) -> Result<()> {
                 report::humanize_age(age)
             ))
             .dim()
+        );
+    }
+    let refreshed: Vec<String> = report
+        .kind_measured
+        .iter()
+        .map(|(kind, at)| format!("{kind} {}", age_of(*at)))
+        .collect();
+    if !refreshed.is_empty() {
+        println!(
+            "{}",
+            style(format!("rescanned since: {}", refreshed.join(", "))).dim()
         );
     }
     Ok(())
@@ -63,22 +80,36 @@ pub fn list(kind: Option<&str>, no_cache: bool, refresh: &[String]) -> Result<()
         .collect();
     rows.sort_by_key(|(_, _, p)| std::cmp::Reverse(p.size));
     println!(
-        "{:>9}  {:<7}  {:<15}  {:>6}  {:>8}  {:>7}  path",
-        "size", "class", "kind", "used", "modified", "created"
+        "{:>9}  {:<7}  {:<15}  {:>6}  {:>8}  {:>7}  {:>8}  path",
+        "size", "class", "kind", "used", "modified", "created", "measured"
     );
     for (kind, recovery, path) in rows {
+        let measured = report
+            .kind_measured
+            .get(&kind)
+            .copied()
+            .unwrap_or(report.generated_at);
         println!(
-            "{:>9}  {:<7}  {:<15}  {:>6}  {:>8}  {:>7}  {}",
+            "{:>9}  {:<7}  {:<15}  {:>6}  {:>8}  {:>7}  {:>8}  {}",
             format_size(path.size),
             recovery.label(),
             kind,
             ago(now, path.times.accessed),
             ago(now, path.times.modified),
             ago(now, path.times.created),
+            ago(now, Some(measured as i64)),
             path.path.display()
         );
     }
     Ok(())
+}
+
+fn age_of(unix_seconds: u64) -> String {
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(unix_seconds);
+    let age = std::time::SystemTime::now()
+        .duration_since(at)
+        .unwrap_or_default();
+    report::humanize_age(age)
 }
 
 fn known_kinds<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {

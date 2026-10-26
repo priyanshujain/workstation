@@ -43,6 +43,14 @@ pub fn refresh_kinds(
     if wanted(Kind::Nix.label()) {
         report.nix_garbage = crate::nix::garbage_bytes();
     }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    for kind in crate::conventions::ALL {
+        if wanted(kind.label()) {
+            report.kind_measured.insert(kind.label().to_string(), now);
+        }
+    }
 }
 
 fn remeasure(report: &mut Report, targets: &[PathBuf], rules: &[Rule], closed: &[PathBuf]) {

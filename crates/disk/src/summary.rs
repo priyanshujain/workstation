@@ -164,6 +164,30 @@ pub fn split_nix_garbage(lines: &mut Vec<Line>, garbage: Option<u64>) {
     );
 }
 
+pub fn split_root_only(lines: &mut Vec<Line>, carried: u64, age: &str) {
+    let Some(index) = lines.iter().position(|l| l.name == "Not reached") else {
+        return;
+    };
+    let carried = carried.min(lines[index].size);
+    if carried == 0 {
+        return;
+    }
+    lines[index].size -= carried;
+    lines.insert(
+        index,
+        Line {
+            name: "Root only".into(),
+            size: carried,
+            owners: Vec::new(),
+            recovery: Recovery::System,
+            notes: vec![format!("measured as root {age}")],
+        },
+    );
+    if lines[index + 1].size == 0 {
+        lines.remove(index + 1);
+    }
+}
+
 pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {
     let mut out = String::new();
     if let Some(overview) = overview {
