@@ -711,6 +711,7 @@ mod tests {
                     label: "cargo".into(),
                     path: PathBuf::from("/tmp/cargo"),
                     size: 4096,
+                    times: Default::default(),
                 }],
             }],
             projects: vec![ProjectSnap {
