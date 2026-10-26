@@ -257,17 +257,26 @@ pub struct Times {
     pub created: Option<i64>,
 }
 
+const EPOCH_PLACEHOLDERS: i64 = 365 * 86_400;
+
+fn real(seconds: Option<i64>) -> Option<i64> {
+    seconds.filter(|s| *s > EPOCH_PLACEHOLDERS)
+}
+
 impl Times {
     fn record(&mut self, meta: &Metadata) {
+        if meta.is_dir() {
+            return;
+        }
         let created = meta
             .created()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
         self.merge(Times {
-            accessed: Some(meta.atime()),
-            modified: Some(meta.mtime()),
-            created,
+            accessed: real(Some(meta.atime())),
+            modified: real(Some(meta.mtime())),
+            created: real(created),
         });
     }
 
