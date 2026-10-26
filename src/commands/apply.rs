@@ -143,6 +143,7 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
         run(
             "sudo",
             &[
+                "-H",
                 "nix-env",
                 "-p",
                 "/nix/var/nix/profiles/system",
@@ -150,7 +151,7 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
                 &system,
             ],
         )?;
-        run("sudo", &[&format!("{system}/activate")])
+        run("sudo", &["-H", &format!("{system}/activate")])
     })
 }
 
