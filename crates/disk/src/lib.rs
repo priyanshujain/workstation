@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod cleanup;
 pub mod conventions;
+pub mod invoker;
 pub mod liveness;
 pub mod nix;
 pub mod offers;

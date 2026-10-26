@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::invoker::Invoker;
+
 /// Everything `df` counts for the data volume hangs off here, firmlinks
 /// included. Walking `/` instead would cross into the read-only system volume
 /// and count bytes that are not on this volume at all.
@@ -246,6 +248,9 @@ pub struct Sweep {
     /// Bytes per rule, positionally matching the rules handed to [`sweep`].
     pub rule_sizes: Vec<u64>,
     pub rule_times: Vec<Times>,
+    /// Under sudo: the outermost folders the invoking account could not open,
+    /// with the bytes under each.
+    pub root_only: Vec<(PathBuf, u64)>,
 }
 
 /// Unix seconds: the newest access and change anywhere under a path, and the
@@ -528,7 +533,8 @@ pub fn sweep_streaming(
     let mounts = mount_points();
     let seen = Mutex::new(HashSet::new());
 
-    let units = plan(roots, &by_path, &closed, &mounts, &seen);
+    let invoker = Invoker::under_sudo();
+    let units = plan(roots, &by_path, &closed, &mounts, &seen, invoker.as_ref());
 
     // Loose files are already measured, so a root with nothing but files is
     // final before a single worker starts.
@@ -577,6 +583,7 @@ pub fn sweep_streaming(
             let queue = &queue;
             let cancel = &cancel;
             let (by_path, skip, closed, mounts, seen) = (&by_path, &skip, &closed, &mounts, &seen);
+            let invoker = invoker.as_ref();
             scope.spawn(move || {
                 while !cancel.load(Ordering::Relaxed) {
                     let Some(job) = queue.lock().unwrap().pop() else {
@@ -593,8 +600,14 @@ pub fn sweep_streaming(
                         rule_sizes: vec![0; rules.len()],
                         rule_times: vec![Times::default(); rules.len()],
                         unreadable: Vec::new(),
+                        invoker,
+                        fenced: job.fenced,
+                        root_only: Vec::new(),
                     };
                     let total = walker.walk(&job.path, job.rule);
+                    if job.fenced {
+                        walker.root_only.push((roots[job.root].path.clone(), total));
+                    }
                     let attributed: u64 = walker.rule_sizes.iter().sum();
                     let refused = walker.refusal_at(&job.path);
                     // A closed receiver means the caller cancelled and went
@@ -608,6 +621,7 @@ pub fn sweep_streaming(
                             unattributed: total.saturating_sub(attributed),
                             rule_sizes: walker.rule_sizes,
                             rule_times: walker.rule_times,
+                            root_only: walker.root_only,
                             unreadable: walker.unreadable,
                         })
                         .is_err()
@@ -666,6 +680,7 @@ struct Job {
     path: PathBuf,
     rule: Option<usize>,
     dev: u64,
+    fenced: bool,
 }
 
 struct JobResult {
@@ -678,6 +693,7 @@ struct JobResult {
     unattributed: u64,
     rule_sizes: Vec<u64>,
     rule_times: Vec<Times>,
+    root_only: Vec<(PathBuf, u64)>,
     unreadable: Vec<Unreadable>,
 }
 
@@ -701,6 +717,7 @@ fn plan(
     closed: &HashSet<&Path>,
     mounts: &HashSet<PathBuf>,
     seen: &Mutex<HashSet<(u64, u64)>>,
+    invoker: Option<&Invoker>,
 ) -> Plan {
     let mut jobs = Vec::new();
     let mut seeds = Vec::new();
@@ -732,6 +749,7 @@ fn plan(
             }
         };
         let dev = meta.dev();
+        let fenced = invoker.is_some_and(|i| !i.can_open(&meta));
         let inherited = by_path.get(root.path.as_path()).copied();
 
         match open_dir(&root.path) {
@@ -750,6 +768,7 @@ fn plan(
                             path,
                             rule,
                             dev,
+                            fenced,
                         });
                         continue;
                     }
@@ -764,6 +783,7 @@ fn plan(
                             path,
                             rule,
                             dev,
+                            fenced,
                         });
                         continue;
                     }
@@ -795,6 +815,7 @@ fn collect(
 ) -> Sweep {
     let mut rule_sizes = vec![0u64; rule_count];
     let mut rule_times = vec![Times::default(); rule_count];
+    let mut root_only: HashMap<PathBuf, u64> = HashMap::new();
     let mut usage: Vec<RootUsage> = roots
         .iter()
         .zip(seeds)
@@ -849,6 +870,9 @@ fn collect(
         for (i, times) in result.rule_times.iter().enumerate() {
             rule_times[i].merge(*times);
         }
+        for (path, bytes) in result.root_only {
+            *root_only.entry(path).or_default() += bytes;
+        }
     }
 
     for root in usage.iter_mut() {
@@ -861,6 +885,7 @@ fn collect(
         roots: usage,
         rule_sizes,
         rule_times,
+        root_only: root_only.into_iter().collect(),
     }
 }
 
@@ -905,12 +930,31 @@ struct Walker<'a> {
     rule_sizes: Vec<u64>,
     rule_times: Vec<Times>,
     unreadable: Vec<Unreadable>,
+    invoker: Option<&'a Invoker>,
+    /// Inside a folder the invoking account could not open.
+    fenced: bool,
+    root_only: Vec<(PathBuf, u64)>,
 }
 
 impl Walker<'_> {
+    fn walk(&mut self, dir: &Path, rule: Option<usize>) -> u64 {
+        let fences = !self.fenced
+            && self.invoker.is_some_and(|invoker| {
+                std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && !invoker.can_open(&m))
+            });
+        if !fences {
+            return self.walk_inside(dir, rule);
+        }
+        self.fenced = true;
+        let total = self.walk_inside(dir, rule);
+        self.fenced = false;
+        self.root_only.push((dir.to_path_buf(), total));
+        total
+    }
+
     /// Bytes under `dir` including `dir` itself, with each byte charged to
     /// `rule` unless something deeper claims it.
-    fn walk(&mut self, dir: &Path, rule: Option<usize>) -> u64 {
+    fn walk_inside(&mut self, dir: &Path, rule: Option<usize>) -> u64 {
         if self.closed.contains(dir) {
             self.unreadable.push(unattended(dir));
             return 0;
