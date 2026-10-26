@@ -9,7 +9,7 @@ pub fn run(target: &Target, inputs: &[String], snapshot: bool, dry_run: bool) ->
         move_snapshot(target)?;
         return run_apply(target, dry_run);
     }
-    sync(target, Pins::Upstream, inputs, dry_run)
+    sync(target, Some(Pins::Upstream), inputs, dry_run)
 }
 
 fn move_snapshot(target: &Target) -> Result<()> {

@@ -113,11 +113,16 @@ pub fn output(program: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-pub fn sync(target: &Target, pins: Pins, named: &[String], dry_run: bool) -> Result<()> {
+pub fn sync(target: &Target, pins: Option<Pins>, named: &[String], dry_run: bool) -> Result<()> {
     if dry_run {
         return run_apply(target, true);
     }
     pins::pull(target)?;
+    let Some(pins) = pins else {
+        run_apply(target, false)?;
+        stale_daemons::restart_unused();
+        return Ok(());
+    };
     let inputs = pins::select(target, pins, named)?;
     pins::update(target, &inputs)?;
     run_apply(target, false)?;
