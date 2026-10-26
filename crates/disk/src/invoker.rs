@@ -9,6 +9,26 @@ type GroupId = libc::c_int;
 #[cfg(not(target_os = "macos"))]
 type GroupId = libc::gid_t;
 
+#[cfg(target_os = "macos")]
+fn to_group(gid: u32) -> GroupId {
+    gid as GroupId
+}
+
+#[cfg(not(target_os = "macos"))]
+fn to_group(gid: u32) -> GroupId {
+    gid
+}
+
+#[cfg(target_os = "macos")]
+fn from_group(group: GroupId) -> u32 {
+    group as u32
+}
+
+#[cfg(not(target_os = "macos"))]
+fn from_group(group: GroupId) -> u32 {
+    group
+}
+
 /// The account behind `sudo`, so a root walk can tell which folders that
 /// account could not have opened itself.
 pub struct Invoker {
@@ -53,7 +73,7 @@ fn groups_of(user: &str, gid: u32) -> Vec<u32> {
     let status = unsafe {
         libc::getgrouplist(
             name.as_ptr(),
-            gid as GroupId,
+            to_group(gid),
             groups.as_mut_ptr(),
             &mut count,
         )
@@ -62,5 +82,5 @@ fn groups_of(user: &str, gid: u32) -> Vec<u32> {
         return vec![gid];
     }
     groups.truncate(count.max(0) as usize);
-    groups.into_iter().map(|g| g as u32).collect()
+    groups.into_iter().map(from_group).collect()
 }
