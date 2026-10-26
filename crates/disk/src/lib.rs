@@ -6,6 +6,7 @@ pub mod nix;
 pub mod offers;
 pub mod overview;
 pub mod owners;
+pub mod partial;
 pub mod platform;
 pub mod projects;
 pub mod report;

@@ -533,7 +533,23 @@ pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Repo
         })
         .collect();
 
-    let projects = projects
+    let projects = project_snaps(projects);
+
+    Report {
+        schema: SCHEMA,
+        generated_at: now
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs(),
+        roots,
+        categories,
+        projects,
+        nix_garbage: None,
+    }
+}
+
+pub fn project_snaps(projects: Vec<Project>) -> Vec<ProjectSnap> {
+    projects
         .into_iter()
         .map(|p| ProjectSnap {
             root: p.root,
@@ -551,19 +567,7 @@ pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Repo
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
         })
-        .collect();
-
-    Report {
-        schema: SCHEMA,
-        generated_at: now
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs(),
-        roots,
-        categories,
-        projects,
-        nix_garbage: None,
-    }
+        .collect()
 }
 
 /// The one entry point commands use.
@@ -586,6 +590,21 @@ pub fn load_or_refresh(
     let report = generate(project_roots, max_depth, now);
     write_back(&report);
     (report, Source::Fresh)
+}
+
+pub fn load_refreshing(
+    project_roots: &[PathBuf],
+    max_depth: usize,
+    no_cache: bool,
+    kinds: &[String],
+) -> (Report, Source) {
+    let (mut report, source) = load_or_refresh(project_roots, max_depth, no_cache);
+    if kinds.is_empty() || source == Source::Fresh {
+        return (report, source);
+    }
+    crate::partial::refresh_kinds(&mut report, kinds, project_roots, max_depth);
+    write_back(&report);
+    (report, source)
 }
 
 /// "4h ago", for telling the user how old the numbers are.
