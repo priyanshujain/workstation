@@ -19,10 +19,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Move your tracked repos to their latest commit, then switch: platform, distro packages, home-manager
+    /// Switch to the locked configuration: platform, distro packages, home-manager
     Apply {
-        /// Tracked inputs to move; all of them when none are given
+        /// Tracked inputs to move with --update; all of them when none are given
+        #[arg(requires = "update")]
         inputs: Vec<String>,
+
+        /// Move your tracked repos to their latest commit before switching
+        #[arg(short, long)]
+        update: bool,
 
         /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
         #[arg(long, default_value_t = default_flake())]

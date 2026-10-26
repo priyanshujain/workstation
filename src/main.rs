@@ -35,11 +35,13 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Apply {
             inputs,
+            update,
             flake,
             dry_run,
         } => {
             let target = commands::apply::Target::parse(&flake)?;
-            commands::apply::sync(&target, commands::pins::Pins::Tracked, &inputs, dry_run)?;
+            let pins = update.then_some(commands::pins::Pins::Tracked);
+            commands::apply::sync(&target, pins, &inputs, dry_run)?;
         }
         Commands::Doctor { flake } => {
             let target = commands::apply::Target::parse(&flake)?;
