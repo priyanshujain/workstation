@@ -64,6 +64,7 @@ pub fn run(no_cache: bool) -> Result<()> {
 }
 
 struct App {
+    root_only: Vec<(PathBuf, u64)>,
     space: Pane,
     naming: Pane,
     section: Section,
@@ -449,6 +450,7 @@ impl Pane {
 impl App {
     fn new(overview: Option<DiskOverview>) -> Self {
         Self {
+            root_only: Vec::new(),
             space: Pane::new("Where the space is"),
             naming: Pane::new("What it is"),
             section: Section::Space,
@@ -1156,7 +1158,7 @@ fn sweep_live(app: &mut App, terminal: &mut Terminal<CrosstermBackend<io::Stdout
     // caller.
     app.status = Status::Saving;
     terminal.draw(|f| render(f, app))?;
-    save(audit, projects);
+    save(audit, projects, std::mem::take(&mut app.root_only));
 
     app.status = Status::Idle;
     app.age = Some(Duration::ZERO);
@@ -1195,6 +1197,7 @@ where
         return Ok(None);
     };
 
+    app.root_only = swept.root_only.clone();
     let audit = audit::from_sweep(swept, rules);
     app.finish(&audit);
     Ok(Some(audit))
@@ -1242,8 +1245,8 @@ where
     }
 }
 
-fn save(audit: Audit, projects: Vec<disk::projects::Project>) {
-    let report = report::from_audit(audit, projects, SystemTime::now());
+fn save(audit: Audit, projects: Vec<disk::projects::Project>, root_only: Vec<(PathBuf, u64)>) {
+    let report = report::finish(audit, projects, SystemTime::now(), root_only);
     if let Err(e) = report::save(&report) {
         tracing::warn!("could not write disk report cache: {e}");
     }

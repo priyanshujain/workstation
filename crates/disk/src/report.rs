@@ -11,7 +11,7 @@ use crate::sweep::{Denial, Denials, Root, RootUsage, Times, Unreadable};
 
 /// Bumped whenever the shape below changes. A cache written by an older
 /// version is discarded rather than migrated.
-pub const SCHEMA: u32 = 8;
+pub const SCHEMA: u32 = 9;
 
 /// Past this the cache is ignored even if present, so an unloaded or broken
 /// refresh agent degrades to slow-but-correct instead of silently ancient.
@@ -30,6 +30,12 @@ pub struct Report {
     pub projects: Vec<ProjectSnap>,
     #[serde(default)]
     pub nix_garbage: Option<u64>,
+    /// Folders only root can open, sized by the last walk that ran under sudo.
+    pub root_only: Vec<(PathBuf, u64)>,
+    /// Unix seconds of that walk.
+    pub root_only_at: Option<u64>,
+    /// Unix seconds per kind label, for kinds rescanned after `generated_at`.
+    pub kind_measured: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -369,6 +375,14 @@ pub fn load(now: SystemTime) -> Option<Report> {
     usable(&report, now).then_some(report)
 }
 
+/// The last cache of this shape, however old, for what only a sudo run can
+/// measure.
+fn previous() -> Option<Report> {
+    let bytes = std::fs::read(cache_path()?).ok()?;
+    let report: Report = serde_json::from_slice(&bytes).ok()?;
+    (report.schema == SCHEMA).then_some(report)
+}
+
 /// A cache written by any other version of the shape is discarded rather than
 /// migrated, so a field added below can be trusted to be there.
 fn usable(report: &Report, now: SystemTime) -> bool {
@@ -472,9 +486,29 @@ fn measure(
 ) -> Report {
     let projects = crate::projects::discover(project_roots, max_depth, closed);
     let rules = crate::audit::attribution_rules(closed, &projects);
-    let audit = crate::audit::scan_with(roots, &rules, closed);
+    let swept = crate::sweep::sweep_gated(roots, &rules, closed);
+    let root_only = swept.root_only.clone();
+    let audit = crate::audit::from_sweep(swept, &rules);
+    finish(audit, projects, now, root_only)
+}
+
+/// A full report from a finished walk: what the walk measured, plus what only
+/// a sudo run can measure, carried over from the last one when this is not it.
+pub fn finish(
+    audit: Audit,
+    projects: Vec<Project>,
+    now: SystemTime,
+    root_only: Vec<(PathBuf, u64)>,
+) -> Report {
     let mut report = from_audit(audit, projects, now);
     report.nix_garbage = crate::nix::garbage_bytes();
+    if crate::invoker::Invoker::under_sudo().is_some() {
+        report.root_only = root_only;
+        report.root_only_at = Some(report.generated_at);
+    } else if let Some(previous) = previous() {
+        report.root_only = previous.root_only;
+        report.root_only_at = previous.root_only_at;
+    }
     report
 }
 
@@ -545,6 +579,9 @@ pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Repo
         categories,
         projects,
         nix_garbage: None,
+        root_only: Vec::new(),
+        root_only_at: None,
+        kind_measured: Default::default(),
     }
 }
 
@@ -636,6 +673,9 @@ mod tests {
         Report {
             schema: SCHEMA,
             nix_garbage: None,
+            root_only: Vec::new(),
+            root_only_at: None,
+            kind_measured: Default::default(),
             generated_at: now - secs_ago,
             roots: Vec::new(),
             categories: Vec::new(),
@@ -659,6 +699,9 @@ mod tests {
         let report = Report {
             schema: SCHEMA,
             nix_garbage: None,
+            root_only: Vec::new(),
+            root_only_at: None,
+            kind_measured: Default::default(),
             generated_at: 1_700_000_000,
             roots: Vec::new(),
             categories: vec![CategorySnap {
@@ -708,6 +751,9 @@ mod tests {
         let report = Report {
             schema: SCHEMA,
             nix_garbage: None,
+            root_only: Vec::new(),
+            root_only_at: None,
+            kind_measured: Default::default(),
             generated_at: 0,
             roots: Vec::new(),
             categories: Vec::new(),
@@ -1058,6 +1104,9 @@ mod tests {
         let report = Report {
             schema: SCHEMA,
             nix_garbage: None,
+            root_only: Vec::new(),
+            root_only_at: None,
+            kind_measured: Default::default(),
             generated_at: 1,
             roots: Vec::new(),
             categories: Vec::new(),
