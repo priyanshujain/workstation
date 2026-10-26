@@ -172,6 +172,39 @@ pub fn discover(roots: &[PathBuf], max_depth: usize, closed: &[PathBuf]) -> Vec<
     found
 }
 
+pub fn repositories(roots: &[PathBuf], max_depth: usize, closed: &[PathBuf]) -> Vec<PathBuf> {
+    let library = dirs::home_dir().map(|home| home.join("Library"));
+    let mut found = Vec::new();
+    for root in roots {
+        if crate::sweep::is_closed(root, closed) || !root.is_dir() {
+            continue;
+        }
+        let mut walk = WalkDir::new(root)
+            .follow_links(false)
+            .max_depth(max_depth)
+            .into_iter();
+        while let Some(Ok(entry)) = walk.next() {
+            if !entry.file_type().is_dir() || entry.depth() == 0 {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            let pruned = name.starts_with('.')
+                || PRUNE.contains(&name.as_ref())
+                || library.as_deref() == Some(entry.path())
+                || crate::sweep::is_closed(entry.path(), closed);
+            if pruned {
+                walk.skip_current_dir();
+                continue;
+            }
+            if entry.path().join(".git").exists() {
+                found.push(entry.into_path());
+                walk.skip_current_dir();
+            }
+        }
+    }
+    found
+}
+
 fn classify(dir: &Path, kind: ProjectKind, closed: &[PathBuf]) -> Option<Project> {
     if !kind.markers().iter().any(|m| dir.join(m).is_file()) {
         return None;

@@ -101,9 +101,21 @@ pub fn from_sweep(swept: sweep::Sweep, rules: &[Rule]) -> Audit {
 }
 
 pub fn attribution_rules(closed: &[PathBuf], projects: &[Project]) -> Vec<Rule> {
-    let mut rules = Places::current()
-        .map(|places| conventions::rules(&places, closed))
-        .unwrap_or_default();
+    let mut rules = system_roots();
+    rules.extend(
+        Places::current()
+            .map(|places| conventions::rules(&places, closed))
+            .unwrap_or_default(),
+    );
+    rules.extend(
+        crate::projects::repositories(
+            &crate::projects::default_roots(),
+            crate::projects::MAX_DEPTH,
+            closed,
+        )
+        .into_iter()
+        .map(conventions::source_code_rule),
+    );
     rules.extend(projects.iter().flat_map(|project| {
         project
             .artifacts
@@ -111,6 +123,16 @@ pub fn attribution_rules(closed: &[PathBuf], projects: &[Project]) -> Vec<Rule> 
             .map(|artifact| conventions::build_output_rule(&project.root, artifact.path.clone()))
     }));
     rules
+}
+
+const USER_ROOTS: [&str; 3] = ["Home", "User Library", "Other users"];
+
+fn system_roots() -> Vec<Rule> {
+    sweep::discover_roots()
+        .into_iter()
+        .filter(|root| !USER_ROOTS.contains(&root.name.as_str()))
+        .map(|root| conventions::system_rule(root.name, root.path))
+        .collect()
 }
 
 /// Roll per-rule bytes back up into categories, largest first. Empty paths and
