@@ -85,7 +85,18 @@ fn offer(kind: Kind, owner: &str, path: PathBuf) -> Option<Target> {
                 idle_days: LOG_IDLE_DAYS,
             },
         ),
-        Kind::AppData | Kind::BuildOutput | Kind::Packages | Kind::Nix | Kind::Temp => return None,
+        Kind::AppData
+        | Kind::BuildOutput
+        | Kind::Packages
+        | Kind::Nix
+        | Kind::Temp
+        | Kind::SourceCode
+        | Kind::Toolchains
+        | Kind::Applications
+        | Kind::DeveloperTools
+        | Kind::PersonalFiles
+        | Kind::ToolData
+        | Kind::System => return None,
     };
     Some(target)
 }

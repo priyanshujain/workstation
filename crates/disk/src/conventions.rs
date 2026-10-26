@@ -16,6 +16,13 @@ pub enum Kind {
     Temp,
     Trash,
     RemovedApps,
+    SourceCode,
+    Toolchains,
+    Applications,
+    DeveloperTools,
+    PersonalFiles,
+    ToolData,
+    System,
 }
 
 impl Kind {
@@ -31,6 +38,13 @@ impl Kind {
             Kind::Temp => "Temp",
             Kind::Trash => "Trash",
             Kind::RemovedApps => "Removed apps",
+            Kind::SourceCode => "Source code",
+            Kind::Toolchains => "Toolchains",
+            Kind::Applications => "Applications",
+            Kind::DeveloperTools => "Developer tools",
+            Kind::PersonalFiles => "Personal files",
+            Kind::ToolData => "Tool data",
+            Kind::System => "System files",
         }
     }
 
@@ -43,8 +57,14 @@ impl Kind {
             | Kind::Temp
             | Kind::Trash
             | Kind::RemovedApps => Recovery::Safe,
-            Kind::Packages | Kind::Nix => Recovery::Refetch,
-            Kind::AppData => Recovery::Keep,
+            Kind::Packages
+            | Kind::Nix
+            | Kind::Toolchains
+            | Kind::Applications
+            | Kind::DeveloperTools => Recovery::Refetch,
+            Kind::AppData | Kind::SourceCode | Kind::PersonalFiles => Recovery::Keep,
+            Kind::System => Recovery::System,
+            Kind::ToolData => Recovery::Unknown,
         }
     }
 
@@ -74,7 +94,7 @@ impl Recovery {
     }
 }
 
-pub const ALL: [Kind; 10] = [
+pub const ALL: [Kind; 17] = [
     Kind::Caches,
     Kind::Logs,
     Kind::AppData,
@@ -85,6 +105,13 @@ pub const ALL: [Kind; 10] = [
     Kind::Temp,
     Kind::Trash,
     Kind::RemovedApps,
+    Kind::SourceCode,
+    Kind::Toolchains,
+    Kind::Applications,
+    Kind::DeveloperTools,
+    Kind::PersonalFiles,
+    Kind::ToolData,
+    Kind::System,
 ];
 
 #[derive(Debug, Clone)]
@@ -140,7 +167,7 @@ fn temp_dirs() -> Vec<PathBuf> {
 
 pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
     let home = &places.home;
-    let mut rules = Vec::new();
+    let mut rules = home_folders(places, closed);
     let mut each_child = |kind: Kind, parent: &Path| {
         rules.extend(
             children(parent, closed)
@@ -204,6 +231,10 @@ pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
         places.xdg_data.join("Trash")
     };
     rules.push(rule(Kind::Trash, "Trash".into(), trash));
+    rules.extend(toolchains(home));
+    if places.macos {
+        rules.extend(macos_developer_and_apps(home, closed));
+    }
     rules.push(rule(Kind::Nix, "store".into(), PathBuf::from("/nix/store")));
     for prefix in &places.package_prefixes {
         rules.push(rule(Kind::Packages, owner_of(prefix), prefix.clone()));
@@ -211,6 +242,99 @@ pub fn rules(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
 
     rules.retain(|r| !is_closed(&r.path, closed));
     last_rule_per_path(rules)
+}
+
+fn home_folders(places: &Places, closed: &[PathBuf]) -> Vec<Rule> {
+    let library = places.home.join("Library");
+    children(&places.home, closed)
+        .into_iter()
+        .filter(|dir| *dir != library)
+        .map(|dir| {
+            let name = owner_of(&dir);
+            let kind = if name.starts_with('.') {
+                Kind::ToolData
+            } else {
+                Kind::PersonalFiles
+            };
+            rule(kind, name, dir)
+        })
+        .collect()
+}
+
+const TOOLCHAIN_HOMES: &[(&str, &str, &str)] = &[
+    ("rustup", "RUSTUP_HOME", ".rustup"),
+    ("cargo", "CARGO_HOME", ".cargo"),
+    ("elan", "ELAN_HOME", ".elan"),
+    ("ghcup", "GHCUP_INSTALL_BASE_PREFIX", ".ghcup"),
+    ("cabal", "CABAL_DIR", ".cabal"),
+    ("opam", "OPAMROOT", ".opam"),
+    ("nvm", "NVM_DIR", ".nvm"),
+    ("kotlin native", "KONAN_DATA_DIR", ".konan"),
+    ("bun", "BUN_INSTALL", ".bun"),
+    ("pyenv", "PYENV_ROOT", ".pyenv"),
+    ("sdkman", "SDKMAN_DIR", ".sdkman"),
+    ("deno", "DENO_DIR", ".deno"),
+    ("go", "GOPATH", "go/pkg"),
+    ("gradle", "GRADLE_USER_HOME", ".gradle/wrapper"),
+];
+
+fn toolchains(home: &Path) -> Vec<Rule> {
+    let mut rules: Vec<Rule> = TOOLCHAIN_HOMES
+        .iter()
+        .map(|(tool, var, default)| {
+            let first = std::env::var_os(var).and_then(|v| std::env::split_paths(&v).next());
+            let path = match first {
+                Some(dir) if *var == "GHCUP_INSTALL_BASE_PREFIX" => dir.join(".ghcup"),
+                Some(dir) if *var == "GOPATH" => dir.join("pkg"),
+                Some(dir) if *var == "GRADLE_USER_HOME" => dir.join("wrapper"),
+                Some(dir) => dir,
+                None => home.join(default),
+            };
+            rule(Kind::Toolchains, tool.to_string(), path)
+        })
+        .filter(|rule| rule.path.is_dir())
+        .collect();
+    let go_modules = std::env::var_os("GOMODCACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("go/pkg/mod"));
+    if go_modules.is_dir() {
+        rules.push(rule(Kind::Caches, "go modules".into(), go_modules));
+    }
+    let npm = home.join(".npm");
+    if npm.is_dir() {
+        rules.push(rule(Kind::Caches, "npm".into(), npm));
+    }
+    rules
+}
+
+fn macos_developer_and_apps(home: &Path, closed: &[PathBuf]) -> Vec<Rule> {
+    let mut rules = Vec::new();
+    for applications in [PathBuf::from("/Applications"), home.join("Applications")] {
+        for app in children(&applications, closed) {
+            let name = owner_of(&app);
+            let name = name.strip_suffix(".app").unwrap_or(&name).to_string();
+            rules.push(rule(Kind::Applications, name, app));
+        }
+    }
+    for developer in [
+        PathBuf::from("/Library/Developer"),
+        home.join("Library/Developer"),
+    ] {
+        for tool in children(&developer, closed) {
+            rules.push(rule(Kind::DeveloperTools, owner_of(&tool), tool));
+        }
+    }
+    let derived = home.join("Library/Developer/Xcode/DerivedData");
+    if derived.is_dir() {
+        rules.push(rule(Kind::BuildOutput, "Xcode".into(), derived));
+    }
+    let pnpm = std::env::var_os("PNPM_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("Library/pnpm"));
+    if pnpm.is_dir() {
+        rules.push(rule(Kind::Toolchains, "pnpm".into(), pnpm));
+    }
+    rules
 }
 
 fn last_rule_per_path(rules: Vec<Rule>) -> Vec<Rule> {
@@ -267,6 +391,14 @@ fn has_cachedir_tag(dir: &Path) -> bool {
 
 pub fn build_output_rule(project_root: &Path, artifact: PathBuf) -> Rule {
     rule(Kind::BuildOutput, project_name(project_root), artifact)
+}
+
+pub fn source_code_rule(repository: PathBuf) -> Rule {
+    rule(Kind::SourceCode, project_name(&repository), repository)
+}
+
+pub fn system_rule(name: String, path: PathBuf) -> Rule {
+    rule(Kind::System, name, path)
 }
 
 pub fn project_name(root: &Path) -> String {
