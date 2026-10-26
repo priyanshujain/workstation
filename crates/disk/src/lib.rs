@@ -2,6 +2,7 @@ pub mod audit;
 pub mod cleanup;
 pub mod conventions;
 pub mod liveness;
+pub mod nix;
 pub mod offers;
 pub mod overview;
 pub mod owners;

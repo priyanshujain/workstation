@@ -28,6 +28,8 @@ pub struct Report {
     pub roots: Vec<RootSnap>,
     pub categories: Vec<CategorySnap>,
     pub projects: Vec<ProjectSnap>,
+    #[serde(default)]
+    pub nix_garbage: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -471,7 +473,9 @@ fn measure(
     let projects = crate::projects::discover(project_roots, max_depth, closed);
     let rules = crate::audit::attribution_rules(closed, &projects);
     let audit = crate::audit::scan_with(roots, &rules, closed);
-    from_audit(audit, projects, now)
+    let mut report = from_audit(audit, projects, now);
+    report.nix_garbage = crate::nix::garbage_bytes();
+    report
 }
 
 /// What the scheduled refresh runs. The walk leaves closed whatever macOS
@@ -558,6 +562,7 @@ pub fn from_audit(audit: Audit, projects: Vec<Project>, now: SystemTime) -> Repo
         roots,
         categories,
         projects,
+        nix_garbage: None,
     }
 }
 
@@ -611,6 +616,7 @@ mod tests {
             .as_secs();
         Report {
             schema: SCHEMA,
+            nix_garbage: None,
             generated_at: now - secs_ago,
             roots: Vec::new(),
             categories: Vec::new(),
@@ -633,6 +639,7 @@ mod tests {
     fn round_trips_through_json() {
         let report = Report {
             schema: SCHEMA,
+            nix_garbage: None,
             generated_at: 1_700_000_000,
             roots: Vec::new(),
             categories: vec![CategorySnap {
@@ -681,6 +688,7 @@ mod tests {
         };
         let report = Report {
             schema: SCHEMA,
+            nix_garbage: None,
             generated_at: 0,
             roots: Vec::new(),
             categories: Vec::new(),
@@ -1030,6 +1038,7 @@ mod tests {
         // Scan claims to predate the directory.
         let report = Report {
             schema: SCHEMA,
+            nix_garbage: None,
             generated_at: 1,
             roots: Vec::new(),
             categories: Vec::new(),
