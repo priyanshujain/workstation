@@ -79,14 +79,37 @@ pub fn disk_overview() -> Option<DiskOverview> {
     })
 }
 
+#[derive(Clone)]
 pub struct Volume {
     pub name: String,
     pub used: u64,
     pub nix_store: bool,
 }
 
-#[cfg(target_os = "macos")]
 pub fn other_volumes() -> Vec<Volume> {
+    static VOLUMES: std::sync::OnceLock<Vec<Volume>> = std::sync::OnceLock::new();
+    VOLUMES.get_or_init(read_other_volumes).clone()
+}
+
+const GENERIC_VOLUMES: &str = "System, Preboot, Recovery, VM";
+
+pub fn volumes_detail(shown: u64) -> String {
+    let mut volumes = other_volumes();
+    volumes.sort_by_key(|v| std::cmp::Reverse(v.used));
+    let named: u64 = volumes.iter().map(|v| v.used).sum();
+    if named == 0 || named.abs_diff(shown) > shown / 100 {
+        return GENERIC_VOLUMES.into();
+    }
+    volumes
+        .iter()
+        .filter(|v| v.used > 0)
+        .map(|v| format!("{} {}", v.name, crate::util::format_size(v.used)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(target_os = "macos")]
+fn read_other_volumes() -> Vec<Volume> {
     let Some(container) = diskutil_plist(df_path())
         .and_then(|p| plist::Value::from_reader_xml(p.as_bytes()).ok())
         .and_then(|v| {
@@ -118,7 +141,7 @@ fn nix_device() -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn other_volumes() -> Vec<Volume> {
+fn read_other_volumes() -> Vec<Volume> {
     Vec::new()
 }
 

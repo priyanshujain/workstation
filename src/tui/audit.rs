@@ -669,7 +669,7 @@ fn other_volumes_item(overview: Option<&DiskOverview>) -> Option<Item> {
     (bytes > 0).then(|| Item {
         name: "Other volumes".to_string(),
         path: None,
-        detail: Some("System, Preboot, Recovery, VM".to_string()),
+        detail: Some(disk::overview::volumes_detail(bytes)),
         size: Size::Measured(bytes),
         denials: Denials::default(),
         counted_as: None,

@@ -121,7 +121,7 @@ fn print_roots(audit: &Audit, overview: Option<&DiskOverview>, as_of: &str) {
             "  {:>10}  {:<NAME_WIDTH$}  {}",
             style(format_size(overview.other_volumes)).yellow(),
             style("Other volumes").white(),
-            style("System, Preboot, Recovery, VM").dim(),
+            style(disk::overview::volumes_detail(overview.other_volumes)).dim(),
         );
     }
 
