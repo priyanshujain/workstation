@@ -14,6 +14,7 @@ pub struct Line {
     pub size: u64,
     pub owners: Vec<(String, u64)>,
     pub recovery: Recovery,
+    pub notes: Vec<String>,
 }
 
 fn recovery_of(name: &str) -> Recovery {
@@ -34,6 +35,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
                 name: category.name.clone(),
                 size: category.total_size,
                 owners: biggest(owners.into_iter().map(|(o, s)| (o.to_string(), s))),
+                notes: Vec::new(),
             }
         })
         .collect();
@@ -42,6 +44,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
         lines.push(Line {
             name: "Other".into(),
             recovery: Recovery::Unknown,
+            notes: Vec::new(),
             size: audit.unattributed(),
             owners: biggest(
                 audit
@@ -57,11 +60,23 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
     if let Some(overview) = overview {
         let unreached = overview.data_used.saturating_sub(audit.measured());
         if unreached > 0 {
+            let refused = refused_roots(audit);
+            let in_home = refused
+                .iter()
+                .any(|(name, _)| USER_ROOTS.contains(&name.as_str()));
             lines.push(Line {
                 name: "Not reached".into(),
-                recovery: Recovery::Unknown,
+                recovery: if in_home || refused.is_empty() {
+                    Recovery::Unknown
+                } else {
+                    Recovery::System
+                },
                 size: unreached,
                 owners: Vec::new(),
+                notes: refused
+                    .into_iter()
+                    .map(|(name, count)| format!("{name} {count} refused"))
+                    .collect(),
             });
         }
         if overview.other_volumes > 0 {
@@ -73,6 +88,7 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
                 },
                 size: overview.other_volumes,
                 recovery: Recovery::System,
+                notes: Vec::new(),
                 owners: Vec::new(),
             });
         }
@@ -101,6 +117,7 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
             name: format!("{} volume", v.name),
             size: v.used,
             owners: Vec::new(),
+            notes: Vec::new(),
             recovery: if v.nix_store {
                 Recovery::Refetch
             } else {
@@ -116,6 +133,7 @@ pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
             size: rest,
             owners: Vec::new(),
             recovery: Recovery::System,
+            notes: Vec::new(),
         });
     }
     lines.splice(index..index, named);
@@ -132,11 +150,12 @@ pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {
     }
     let width = lines.iter().map(|l| l.name.len()).max().unwrap_or(0);
     for line in lines {
-        let owners: Vec<String> = line
+        let mut owners: Vec<String> = line
             .owners
             .iter()
             .map(|(owner, size)| format!("{owner} {}", format_size(*size)))
             .collect();
+        owners.extend(line.notes.iter().cloned());
         out.push_str(
             format!(
                 "{:<width$}  {:>9}  {:<7}  {}",
@@ -150,6 +169,19 @@ pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {
         out.push('\n');
     }
     out
+}
+
+const USER_ROOTS: [&str; 3] = ["Home", "User Library", "Other users"];
+
+fn refused_roots(audit: &Audit) -> Vec<(String, usize)> {
+    let mut refused: Vec<(String, usize)> = audit
+        .roots
+        .iter()
+        .map(|root| (root.name.clone(), root.denials.total()))
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    refused.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    refused
 }
 
 fn biggest(owners: impl Iterator<Item = (String, u64)>) -> Vec<(String, u64)> {
