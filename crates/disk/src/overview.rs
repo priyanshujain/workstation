@@ -79,6 +79,74 @@ pub fn disk_overview() -> Option<DiskOverview> {
     })
 }
 
+pub struct Volume {
+    pub name: String,
+    pub used: u64,
+}
+
+#[cfg(target_os = "macos")]
+pub fn other_volumes() -> Vec<Volume> {
+    let Some(container) = diskutil_plist(df_path())
+        .and_then(|p| plist::Value::from_reader_xml(p.as_bytes()).ok())
+        .and_then(|v| {
+            v.as_dictionary()?
+                .get("APFSContainerReference")?
+                .as_string()
+                .map(String::from)
+        })
+    else {
+        return Vec::new();
+    };
+    let Ok(output) = Command::new("diskutil")
+        .args(["apfs", "list", "-plist", &container])
+        .output()
+    else {
+        return Vec::new();
+    };
+    plist::Value::from_reader_xml(output.stdout.as_slice())
+        .map(|list| volumes_besides_data(&list))
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn other_volumes() -> Vec<Volume> {
+    Vec::new()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn volumes_besides_data(list: &plist::Value) -> Vec<Volume> {
+    let volumes = list
+        .as_dictionary()
+        .and_then(|d| d.get("Containers"))
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_dictionary()?.get("Volumes")?.as_array())
+        .flatten()
+        .filter_map(|v| v.as_dictionary());
+    volumes
+        .filter_map(|volume| {
+            let roles: Vec<&str> = volume
+                .get("Roles")
+                .and_then(|r| r.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|r| r.as_string())
+                .collect();
+            if roles.contains(&"Data") {
+                return None;
+            }
+            let name = match roles.first() {
+                Some(&"System") => "macOS system".to_string(),
+                Some(&"VM") => "Swap".to_string(),
+                _ => volume.get("Name")?.as_string()?.to_string(),
+            };
+            let used = volume.get("CapacityInUse")?.as_unsigned_integer()?;
+            Some(Volume { name, used })
+        })
+        .collect()
+}
+
 fn statfs(path: &Path) -> Option<(u64, u64, u64)> {
     let output = Command::new("df").arg("-k").arg(path).output().ok()?;
     if !output.status.success() {

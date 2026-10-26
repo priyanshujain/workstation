@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::audit::Audit;
-use crate::overview::DiskOverview;
+use crate::overview::{DiskOverview, Volume};
 use crate::util::format_size;
 
 const OWNERS_SHOWN: usize = 5;
@@ -68,6 +68,41 @@ pub fn lines(audit: &Audit, overview: Option<&DiskOverview>, home: Option<&Path>
         }
     }
     lines
+}
+
+const OTHER_VOLUMES: [&str; 2] = ["Other volumes", "Reserved"];
+const VOLUME_DRIFT: u64 = 100_000_000;
+
+pub fn split_volumes(lines: &mut Vec<Line>, volumes: &[Volume]) {
+    let Some(index) = lines
+        .iter()
+        .position(|l| OTHER_VOLUMES.contains(&l.name.as_str()))
+    else {
+        return;
+    };
+    if volumes.is_empty() {
+        return;
+    }
+    let whole = lines.remove(index).size;
+    let mut named: Vec<Line> = volumes
+        .iter()
+        .filter(|v| v.used > 0)
+        .map(|v| Line {
+            name: format!("{} volume", v.name),
+            size: v.used,
+            owners: Vec::new(),
+        })
+        .collect();
+    named.sort_by_key(|l| std::cmp::Reverse(l.size));
+    let rest = whole.saturating_sub(named.iter().map(|l| l.size).sum());
+    if rest > VOLUME_DRIFT {
+        named.push(Line {
+            name: "Other volumes".into(),
+            size: rest,
+            owners: Vec::new(),
+        });
+    }
+    lines.splice(index..index, named);
 }
 
 pub fn render(lines: &[Line], overview: Option<&DiskOverview>) -> String {

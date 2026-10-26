@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use console::style;
-use disk::overview::disk_overview;
+use disk::overview::{disk_overview, other_volumes};
 use disk::projects;
 use disk::report::{self, Source};
 use disk::summary;
@@ -14,7 +14,8 @@ pub fn summary(no_cache: bool) -> Result<()> {
         report::load_or_refresh(&projects::default_roots(), projects::MAX_DEPTH, no_cache);
     let audit = report.to_audit();
     let home = dirs::home_dir();
-    let lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
+    let mut lines = summary::lines(&audit, overview.as_ref(), home.as_deref());
+    summary::split_volumes(&mut lines, &other_volumes());
 
     print!("{}", summary::render(&lines, overview.as_ref()));
     if let Some(line) = super::agents::disk_line() {
