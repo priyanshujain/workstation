@@ -67,6 +67,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Disk { sub, no_cache } => {
             let walks = match &sub {
                 None => no_cache || disk::report::load(std::time::SystemTime::now()).is_none(),
+                Some(DiskCommand::List { no_cache, .. }) => {
+                    *no_cache || disk::report::load(std::time::SystemTime::now()).is_none()
+                }
                 Some(DiskCommand::Browse { .. } | DiskCommand::Clean) => true,
                 Some(DiskCommand::Refresh | DiskCommand::Projects { .. }) => false,
             };
@@ -93,6 +96,9 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 Some(DiskCommand::Refresh) => commands::disk::refresh()?,
+                Some(DiskCommand::List { kind, no_cache }) => {
+                    commands::disk::list(kind.as_deref(), no_cache)?
+                }
                 Some(DiskCommand::Projects {
                     roots,
                     idle_days,

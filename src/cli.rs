@@ -173,6 +173,17 @@ pub enum DiskCommand {
     /// Browse and delete what is safe to remove, sizes filling in as it measures
     Clean,
 
+    /// Every attributed path with its kind, how it comes back, and when it was last used
+    List {
+        /// Only this kind, by its label (for example "Toolchains")
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Rescan instead of reading the cached report, and refresh the cache
+        #[arg(long)]
+        no_cache: bool,
+    },
+
     /// Rebuild the cached report without a terminal (what the scheduled job runs)
     #[command(hide = true)]
     Refresh,
