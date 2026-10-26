@@ -245,6 +245,40 @@ pub struct Sweep {
     pub roots: Vec<RootUsage>,
     /// Bytes per rule, positionally matching the rules handed to [`sweep`].
     pub rule_sizes: Vec<u64>,
+    pub rule_times: Vec<Times>,
+}
+
+/// Unix seconds: the newest access and change anywhere under a path, and the
+/// oldest creation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Times {
+    pub accessed: Option<i64>,
+    pub modified: Option<i64>,
+    pub created: Option<i64>,
+}
+
+impl Times {
+    fn record(&mut self, meta: &Metadata) {
+        let created = meta
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        self.merge(Times {
+            accessed: Some(meta.atime()),
+            modified: Some(meta.mtime()),
+            created,
+        });
+    }
+
+    pub fn merge(&mut self, other: Times) {
+        self.accessed = self.accessed.max(other.accessed);
+        self.modified = self.modified.max(other.modified);
+        self.created = match (self.created, other.created) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
 }
 
 impl Sweep {
@@ -548,6 +582,7 @@ pub fn sweep_streaming(
                         cancel,
                         dev: job.dev,
                         rule_sizes: vec![0; rules.len()],
+                        rule_times: vec![Times::default(); rules.len()],
                         unreadable: Vec::new(),
                     };
                     let total = walker.walk(&job.path, job.rule);
@@ -563,6 +598,7 @@ pub fn sweep_streaming(
                             refused,
                             unattributed: total.saturating_sub(attributed),
                             rule_sizes: walker.rule_sizes,
+                            rule_times: walker.rule_times,
                             unreadable: walker.unreadable,
                         })
                         .is_err()
@@ -632,6 +668,7 @@ struct JobResult {
     refused: Option<Denial>,
     unattributed: u64,
     rule_sizes: Vec<u64>,
+    rule_times: Vec<Times>,
     unreadable: Vec<Unreadable>,
 }
 
@@ -645,6 +682,7 @@ struct Plan {
 struct RootSeed {
     loose_bytes: u64,
     rule_sizes: Vec<u64>,
+    rule_times: Vec<Times>,
     unreadable: Vec<Unreadable>,
 }
 
@@ -662,6 +700,7 @@ fn plan(
         let mut seed = RootSeed {
             loose_bytes: 0,
             rule_sizes: vec![0; by_path.len()],
+            rule_times: vec![Times::default(); by_path.len()],
             unreadable: Vec::new(),
         };
 
@@ -726,6 +765,7 @@ fn plan(
                     seed.loose_bytes += bytes;
                     if let Some(r) = rule {
                         seed.rule_sizes[r] += bytes;
+                        seed.rule_times[r].record(&meta);
                     }
                 }
             }
@@ -745,12 +785,16 @@ fn collect(
     results: Vec<JobResult>,
 ) -> Sweep {
     let mut rule_sizes = vec![0u64; rule_count];
+    let mut rule_times = vec![Times::default(); rule_count];
     let mut usage: Vec<RootUsage> = roots
         .iter()
         .zip(seeds)
         .map(|(root, seed)| {
             for (i, bytes) in seed.rule_sizes.iter().enumerate() {
                 rule_sizes[i] += bytes;
+            }
+            for (i, times) in seed.rule_times.iter().enumerate() {
+                rule_times[i].merge(*times);
             }
             RootUsage {
                 name: root.name.clone(),
@@ -793,6 +837,9 @@ fn collect(
         for (i, bytes) in result.rule_sizes.iter().enumerate() {
             rule_sizes[i] += bytes;
         }
+        for (i, times) in result.rule_times.iter().enumerate() {
+            rule_times[i].merge(*times);
+        }
     }
 
     for root in usage.iter_mut() {
@@ -804,6 +851,7 @@ fn collect(
     Sweep {
         roots: usage,
         rule_sizes,
+        rule_times,
     }
 }
 
@@ -846,6 +894,7 @@ struct Walker<'a> {
     cancel: &'a AtomicBool,
     dev: u64,
     rule_sizes: Vec<u64>,
+    rule_times: Vec<Times>,
     unreadable: Vec<Unreadable>,
 }
 
@@ -928,6 +977,7 @@ impl Walker<'_> {
         };
         if let Some(r) = rule {
             self.rule_sizes[r] += bytes;
+            self.rule_times[r].record(meta);
         }
         bytes
     }
