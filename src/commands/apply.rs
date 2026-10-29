@@ -206,7 +206,7 @@ pub mod linux {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
 
-    use anyhow::{Context, Result};
+    use anyhow::{Context, Result, bail};
     use console::style;
     use serde::Deserialize;
 
@@ -240,6 +240,11 @@ pub mod linux {
         } else {
             step(&format!("system-manager switch --flake {system}"));
             run("system-manager", &["switch", "--flake", &system, "--sudo"])?;
+            if managed_files()?.is_empty() {
+                bail!(
+                    "system-manager switch wrote no /etc files; its activation failed, see the output above"
+                );
+            }
         }
 
         let presets = preset_units();
