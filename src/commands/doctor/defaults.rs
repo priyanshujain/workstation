@@ -122,6 +122,7 @@ fn setting(words: &[String]) -> Result<Option<Setting>> {
         (Some("-float"), Some(v)) => Value::Real(v.parse()?),
         (Some("-bool" | "-boolean"), Some(v)) => Value::Boolean(matches!(v, "true" | "yes" | "1")),
         (Some("-string"), Some(v)) => Value::String(v.to_string()),
+        (Some("-data"), Some(v)) => Value::Data(data(v)?),
         (Some(xml), None) => Value::from_reader_xml(xml.as_bytes())
             .with_context(|| format!("could not parse the value of {domain} {key}"))?,
         _ => bail!("unsupported defaults write: {}", words.join(" ")),
@@ -132,6 +133,23 @@ fn setting(words: &[String]) -> Result<Option<Setting>> {
         key: key.to_string(),
         value,
     }))
+}
+
+fn data(arg: &str) -> Result<Vec<u8>> {
+    let hex = match arg.strip_prefix("$(").and_then(|a| a.strip_suffix(')')) {
+        Some(command) => output("bash", &["-c", command])?,
+        None => arg.to_string(),
+    };
+    let digits: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    digits
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .with_context(|| format!("-data value is not hex: {arg}"))
+        })
+        .collect()
 }
 
 pub fn statements(script: &str) -> Vec<Vec<String>> {
