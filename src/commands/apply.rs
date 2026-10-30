@@ -69,11 +69,17 @@ fn default_host(flake: &str) -> Result<String> {
 }
 
 fn hostname() -> Result<String> {
-    let out = Command::new("hostname")
-        .arg("-s")
-        .output()
-        .context("could not run hostname")?;
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let mut buf = [0u8; 256];
+    // SAFETY: buf is valid for writes of its full length.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        bail!(
+            "could not read the hostname: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let full = String::from_utf8_lossy(&buf[..len]);
+    Ok(full.split('.').next().unwrap_or_default().to_string())
 }
 
 fn step(what: &str) {
