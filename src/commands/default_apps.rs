@@ -112,6 +112,9 @@ pub fn report() -> Result<Option<Report>> {
     let mut unmapped = Vec::new();
     for (key, app) in &rules.types {
         match content_type(key) {
+            Some(found) if !workspace::knows(&found) => {
+                unmapped.push(format!("macOS does not know {found}"))
+            }
             Some(found) => {
                 let label = if key.contains('.') {
                     key.clone()

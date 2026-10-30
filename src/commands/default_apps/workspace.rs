@@ -88,6 +88,10 @@ fn content_type(identifier: &str) -> Id {
     )
 }
 
+pub fn knows(identifier: &str) -> bool {
+    !content_type(identifier).is_null()
+}
+
 pub fn type_for_extension(extension: &str) -> Option<String> {
     let found = send_with(
         class("UTType"),
