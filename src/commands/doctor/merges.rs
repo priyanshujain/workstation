@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -120,18 +122,38 @@ fn expand(root: &Path, patterns: &[String]) -> Result<Vec<String>> {
         .collect())
 }
 
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn run_check(command: &str) -> Result<Option<bool>> {
+    let mut child = Command::new("bash")
+        .args(["-c", command])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + CHECK_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status.success()));
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            return Ok(None);
+        }
+        sleep(Duration::from_millis(100));
+    }
+}
+
 pub fn checks() -> Result<Check> {
     let checks: BTreeMap<String, String> = load("checks.json")?;
     let mut failed = Vec::new();
     for (name, command) in &checks {
-        let ok = Command::new("bash")
-            .args(["-c", command])
-            .output()
-            .with_context(|| format!("could not run the {name} check"))?
-            .status
-            .success();
-        if !ok {
-            failed.push(format!("{name}: {command}"));
+        match run_check(command).with_context(|| format!("could not run the {name} check"))? {
+            Some(true) => {}
+            Some(false) => failed.push(format!("{name}: {command}")),
+            None => failed.push(format!(
+                "{name}: timed out after {CHECK_TIMEOUT:?}: {command}"
+            )),
         }
     }
     Ok(if failed.is_empty() {
