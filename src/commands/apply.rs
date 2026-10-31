@@ -455,8 +455,11 @@ pub mod linux {
             }
             run("cp", &["-r", src, &dir.display().to_string()])?;
             run("chmod", &["-R", "u+w", &dir.display().to_string()])?;
+            let config = dir.join("wsctl-makepkg.conf");
+            std::fs::write(&config, "source /etc/makepkg.conf\nOPTIONS+=(!debug)\n")?;
             let status = std::process::Command::new("makepkg")
-                .args(["-si", "--noconfirm", "--needed"])
+                .args(["-si", "--noconfirm", "--needed", "--config"])
+                .arg(&config)
                 .current_dir(&dir)
                 .status()
                 .context("could not run makepkg")?;
