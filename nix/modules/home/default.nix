@@ -86,6 +86,20 @@ in
       };
     };
 
+    xcode = {
+      version = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Xcode version `wsctl apply` installs with xcodes, without simulators, and selects (macOS).";
+        example = "27.1";
+      };
+      appleId = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "rbw entry holding the Apple ID that downloads Xcode; without it xcodes asks.";
+      };
+    };
+
     trackInputs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -129,6 +143,15 @@ in
 
     (lib.mkIf (cfg.checks != { }) {
       xdg.configFile."wsctl/checks.json".text = builtins.toJSON (lib.mapAttrs (_: check: check.command) cfg.checks);
+    })
+
+    (lib.mkIf (pkgs.stdenv.isDarwin && cfg.xcode.version != null) {
+      xdg.configFile."wsctl/xcode.json".text = builtins.toJSON {
+        inherit (cfg.xcode) version appleId;
+        xcodes = lib.getExe pkgs.xcodes;
+      };
+      services.wsctl.checks.xcode.command =
+        "${lib.getExe pkgs.xcodes} installed | grep -F '(Selected)' | grep -q '^${cfg.xcode.version} '";
     })
 
     (lib.mkIf (pkgs.stdenv.isDarwin && (cfg.defaultApps.types != { } || cfg.defaultApps.replace != { })) {
