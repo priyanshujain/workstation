@@ -141,7 +141,8 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
     let attr = target.attr();
     if dry_run {
         step(&format!("darwin-rebuild build --flake {attr}"));
-        return run("darwin-rebuild", &["build", "--flake", &attr]);
+        run("darwin-rebuild", &["build", "--flake", &attr])?;
+        return super::xcode::ensure(true);
     }
     step(&format!("darwin-rebuild switch --flake {attr}"));
     with_sudo_kept_alive(|| {
@@ -157,7 +158,8 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
                 &system,
             ],
         )?;
-        run("sudo", &["-H", &format!("{system}/activate")])
+        run("sudo", &["-H", &format!("{system}/activate")])?;
+        super::xcode::ensure(false)
     })
 }
 

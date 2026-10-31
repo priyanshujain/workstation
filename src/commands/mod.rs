@@ -16,3 +16,5 @@ pub mod self_cmd;
 pub mod stale_daemons;
 pub mod upgrade;
 pub mod why;
+#[cfg(target_os = "macos")]
+pub mod xcode;
