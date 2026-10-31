@@ -148,10 +148,10 @@ in
     (lib.mkIf (pkgs.stdenv.isDarwin && cfg.xcode.version != null) {
       xdg.configFile."wsctl/xcode.json".text = builtins.toJSON {
         inherit (cfg.xcode) version appleId;
-        xcodes = lib.getExe pkgs.xcodes;
+        xcodes = lib.getExe' pkgs.xcodes "xcodes";
       };
       services.wsctl.checks.xcode.command =
-        "${lib.getExe pkgs.xcodes} installed | grep -F '(Selected)' | grep -q '^${cfg.xcode.version} '";
+        "${lib.getExe' pkgs.xcodes "xcodes"} installed | grep -F '(Selected)' | grep -q '^${cfg.xcode.version} '";
     })
 
     (lib.mkIf (pkgs.stdenv.isDarwin && (cfg.defaultApps.types != { } || cfg.defaultApps.replace != { })) {
