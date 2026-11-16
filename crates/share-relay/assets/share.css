@@ -14,3 +14,11 @@ main { flex: 1; overflow: auto; padding: 12px; }
 #terminal { display: inline-block; }
 #ended { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.7); font-size: 18px; }
 #ended[hidden] { display: none; }
+body.login { align-items: center; justify-content: center; }
+body.login form { display: flex; flex-direction: column; gap: 12px; width: 320px; padding: 24px; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }
+body.login h1 { margin: 0; font-size: 18px; }
+body.login label { display: flex; flex-direction: column; gap: 4px; color: #999; }
+body.login input { padding: 8px; background: #111; color: #ddd; border: 1px solid #444; border-radius: 4px; font: inherit; }
+body.login button, #logout button { padding: 8px; background: #2a5db0; color: #fff; border: 0; border-radius: 4px; font: inherit; cursor: pointer; }
+#logout button { padding: 2px 10px; background: #333; }
+.error { margin: 0; color: #f08080; min-height: 1em; }
