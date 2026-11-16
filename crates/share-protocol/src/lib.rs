@@ -93,6 +93,7 @@ pub enum RelayMessage {
 pub enum ViewerMessage {
     Hello { share: Share, email: String },
     Screen { vt: String },
+    Reconnecting,
     Resize { cols: u16, rows: u16 },
     Theme { theme: Theme },
     Status { status: Option<ProgramStatus> },
