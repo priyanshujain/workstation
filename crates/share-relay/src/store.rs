@@ -21,6 +21,20 @@ CREATE TABLE IF NOT EXISTS shares (
     ended_at INTEGER,
     end_reason TEXT
 );
+CREATE TABLE IF NOT EXISTS guest_credentials (
+    share_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (share_id, email)
+);
+CREATE TABLE IF NOT EXISTS viewer_sessions (
+    token_hash TEXT PRIMARY KEY,
+    share_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS viewers (
     id INTEGER PRIMARY KEY,
     share_id TEXT NOT NULL,
@@ -102,6 +116,65 @@ impl Store {
             shares.push((row.get(0)?, share_from(&row)?));
         }
         Ok(shares)
+    }
+
+    pub async fn add_credential(&self, share_id: &str, email: &str, password_hash: &str) {
+        self.execute(
+            "INSERT INTO guest_credentials (share_id, email, password_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![share_id, email, password_hash, unix_millis()],
+        )
+        .await;
+    }
+
+    pub async fn credential_hash(&self, share_id: &str, email: &str) -> Option<String> {
+        self.text(
+            "SELECT password_hash FROM guest_credentials WHERE share_id = ?1 AND email = ?2",
+            params![share_id, email],
+        )
+        .await
+    }
+
+    pub async fn add_session(
+        &self,
+        token_hash: &str,
+        share_id: &str,
+        email: &str,
+        expires_at_unix: u64,
+    ) {
+        let expires_at = i64::try_from(expires_at_unix.saturating_mul(1000)).unwrap_or(i64::MAX);
+        self.execute(
+            "INSERT INTO viewer_sessions (token_hash, share_id, email, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![token_hash, share_id, email, unix_millis(), expires_at],
+        )
+        .await;
+    }
+
+    pub async fn session_email(&self, token_hash: &str, share_id: &str) -> Option<String> {
+        self.text(
+            "SELECT email FROM viewer_sessions WHERE token_hash = ?1 AND share_id = ?2 AND expires_at > ?3",
+            params![token_hash, share_id, unix_millis()],
+        )
+        .await
+    }
+
+    pub async fn delete_session(&self, token_hash: &str) {
+        self.execute(
+            "DELETE FROM viewer_sessions WHERE token_hash = ?1",
+            params![token_hash],
+        )
+        .await;
+    }
+
+    async fn text(&self, sql: &str, values: impl libsql::params::IntoParams) -> Option<String> {
+        let connection = self.connection.lock().await;
+        let mut rows = match connection.query(sql, values).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "share database read failed");
+                return None;
+            }
+        };
+        rows.next().await.ok().flatten()?.get(0).ok()
     }
 
     pub async fn share_ended(&self, share_id: &str, reason: &str) {
