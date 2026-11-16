@@ -45,6 +45,13 @@ function showStatus(status) {
   badge.className = `pill ${state}`;
 }
 
+function showReconnecting(waiting) {
+  if (ended) return;
+  const banner = element("ended");
+  banner.textContent = "Reconnecting to the shared terminal";
+  banner.hidden = !waiting;
+}
+
 function showEnded(reason) {
   ended = true;
   terminal.options.disableStdin = true;
@@ -63,11 +70,12 @@ function tickExpiry() {
 
 function handle(message) {
   switch (message.type) {
-    case "hello": showHello(message.share, message.email); break;
+    case "hello": showReconnecting(false); showHello(message.share, message.email); break;
+    case "reconnecting": showReconnecting(true); break;
     case "screen": terminal.reset(); terminal.write(message.vt); break;
     case "resize": terminal.resize(message.cols, message.rows); break;
     case "theme": applyTheme(message.theme); break;
-    case "status": showStatus(message.status); break;
+    case "status": showReconnecting(false); showStatus(message.status); break;
     case "viewers": element("viewers").textContent = `watching: ${message.emails.join(", ")}`; break;
     case "ended": showEnded(message.reason); break;
   }
