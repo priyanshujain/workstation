@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use share_protocol::{ACCESS_JWT_HEADER, ViewerInput, ViewerMessage};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 use crate::assets;
-use crate::live::{LiveShare, Outbound};
+use crate::live::LiveShare;
 use crate::prompt::PromptBuffer;
+use crate::queue::{Outbound, Received, VIEWER_BACKLOG_BYTES, ViewerReceiver, viewer_queue};
 use crate::relay::Relay;
 
 pub fn router(relay: Arc<Relay>) -> Router {
@@ -97,7 +97,7 @@ async fn authenticate(relay: &Relay, headers: &HeaderMap) -> Option<String> {
 
 async fn session(relay: Arc<Relay>, live: Arc<LiveShare>, email: String, mut socket: WebSocket) {
     let viewer_id = relay.next_viewer_id();
-    let (tx, outbox) = mpsc::unbounded_channel();
+    let (tx, outbox) = viewer_queue(VIEWER_BACKLOG_BYTES);
     if !live.join(viewer_id, &email, tx) {
         return;
     }
@@ -114,15 +114,19 @@ async fn pump(
     viewer_id: u64,
     email: &str,
     socket: &mut WebSocket,
-    mut outbox: UnboundedReceiver<Outbound>,
+    mut outbox: ViewerReceiver,
 ) {
     let mut prompts = PromptBuffer::default();
     loop {
         tokio::select! {
             outbound = outbox.recv() => match outbound {
-                Some(Outbound::Message(message)) => send(socket, &message).await,
-                Some(Outbound::Bytes(bytes)) => { let _ = socket.send(Message::Binary(bytes.into())).await; }
-                Some(Outbound::Close) | None => return,
+                Received::Outbound(Outbound::Message(message)) => send(socket, &message).await,
+                Received::Outbound(Outbound::Bytes(bytes)) => { let _ = socket.send(Message::Binary(bytes.into())).await; }
+                Received::Lagged => {
+                    close(socket, LAGGED_REASON).await;
+                    return;
+                }
+                Received::Outbound(Outbound::Close) | Received::Closed => return,
             },
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => receive(relay, live, viewer_id, email, &mut prompts, &text).await,
@@ -158,4 +162,14 @@ async fn send(socket: &mut WebSocket, message: &ViewerMessage) {
     if let Ok(text) = serde_json::to_string(message) {
         let _ = socket.send(Message::Text(text.into())).await;
     }
+}
+
+const LAGGED_REASON: &str = "viewer fell behind; reload to catch up";
+
+async fn close(socket: &mut WebSocket, reason: &str) {
+    let frame = CloseFrame {
+        code: close_code::POLICY,
+        reason: reason.into(),
+    };
+    let _ = socket.send(Message::Close(Some(frame))).await;
 }

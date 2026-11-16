@@ -3,6 +3,7 @@ mod agent;
 mod assets;
 mod live;
 mod prompt;
+mod queue;
 mod relay;
 mod store;
 #[cfg(test)]

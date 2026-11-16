@@ -6,11 +6,7 @@ use share_protocol::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-pub enum Outbound {
-    Message(ViewerMessage),
-    Bytes(Vec<u8>),
-    Close,
-}
+use crate::queue::{Outbound, ViewerSender};
 
 pub struct LiveShare {
     pub id: String,
@@ -31,7 +27,7 @@ struct State {
 struct Viewer {
     email: String,
     ready: bool,
-    tx: UnboundedSender<Outbound>,
+    tx: ViewerSender,
 }
 
 impl LiveShare {
@@ -68,13 +64,13 @@ impl LiveShare {
         now_unix >= self.state().share.expires_at_unix
     }
 
-    pub fn join(&self, viewer_id: u64, email: &str, tx: UnboundedSender<Outbound>) -> bool {
+    pub fn join(&self, viewer_id: u64, email: &str, tx: ViewerSender) -> bool {
         let mut state = self.state();
         if state.ended {
             return false;
         }
         for message in state.greeting(email) {
-            let _ = tx.send(Outbound::Message(message));
+            tx.send(Outbound::Message(message));
         }
         state.viewers.insert(
             viewer_id,
@@ -86,7 +82,7 @@ impl LiveShare {
         );
         state.broadcast_viewers();
         if state.orphaned.is_some() {
-            let _ = state.viewers[&viewer_id]
+            state.viewers[&viewer_id]
                 .tx
                 .send(Outbound::Message(ViewerMessage::Reconnecting));
         }
@@ -124,7 +120,7 @@ impl LiveShare {
 
     pub fn bytes(&self, data: &[u8]) {
         for viewer in self.state().viewers.values().filter(|viewer| viewer.ready) {
-            let _ = viewer.tx.send(Outbound::Bytes(data.to_vec()));
+            viewer.tx.send(Outbound::Bytes(data.to_vec()));
         }
     }
 
@@ -158,7 +154,7 @@ impl LiveShare {
             reason: reason.to_string(),
         });
         for viewer in std::mem::take(&mut state.viewers).into_values() {
-            let _ = viewer.tx.send(Outbound::Close);
+            viewer.tx.send(Outbound::Close);
         }
     }
 
@@ -200,7 +196,7 @@ impl LiveShare {
             };
             let viewer = state.viewers.get_mut(&viewer_id).expect("listed viewer");
             viewer.ready = false;
-            let _ = viewer.tx.send(Outbound::Message(hello));
+            viewer.tx.send(Outbound::Message(hello));
             state.send_engine(RelayMessage::ViewerJoined { viewer_id, email });
         }
         true
@@ -245,7 +241,7 @@ impl State {
     fn screen(&mut self, viewer_id: u64, vt: String) {
         if let Some(viewer) = self.viewers.get_mut(&viewer_id) {
             viewer.ready = true;
-            let _ = viewer
+            viewer
                 .tx
                 .send(Outbound::Message(ViewerMessage::Screen { vt }));
         }
@@ -262,7 +258,7 @@ impl State {
 
     fn broadcast(&self, message: ViewerMessage) {
         for viewer in self.viewers.values() {
-            let _ = viewer.tx.send(Outbound::Message(message.clone()));
+            viewer.tx.send(Outbound::Message(message.clone()));
         }
     }
 }
