@@ -35,7 +35,9 @@
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           share-relay-image = pkgs.dockerTools.buildLayeredImage {
             name = "share-relay";
+            contents = [ pkgs.cacert ];
             config.Entrypoint = [ "${wsctl}/bin/wsctl" ];
+            config.Env = [ "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
           };
         });
 
