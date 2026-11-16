@@ -6,7 +6,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use share_protocol::{RelayMessage, Share, VIEWER_PATH_PREFIX};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::RelayConfig;
 use crate::access::{AccessVerifier, cloudflare_certs_url};
@@ -88,6 +88,16 @@ impl Relay {
                 relay.end(&live, "engine lost").await;
             }
         });
+    }
+
+    pub async fn restore(self: &Arc<Self>) -> anyhow::Result<()> {
+        for (id, share) in self.store.open_shares().await? {
+            let (engine, _) = mpsc::unbounded_channel();
+            let live = Arc::new(LiveShare::new(id.clone(), share, engine));
+            self.shares().insert(id, live.clone());
+            self.orphan(live);
+        }
+        Ok(())
     }
 
     pub fn resume(
