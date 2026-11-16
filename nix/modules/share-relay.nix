@@ -11,10 +11,9 @@ let
     "--agent-listen" cfg.agentListen
     "--public-url" cfg.publicUrl
     "--secret-file" "%d/secret"
-    "--access-team-domain" cfg.accessTeamDomain
-    "--access-audience" cfg.accessAudience
     "--db-url" cfg.databaseUrl
-  ] ++ lib.optionals (cfg.databaseTokenFile != null) [ "--db-token-file" "%d/database-token" ];
+  ] ++ lib.optionals (cfg.databaseTokenFile != null) [ "--db-token-file" "%d/database-token" ]
+    ++ lib.optionals (cfg.trustProxyHeader != null) [ "--trust-proxy-header" cfg.trustProxyHeader ];
 in
 {
   options.services.wsctl-share-relay = {
@@ -49,15 +48,11 @@ in
       description = "File with the secret engines send to register a share.";
     };
 
-    accessTeamDomain = lib.mkOption {
-      type = lib.types.str;
-      example = "example.cloudflareaccess.com";
-      description = "Cloudflare Access team domain that issues viewer tokens.";
-    };
-
-    accessAudience = lib.mkOption {
-      type = lib.types.str;
-      description = "Audience tag of the Cloudflare Access application.";
+    trustProxyHeader = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "CF-Connecting-IP";
+      description = "Header the proxy in front sets to the client address; login rate limits key on it. Null uses the peer address.";
     };
 
     databaseUrl = lib.mkOption {
