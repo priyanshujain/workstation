@@ -1,3 +1,5 @@
+mod socket;
+
 use share_protocol::Mode;
 
 pub struct Tab {
