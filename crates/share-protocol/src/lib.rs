@@ -64,6 +64,12 @@ pub enum RelayMessage {
         share_id: String,
         url: String,
     },
+    Resumed {
+        share_id: String,
+    },
+    ResumeRejected {
+        share_id: String,
+    },
     ViewerJoined {
         viewer_id: u64,
         email: String,
