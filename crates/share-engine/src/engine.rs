@@ -237,7 +237,9 @@ impl<'a> Engine<'a> {
                 self.notify_end(&reason);
                 Step::Finish(None)
             }
-            RelayMessage::Registered { .. } => Step::Continue,
+            RelayMessage::Registered { .. }
+            | RelayMessage::Resumed { .. }
+            | RelayMessage::ResumeRejected { .. } => Step::Continue,
         }
     }
 
