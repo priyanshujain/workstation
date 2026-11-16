@@ -19,16 +19,25 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages = forAll (pkgs: rec {
-        wsctl = pkgs.callPackage ./nix/package.nix {
-          src = self;
-          switcher =
-            if pkgs.stdenv.isDarwin
-            then nix-darwin.packages.${pkgs.stdenv.hostPlatform.system}.darwin-rebuild
-            else system-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
-        };
-        default = wsctl;
-      });
+      packages = forAll (pkgs:
+        let
+          wsctl = pkgs.callPackage ./nix/package.nix {
+            src = self;
+            switcher =
+              if pkgs.stdenv.isDarwin
+              then nix-darwin.packages.${pkgs.stdenv.hostPlatform.system}.darwin-rebuild
+              else system-manager.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
+        in
+        {
+          inherit wsctl;
+          default = wsctl;
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          share-relay-image = pkgs.dockerTools.buildLayeredImage {
+            name = "share-relay";
+            config.Entrypoint = [ "${wsctl}/bin/wsctl" ];
+          };
+        });
 
       systemModules.default = ./nix/modules/linux;
 
