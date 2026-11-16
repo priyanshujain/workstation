@@ -81,13 +81,26 @@ function handle(message) {
   }
 }
 
-const socket = new WebSocket(socketUrl());
-socket.binaryType = "arraybuffer";
-socket.onmessage = (event) => {
-  if (typeof event.data === "string") handle(JSON.parse(event.data));
-  else terminal.write(new Uint8Array(event.data));
-};
-socket.onclose = (event) => { if (!ended) showEnded(event.reason || "connection closed"); };
+let socket;
+let retryDelay = 1000;
+
+function connect() {
+  socket = new WebSocket(socketUrl());
+  socket.binaryType = "arraybuffer";
+  socket.onopen = () => { retryDelay = 1000; };
+  socket.onmessage = (event) => {
+    if (typeof event.data === "string") handle(JSON.parse(event.data));
+    else terminal.write(new Uint8Array(event.data));
+  };
+  socket.onclose = () => {
+    if (ended) return;
+    showReconnecting(true);
+    setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 15000);
+  };
+}
+
+connect();
 terminal.onData((data) => {
   if (!terminal.options.disableStdin && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "input", data }));
