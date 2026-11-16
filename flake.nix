@@ -34,6 +34,8 @@
 
       homeModules.default = import ./nix/modules/home self;
 
+      nixosModules.share-relay = import ./nix/modules/share-relay.nix self;
+
       systemConfigs.arch = system-manager.lib.makeSystemConfig {
         modules = [
           self.systemModules.default
