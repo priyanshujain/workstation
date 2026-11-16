@@ -15,6 +15,9 @@ pub enum Mode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Share {
+    pub session_id: String,
+    pub session_label: String,
+    pub block_id: String,
     pub label: String,
     pub host: String,
     pub mode: Mode,
@@ -56,11 +59,26 @@ pub enum AgentMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RelayMessage {
-    Registered { share_id: String, url: String },
-    ViewerJoined { viewer_id: u64, email: String },
-    ViewerLeft { viewer_id: u64, email: String },
-    Input { viewer_id: u64, email: String, data: String },
-    Stop { reason: String },
+    Registered {
+        share_id: String,
+        url: String,
+    },
+    ViewerJoined {
+        viewer_id: u64,
+        email: String,
+    },
+    ViewerLeft {
+        viewer_id: u64,
+        email: String,
+    },
+    Input {
+        viewer_id: u64,
+        email: String,
+        data: String,
+    },
+    Stop {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
