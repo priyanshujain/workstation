@@ -560,3 +560,58 @@ async fn rejects_resume_of_live_share() {
         RelayMessage::ResumeRejected { share_id: id }
     );
 }
+
+#[tokio::test]
+async fn closes_viewer_that_falls_behind() {
+    let running = start_relay().await;
+    let (mut engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut slow = joined_viewer(&running, &id).await;
+    let mut fast = joined_viewer(&running, &id).await;
+    next(&mut slow).await;
+    for _ in 0..2 {
+        let RelayMessage::ViewerJoined { viewer_id, .. } = next_json(&mut engine).await else {
+            panic!("no join")
+        };
+        send_json(
+            &mut engine,
+            &AgentMessage::Screen {
+                viewer_id,
+                vt: String::new(),
+            },
+        )
+        .await;
+    }
+    let chunk = vec![b'x'; 256 * 1024];
+    let total = 64 * chunk.len();
+    let reader = tokio::spawn(async move {
+        let mut received = 0;
+        while received < total {
+            if let Message::Binary(bytes) = next(&mut fast).await {
+                received += bytes.len();
+            }
+        }
+        received
+    });
+    for _ in 0..64 {
+        engine.send(Message::binary(chunk.clone())).await.unwrap();
+    }
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(20), reader)
+            .await
+            .unwrap()
+            .unwrap(),
+        total
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let reason = loop {
+        match tokio::time::timeout(Duration::from_secs(10), slow.next())
+            .await
+            .unwrap()
+        {
+            Some(Ok(Message::Close(Some(frame)))) => break frame.reason.to_string(),
+            Some(Ok(_)) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(reason, "viewer fell behind; reload to catch up");
+}
