@@ -29,6 +29,15 @@ pub struct ShareRequest {
     pub secret: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShareEvent {
+    Ready { url: String, expires_at_unix: u64 },
+    ViewerJoined { email: String },
+    ViewerLeft { email: String },
+    Input { email: String },
+    Ended { reason: String },
+}
+
 pub fn list_tabs() -> Result<Vec<Tab>> {
     runtime()?.block_on(async {
         let (control, _events) = Control::connect(&socket::server_socket()?).await?;
@@ -40,7 +49,7 @@ pub fn list_tabs() -> Result<Vec<Tab>> {
     })
 }
 
-pub fn run(request: ShareRequest, on_url: impl FnOnce(&str)) -> Result<()> {
+pub fn run(request: ShareRequest, on_event: impl FnMut(ShareEvent)) -> Result<()> {
     runtime()?.block_on(async {
         let (control, events) = Control::connect(&socket::server_socket()?).await?;
         control
@@ -50,8 +59,8 @@ pub fn run(request: ShareRequest, on_url: impl FnOnce(&str)) -> Result<()> {
         let mut share = share_for(&request, &tab)?;
         (share.cols, share.rows) = size(&control, &request).await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(request.ttl_secs);
-        engine::Engine::new(request, control, events, share, deadline)?
-            .run(on_url)
+        engine::Engine::new(request, control, events, share, deadline, on_event)?
+            .run()
             .await
     })
 }

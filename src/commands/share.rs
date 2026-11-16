@@ -1,11 +1,13 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use share_engine::{ShareRequest, Tab};
+use share_engine::{ShareEvent, ShareRequest, Tab};
 use share_protocol::Mode;
 
 const MARKER: &str = "shared: ";
@@ -55,7 +57,9 @@ pub fn share(target: Target) -> Result<()> {
         relay_url: config.relay_url,
         secret,
     };
-    let result = share_engine::run(request, |url| announce(url, mode, &guests, ttl_secs));
+    let pane = Pane::start(mode, guests);
+    let result = share_engine::run(request, |event| pane.handle(event));
+    pane.stop();
     marker.restore();
     result
 }
@@ -164,12 +168,108 @@ fn parse_ttl(text: &str) -> Result<u64> {
     Ok(number * scale)
 }
 
-fn announce(url: &str, mode: Mode, guests: &[String], ttl_secs: u64) {
+#[derive(Default)]
+struct PaneState {
+    expires_at_unix: Option<u64>,
+    viewers: Vec<String>,
+    last_input: Option<String>,
+    ended: Option<String>,
+}
+
+struct Pane {
+    state: Arc<Mutex<PaneState>>,
+    mode: Mode,
+    guests: Vec<String>,
+}
+
+impl Pane {
+    fn start(mode: Mode, guests: Vec<String>) -> Self {
+        let state = Arc::new(Mutex::new(PaneState::default()));
+        let ticking = state.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let state = ticking.lock().unwrap();
+                if state.ended.is_some() {
+                    break;
+                }
+                redraw(&state);
+            }
+        });
+        Self {
+            state,
+            mode,
+            guests,
+        }
+    }
+
+    fn handle(&self, event: ShareEvent) {
+        let mut state = self.state.lock().unwrap();
+        match event {
+            ShareEvent::Ready {
+                url,
+                expires_at_unix,
+            } => {
+                announce(&url, self.mode, &self.guests);
+                state.expires_at_unix = Some(expires_at_unix);
+            }
+            ShareEvent::ViewerJoined { email } => state.viewers.push(email),
+            ShareEvent::ViewerLeft { email } => {
+                if let Some(index) = state.viewers.iter().position(|viewer| *viewer == email) {
+                    state.viewers.remove(index);
+                }
+            }
+            ShareEvent::Input { email } => state.last_input = Some(email),
+            ShareEvent::Ended { reason } => {
+                redraw(&state);
+                println!("\nShare ended: {reason}");
+                state.ended = Some(reason);
+                return;
+            }
+        }
+        redraw(&state);
+    }
+
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.ended.is_none() {
+            state.ended = Some(String::new());
+            println!();
+        }
+    }
+}
+
+fn redraw(state: &PaneState) {
+    let Some(expires_at_unix) = state.expires_at_unix else {
+        return;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let left = expires_at_unix.saturating_sub(now);
+    let viewers = match state.viewers.is_empty() {
+        true => "none".to_string(),
+        false => state.viewers.join(", "),
+    };
+    let input = match &state.last_input {
+        Some(email) => format!("  last input: {email}"),
+        None => String::new(),
+    };
+    print!(
+        "\r\x1b[KViewers: {viewers}  expires in {:02}:{:02}:{:02}{input}",
+        left / 3600,
+        left / 60 % 60,
+        left % 60
+    );
+    let _ = io::stdout().flush();
+}
+
+fn announce(url: &str, mode: Mode, guests: &[String]) {
     println!("\n{url}\n");
     println!("Mode:    {mode:?}");
     println!("Guests:  {}", guests.join(", "));
-    println!("Expires: in {}m", ttl_secs / 60);
-    println!("\nClose this pane or run Stop Sharing to end the share.");
+    println!("\nClose this pane or run Stop Sharing to end the share.\n");
     let _ = io::stdout().flush();
 }
 

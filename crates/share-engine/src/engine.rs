@@ -1,8 +1,8 @@
-use crate::ShareRequest;
 use crate::relay::{self, Relay};
 use crate::rex::{Control, DataConnection, Events};
 use crate::stream::{Piece, StreamParser};
 use crate::translate;
+use crate::{ShareEvent, ShareRequest};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const DATA_RETRY_DELAY: Duration = Duration::from_millis(500);
 
-pub struct Engine {
+pub struct Engine<'a> {
     pub request: ShareRequest,
     pub control: Control,
     pub events: Events,
@@ -27,6 +27,7 @@ pub struct Engine {
     status: Option<ProgramStatus>,
     interrupt: Signal,
     terminate: Signal,
+    on_event: Box<dyn FnMut(ShareEvent) + 'a>,
 }
 
 enum Step {
@@ -36,13 +37,14 @@ enum Step {
     Finish(Option<String>),
 }
 
-impl Engine {
+impl<'a> Engine<'a> {
     pub fn new(
         request: ShareRequest,
         control: Control,
         events: Events,
         share: Share,
         deadline: Instant,
+        on_event: impl FnMut(ShareEvent) + 'a,
     ) -> Result<Self> {
         Ok(Self {
             request,
@@ -55,13 +57,17 @@ impl Engine {
             status: None,
             interrupt: signal(SignalKind::interrupt())?,
             terminate: signal(SignalKind::terminate())?,
+            on_event: Box::new(on_event),
         })
     }
 
-    pub async fn run(mut self, on_url: impl FnOnce(&str)) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         self.status = self.read_status().await;
         let (mut relay, url) = self.connect_relay().await?;
-        on_url(&url);
+        (self.on_event)(ShareEvent::Ready {
+            url,
+            expires_at_unix: self.share.expires_at_unix,
+        });
         self.send_state(&mut relay).await;
         loop {
             let data = match self
@@ -85,7 +91,10 @@ impl Engine {
                 Step::DataLost => tokio::time::sleep(DATA_RETRY_DELAY).await,
                 Step::RelayLost => match self.reconnect_relay().await {
                     Some(fresh) => relay = fresh,
-                    None => return Ok(()),
+                    None => {
+                        self.notify_end("the share ended while the relay was away");
+                        return Ok(());
+                    }
                 },
                 Step::Finish(reason) => {
                     self.end(&mut relay, reason).await;
@@ -210,27 +219,33 @@ impl Engine {
 
     async fn on_relay(&mut self, relay: &mut Relay, message: RelayMessage) -> Step {
         match message {
-            RelayMessage::ViewerJoined { viewer_id, .. } => {
+            RelayMessage::ViewerJoined { viewer_id, email } => {
+                (self.on_event)(ShareEvent::ViewerJoined { email });
                 self.viewers.insert(viewer_id);
                 self.send_screen(relay, viewer_id).await
             }
-            RelayMessage::ViewerLeft { viewer_id, .. } => {
+            RelayMessage::ViewerLeft { viewer_id, email } => {
+                (self.on_event)(ShareEvent::ViewerLeft { email });
                 self.viewers.remove(&viewer_id);
                 Step::Continue
             }
-            RelayMessage::Input { data, .. } => {
-                self.write_input(&data).await;
+            RelayMessage::Input { data, email, .. } => {
+                self.write_input(email, &data).await;
                 Step::Continue
             }
-            RelayMessage::Stop { .. } => Step::Finish(None),
+            RelayMessage::Stop { reason } => {
+                self.notify_end(&reason);
+                Step::Finish(None)
+            }
             RelayMessage::Registered { .. } => Step::Continue,
         }
     }
 
-    async fn write_input(&self, data: &str) {
+    async fn write_input(&mut self, email: String, data: &str) {
         if self.request.mode != Mode::Input {
             return;
         }
+        (self.on_event)(ShareEvent::Input { email });
         let args = json!({"data": data});
         let _ = self.terminal("write", args).await;
     }
@@ -314,8 +329,15 @@ impl Engine {
         }
     }
 
-    async fn end(&self, relay: &mut Relay, reason: Option<String>) {
+    fn notify_end(&mut self, reason: &str) {
+        (self.on_event)(ShareEvent::Ended {
+            reason: reason.to_string(),
+        });
+    }
+
+    async fn end(&mut self, relay: &mut Relay, reason: Option<String>) {
         if let Some(reason) = reason {
+            self.notify_end(&reason);
             let _ = relay::send(relay, &AgentMessage::Ended { reason }).await;
         }
         let _ = relay.close(None).await;
