@@ -8,7 +8,7 @@ mod translate;
 use anyhow::{Context, Result, bail};
 use rex::Control;
 use serde_json::{Value, json};
-use share_protocol::{Mode, Share};
+use share_protocol::{GuestCredential, Mode, Share};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct Tab {
@@ -31,11 +31,23 @@ pub struct ShareRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShareEvent {
-    Ready { url: String, expires_at_unix: u64 },
-    ViewerJoined { email: String },
-    ViewerLeft { email: String },
-    Input { email: String },
-    Ended { reason: String },
+    Ready {
+        url: String,
+        expires_at_unix: u64,
+        credentials: Vec<GuestCredential>,
+    },
+    ViewerJoined {
+        email: String,
+    },
+    ViewerLeft {
+        email: String,
+    },
+    Input {
+        email: String,
+    },
+    Ended {
+        reason: String,
+    },
 }
 
 pub fn list_tabs() -> Result<Vec<Tab>> {

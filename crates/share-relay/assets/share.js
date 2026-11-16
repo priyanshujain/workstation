@@ -6,6 +6,7 @@ const PALETTE_KEYS = [
 const element = (id) => document.getElementById(id);
 const terminal = new Terminal({ cols: 80, rows: 24, disableStdin: true, scrollback: 5000 });
 terminal.open(element("terminal"));
+element("logout").action = `${location.pathname.replace(/\/$/, "")}/logout`;
 
 let expiresAt = 0;
 let ended = false;

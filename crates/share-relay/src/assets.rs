@@ -1,4 +1,5 @@
 pub const PAGE: &str = include_str!("../assets/share.html");
+pub const LOGIN: &str = include_str!("../assets/login.html");
 
 const FILES: &[(&str, &str, &str)] = &[
     (

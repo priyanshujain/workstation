@@ -1,6 +1,7 @@
-mod access;
 mod agent;
 mod assets;
+mod auth;
+mod limits;
 mod live;
 mod prompt;
 mod queue;
@@ -21,13 +22,9 @@ pub struct RelayConfig {
     pub agent_listen: String,
     pub public_url: String,
     pub secret: String,
-    pub access_team_domain: String,
-    pub access_audience: String,
-    pub access_certs_url: Option<String>,
     pub db_url: String,
     pub db_token_file: Option<std::path::PathBuf>,
-    #[cfg(debug_assertions)]
-    pub dev_email: Option<String>,
+    pub trust_proxy_header: Option<String>,
 }
 
 pub fn serve(config: RelayConfig) -> anyhow::Result<()> {
@@ -49,7 +46,10 @@ async fn serve_relay(
 ) -> anyhow::Result<()> {
     let relay = Arc::new(relay);
     relay.restore().await?;
-    let viewer_server = axum::serve(viewers, viewer::router(relay.clone()));
+    let viewer_server = axum::serve(
+        viewers,
+        viewer::router(relay.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     let agent_server = axum::serve(agents, agent::router(relay));
     tokio::try_join!(async { viewer_server.await }, async { agent_server.await })?;
     Ok(())

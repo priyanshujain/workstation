@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use share_engine::{ShareEvent, ShareRequest, Tab};
-use share_protocol::Mode;
+use share_protocol::{GuestCredential, Mode};
 
 const MARKER: &str = "shared: ";
 
@@ -52,12 +52,12 @@ pub fn share(target: Target) -> Result<()> {
         session_id,
         block_id,
         mode,
-        guests: guests.clone(),
+        guests,
         ttl_secs,
         relay_url: config.relay_url,
         secret,
     };
-    let pane = Pane::start(mode, guests);
+    let pane = Pane::start(mode);
     let result = share_engine::run(request, |event| pane.handle(event));
     pane.stop();
     marker.restore();
@@ -179,11 +179,10 @@ struct PaneState {
 struct Pane {
     state: Arc<Mutex<PaneState>>,
     mode: Mode,
-    guests: Vec<String>,
 }
 
 impl Pane {
-    fn start(mode: Mode, guests: Vec<String>) -> Self {
+    fn start(mode: Mode) -> Self {
         let state = Arc::new(Mutex::new(PaneState::default()));
         let ticking = state.clone();
         std::thread::spawn(move || {
@@ -196,11 +195,7 @@ impl Pane {
                 redraw(&state);
             }
         });
-        Self {
-            state,
-            mode,
-            guests,
-        }
+        Self { state, mode }
     }
 
     fn handle(&self, event: ShareEvent) {
@@ -209,8 +204,9 @@ impl Pane {
             ShareEvent::Ready {
                 url,
                 expires_at_unix,
+                credentials,
             } => {
-                announce(&url, self.mode, &self.guests);
+                announce(&url, self.mode, &credentials);
                 state.expires_at_unix = Some(expires_at_unix);
             }
             ShareEvent::ViewerJoined { email } => state.viewers.push(email),
@@ -265,10 +261,13 @@ fn redraw(state: &PaneState) {
     let _ = io::stdout().flush();
 }
 
-fn announce(url: &str, mode: Mode, guests: &[String]) {
+fn announce(url: &str, mode: Mode, credentials: &[GuestCredential]) {
     println!("\n{url}\n");
+    for credential in credentials {
+        println!("  {}  {}", credential.email, credential.password);
+    }
+    println!("\nSend each guest their password privately; it is shown only once.");
     println!("Mode:    {mode:?}");
-    println!("Guests:  {}", guests.join(", "));
     println!("\nClose this pane or run Stop Sharing to end the share.\n");
     let _ = io::stdout().flush();
 }

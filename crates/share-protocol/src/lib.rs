@@ -4,7 +4,6 @@ pub const AGENT_PATH: &str = "/agent";
 pub const VIEWER_PATH_PREFIX: &str = "/s/";
 pub const VIEWER_SOCKET_SUFFIX: &str = "/ws";
 pub const AGENT_SECRET_HEADER: &str = "x-wsctl-share-secret";
-pub const ACCESS_JWT_HEADER: &str = "cf-access-jwt-assertion";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,12 +56,19 @@ pub enum AgentMessage {
     Ended { reason: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestCredential {
+    pub email: String,
+    pub password: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RelayMessage {
     Registered {
         share_id: String,
         url: String,
+        credentials: Vec<GuestCredential>,
     },
     Resumed {
         share_id: String,

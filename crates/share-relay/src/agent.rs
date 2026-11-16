@@ -67,10 +67,11 @@ async fn attach(
 ) -> Option<Arc<LiveShare>> {
     match first {
         AgentMessage::Register { share } if share.expires_at_unix > unix_now() => {
-            let live = relay.register(share, engine).await.ok()?;
+            let (live, credentials) = relay.register(share, engine).await.ok()?;
             live.send_engine(RelayMessage::Registered {
                 share_id: live.id.clone(),
                 url: relay.viewer_url(&live.id),
+                credentials,
             });
             Some(live)
         }

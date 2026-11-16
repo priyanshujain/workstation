@@ -285,18 +285,6 @@ pub enum ShareCommand {
         #[arg(long)]
         secret_file: std::path::PathBuf,
 
-        /// Cloudflare Access team domain, such as team.cloudflareaccess.com
-        #[arg(long)]
-        access_team_domain: String,
-
-        /// Cloudflare Access application audience tag
-        #[arg(long)]
-        access_audience: String,
-
-        /// Where Access publishes its signing keys; derived from the team domain when left out
-        #[arg(long)]
-        access_certs_url: Option<String>,
-
         /// Turso database that records every guest prompt
         #[arg(long)]
         db_url: String,
@@ -304,6 +292,10 @@ pub enum ShareCommand {
         /// File holding the Turso auth token
         #[arg(long)]
         db_token_file: Option<std::path::PathBuf>,
+
+        /// Header a trusted proxy sets to the client address, such as CF-Connecting-IP
+        #[arg(long)]
+        trust_proxy_header: Option<String>,
     },
 }
 

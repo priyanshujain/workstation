@@ -164,24 +164,18 @@ fn main() -> anyhow::Result<()> {
                     agent_listen,
                     public_url,
                     secret_file,
-                    access_team_domain,
-                    access_audience,
-                    access_certs_url,
                     db_url,
                     db_token_file,
+                    trust_proxy_header,
                 } = *relay;
                 let config = share_relay::RelayConfig {
                     viewer_listen,
                     agent_listen,
                     public_url,
                     secret: String::new(),
-                    access_team_domain,
-                    access_audience,
-                    access_certs_url,
                     db_url,
                     db_token_file,
-                    #[cfg(debug_assertions)]
-                    dev_email: None,
+                    trust_proxy_header,
                 };
                 commands::share::relay(config, &secret_file)?;
             }

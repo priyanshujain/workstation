@@ -3,13 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use share_protocol::{RelayMessage, Share, VIEWER_PATH_PREFIX};
+use share_protocol::{GuestCredential, RelayMessage, Share, VIEWER_PATH_PREFIX};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::RelayConfig;
-use crate::access::{AccessVerifier, cloudflare_certs_url};
+use crate::auth::{generate_password, hash_password, random_token};
+use crate::limits::FailureLimiter;
 use crate::live::LiveShare;
 use crate::store::{Store, unix_now};
 
@@ -17,7 +16,7 @@ const ENGINE_GRACE: Duration = Duration::from_secs(60);
 
 pub struct Relay {
     pub config: RelayConfig,
-    pub verifier: AccessVerifier,
+    pub failures: FailureLimiter,
     pub store: Store,
     shares: Mutex<HashMap<String, Arc<LiveShare>>>,
     next_viewer: AtomicU64,
@@ -26,15 +25,6 @@ pub struct Relay {
 
 impl Relay {
     pub async fn new(config: RelayConfig) -> anyhow::Result<Self> {
-        let certs_url = config
-            .access_certs_url
-            .clone()
-            .unwrap_or_else(|| cloudflare_certs_url(&config.access_team_domain));
-        let verifier = AccessVerifier::new(
-            &config.access_team_domain,
-            &config.access_audience,
-            certs_url,
-        );
         let token = config
             .db_token_file
             .as_ref()
@@ -44,7 +34,7 @@ impl Relay {
             Store::open(&config.db_url, token.map(|token| token.trim().to_string())).await?;
         Ok(Self {
             config,
-            verifier,
+            failures: FailureLimiter::default(),
             store,
             shares: Mutex::default(),
             next_viewer: AtomicU64::new(1),
@@ -56,12 +46,34 @@ impl Relay {
         &self,
         share: Share,
         engine: UnboundedSender<RelayMessage>,
-    ) -> anyhow::Result<Arc<LiveShare>> {
-        let id = share_id()?;
+    ) -> anyhow::Result<(Arc<LiveShare>, Vec<GuestCredential>)> {
+        let id = random_token::<16>()?;
+        let mut share = share;
+        share.guests = guest_emails(&share.guests);
+        let credentials = self.issue_credentials(&id, &share.guests).await?;
         self.store.share_registered(&id, &share).await;
         let live = Arc::new(LiveShare::new(id.clone(), share, engine));
-        self.shares().insert(id.clone(), live.clone());
-        Ok(live)
+        self.shares().insert(id, live.clone());
+        Ok((live, credentials))
+    }
+
+    async fn issue_credentials(
+        &self,
+        id: &str,
+        guests: &[String],
+    ) -> anyhow::Result<Vec<GuestCredential>> {
+        let mut credentials = Vec::new();
+        for email in guests {
+            let password = generate_password()?;
+            let hashed = password.clone();
+            let hash = tokio::task::spawn_blocking(move || hash_password(&hashed)).await??;
+            self.store.add_credential(id, email, &hash).await;
+            credentials.push(GuestCredential {
+                email: email.clone(),
+                password,
+            });
+        }
+        Ok(credentials)
     }
 
     pub fn find(&self, id: &str) -> Option<Arc<LiveShare>> {
@@ -127,8 +139,13 @@ impl Relay {
     }
 }
 
-fn share_id() -> anyhow::Result<String> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).map_err(|error| anyhow::anyhow!("random share id: {error}"))?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
+fn guest_emails(guests: &[String]) -> Vec<String> {
+    let mut emails: Vec<String> = guests
+        .iter()
+        .map(|guest| guest.trim().to_lowercase())
+        .collect();
+    emails.sort();
+    emails.dedup();
+    emails.retain(|email| !email.is_empty());
+    emails
 }

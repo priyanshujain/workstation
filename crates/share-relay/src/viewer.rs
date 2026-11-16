@@ -1,22 +1,38 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Form, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use share_protocol::{ACCESS_JWT_HEADER, ViewerInput, ViewerMessage};
+use axum::routing::{get, post};
+use serde::Deserialize;
+use share_protocol::{VIEWER_PATH_PREFIX, ViewerInput, ViewerMessage};
 
 use crate::assets;
+use crate::auth::{random_token, token_hash, verify_password};
 use crate::live::LiveShare;
 use crate::prompt::PromptBuffer;
 use crate::queue::{Outbound, Received, VIEWER_BACKLOG_BYTES, ViewerReceiver, viewer_queue};
 use crate::relay::Relay;
+use crate::store::unix_now;
+
+const COOKIE_NAME: &str = "wsctl_share";
+const BAD_LOGIN: &str = "That email and password do not match this share.";
+const LIMITED_LOGIN: &str = "Too many failed attempts. Try again in 15 minutes.";
+
+#[derive(Deserialize)]
+struct Login {
+    email: String,
+    password: String,
+}
 
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/s/{id}", get(page))
+        .route("/s/{id}/login", post(login))
+        .route("/s/{id}/logout", post(logout))
         .route("/s/{id}/ws", get(connect))
         .route("/assets/{name}", get(asset))
         .with_state(relay)
@@ -27,24 +43,76 @@ async fn page(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    match authorize(&relay, &headers, &id).await {
-        Ok(_) => (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            assets::PAGE,
-        )
-            .into_response(),
-        Err(status) => status.into_response(),
+    let Some(live) = relay.find(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if signed_in(&relay, &headers, &live).await.is_some() {
+        return html(StatusCode::OK, assets::PAGE.to_string());
+    }
+    html(StatusCode::OK, login_page(&id, ""))
+}
+
+async fn login(
+    State(relay): State<Arc<Relay>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(form): Form<Login>,
+) -> Response {
+    let Some(live) = relay.find(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let email = form.email.trim().to_lowercase();
+    let account = format!("account:{id}:{email}");
+    let keys = [
+        account.clone(),
+        format!("ip:{}", client_ip(&relay, &headers, peer)),
+    ];
+    if relay.failures.blocked(&keys) {
+        return html(
+            StatusCode::TOO_MANY_REQUESTS,
+            login_page(&id, LIMITED_LOGIN),
+        );
+    }
+    let hash = relay.store.credential_hash(&id, &email).await;
+    let password = form.password;
+    let verified = tokio::task::spawn_blocking(move || verify_password(&password, hash.as_deref()))
+        .await
+        .unwrap_or(false);
+    if !verified || !live.admits(&email) {
+        relay.failures.record(&keys);
+        return html(StatusCode::UNAUTHORIZED, login_page(&id, BAD_LOGIN));
+    }
+    relay.failures.clear(&account);
+    match start_session(&relay, &live, &email).await {
+        Some(cookie) => redirect(&id, cookie),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
-async fn asset(
+async fn start_session(relay: &Relay, live: &LiveShare, email: &str) -> Option<String> {
+    let token = random_token::<32>().ok()?;
+    let expires_at = live.share().expires_at_unix;
+    relay
+        .store
+        .add_session(&token_hash(&token), &live.id, email, expires_at)
+        .await;
+    let max_age = expires_at.saturating_sub(unix_now());
+    Some(cookie(relay, &live.id, &token, max_age))
+}
+
+async fn logout(
     State(relay): State<Arc<Relay>>,
     headers: HeaderMap,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
 ) -> Response {
-    if authenticate(&relay, &headers).await.is_none() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Some(token) = session_token(&headers) {
+        relay.store.delete_session(&token_hash(&token)).await;
     }
+    redirect(&id, cookie(&relay, &id, "", 0))
+}
+
+async fn asset(Path(name): Path<String>) -> Response {
     match assets::find(&name) {
         Some((content_type, body)) => {
             ([(header::CONTENT_TYPE, content_type)], body).into_response()
@@ -59,40 +127,102 @@ async fn connect(
     Path(id): Path<String>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    match authorize(&relay, &headers, &id).await {
-        Ok((live, email)) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
-        Err(status) => status.into_response(),
+    if !origin_allowed(&relay, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(live) = relay.find(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match signed_in(&relay, &headers, &live).await {
+        Some(email) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
+        None => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-pub async fn authorize(
-    relay: &Relay,
-    headers: &HeaderMap,
-    id: &str,
-) -> Result<(Arc<LiveShare>, String), StatusCode> {
-    let email = authenticate(relay, headers)
-        .await
-        .ok_or(StatusCode::FORBIDDEN)?;
-    let live = relay.find(id).ok_or(StatusCode::NOT_FOUND)?;
-    if !live.admits(&email) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    Ok((live, email))
+async fn signed_in(relay: &Relay, headers: &HeaderMap, live: &LiveShare) -> Option<String> {
+    let token = session_token(headers)?;
+    let email = relay
+        .store
+        .session_email(&token_hash(&token), &live.id)
+        .await?;
+    live.admits(&email).then_some(email)
 }
 
-async fn authenticate(relay: &Relay, headers: &HeaderMap) -> Option<String> {
-    #[cfg(debug_assertions)]
-    if let Some(email) = &relay.config.dev_email {
-        return Some(email.clone());
-    }
-    let token = headers.get(ACCESS_JWT_HEADER)?.to_str().ok()?;
-    match relay.verifier.verify(token).await {
-        Ok(email) => Some(email),
-        Err(error) => {
-            tracing::warn!(%error, "rejected access token");
-            None
-        }
-    }
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|pair| pair.trim().strip_prefix(COOKIE_NAME)?.strip_prefix('='))
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+fn cookie(relay: &Relay, id: &str, token: &str, max_age: u64) -> String {
+    let secure = if relay.config.public_url.starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!(
+        "{COOKIE_NAME}={token}; Path={VIEWER_PATH_PREFIX}{id}; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"
+    )
+}
+
+fn redirect(id: &str, cookie: String) -> Response {
+    let location = format!("{VIEWER_PATH_PREFIX}{id}");
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, location), (header::SET_COOKIE, cookie)],
+    )
+        .into_response()
+}
+
+fn html(status: StatusCode, body: String) -> Response {
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+fn login_page(id: &str, error: &str) -> String {
+    assets::LOGIN
+        .replace("__ACTION__", &format!("{VIEWER_PATH_PREFIX}{id}/login"))
+        .replace("__ERROR__", error)
+}
+
+fn origin_allowed(relay: &Relay, headers: &HeaderMap) -> bool {
+    let expected = public_origin(&relay.config.public_url);
+    headers
+        .get(header::ORIGIN)
+        .and_then(|origin| origin.to_str().ok())
+        .is_some_and(|origin| origin.eq_ignore_ascii_case(expected))
+}
+
+fn public_origin(public_url: &str) -> &str {
+    let after_scheme = public_url.find("://").map_or(0, |index| index + 3);
+    let end = public_url[after_scheme..]
+        .find('/')
+        .map_or(public_url.len(), |index| after_scheme + index);
+    &public_url[..end]
+}
+
+fn client_ip(relay: &Relay, headers: &HeaderMap, peer: SocketAddr) -> String {
+    relay
+        .config
+        .trust_proxy_header
+        .as_deref()
+        .and_then(|name| headers.get(name))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|| peer.ip().to_string())
 }
 
 async fn session(relay: Arc<Relay>, live: Arc<LiveShare>, email: String, mut socket: WebSocket) {
@@ -172,4 +302,21 @@ async fn close(socket: &mut WebSocket, reason: &str) {
         reason: reason.into(),
     };
     let _ = socket.send(Message::Close(Some(frame))).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::public_origin;
+
+    #[test]
+    fn origin_drops_path() {
+        assert_eq!(
+            public_origin("https://share.example.com/"),
+            "https://share.example.com"
+        );
+        assert_eq!(
+            public_origin("http://127.0.0.1:7701"),
+            "http://127.0.0.1:7701"
+        );
+    }
 }

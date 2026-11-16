@@ -1,85 +1,25 @@
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::Json;
-use axum::routing::get;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::{SinkExt, StreamExt};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use rsa::pkcs1::EncodeRsaPrivateKey;
-use rsa::traits::PublicKeyParts;
-use serde_json::{Value, json};
+use serde_json::json;
 use share_protocol::{
-    ACCESS_JWT_HEADER, AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, Mode, RelayMessage, Share,
-    ViewerMessage,
+    AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, Mode, RelayMessage, Share, ViewerMessage,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{self, Message};
 
-use crate::access::AccessVerifier;
 use crate::live::LiveShare;
 use crate::store::unix_now;
 
-const TEAM: &str = "team.example.com";
-const AUDIENCE: &str = "audience-tag";
 const SECRET: &str = "engine-secret";
-const GUEST: &str = "Guest@Example.com";
-
-struct SigningKey {
-    encoding: EncodingKey,
-    n: String,
-    e: String,
-}
-
-fn signing_key() -> &'static SigningKey {
-    static KEY: OnceLock<SigningKey> = OnceLock::new();
-    KEY.get_or_init(|| {
-        let private = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let pem = private.to_pkcs1_pem(Default::default()).unwrap();
-        SigningKey {
-            encoding: EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
-            n: URL_SAFE_NO_PAD.encode(private.n().to_bytes_be()),
-            e: URL_SAFE_NO_PAD.encode(private.e().to_bytes_be()),
-        }
-    })
-}
-
-fn token_with(kid: &str, claims: Value) -> String {
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(kid.to_string());
-    encode(&header, &claims, &signing_key().encoding).unwrap()
-}
-
-fn token(email: &str) -> String {
-    token_with(
-        "k1",
-        json!({ "email": email, "aud": [AUDIENCE], "iss": format!("https://{TEAM}"), "exp": unix_now() + 300 }),
-    )
-}
-
-async fn certs_server() -> String {
-    let key = signing_key();
-    let certs =
-        json!({ "keys": [{ "kid": "k1", "kty": "RSA", "alg": "RS256", "n": key.n, "e": key.e }] });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!(
-        "http://{}/cdn-cgi/access/certs",
-        listener.local_addr().unwrap()
-    );
-    let app = axum::Router::new().route(
-        "/cdn-cgi/access/certs",
-        get(move || async move { Json(certs) }),
-    );
-    tokio::spawn(async move { axum::serve(listener, app).await });
-    url
-}
-
-async fn verifier() -> AccessVerifier {
-    AccessVerifier::new(TEAM, AUDIENCE, certs_server().await)
-}
+const GUEST: &str = "guest@example.com";
+const ORIGIN: &str = "https://share.example.com";
 
 fn share(mode: Mode, expires_at_unix: u64) -> Share {
     Share {
@@ -89,43 +29,10 @@ fn share(mode: Mode, expires_at_unix: u64) -> Share {
         label: "claude".into(),
         host: "mac".into(),
         mode,
-        guests: vec![GUEST.to_lowercase()],
+        guests: vec!["Guest@Example.com".into()],
         expires_at_unix,
         cols: 100,
         rows: 30,
-    }
-}
-
-#[tokio::test]
-async fn accepts_valid_access_token() {
-    assert_eq!(verifier().await.verify(&token(GUEST)).await.unwrap(), GUEST);
-}
-
-#[tokio::test]
-async fn rejects_bad_access_tokens() {
-    let verifier = verifier().await;
-    let issuer = format!("https://{TEAM}");
-    let bad = [
-        token_with(
-            "k1",
-            json!({ "email": GUEST, "aud": ["other"], "iss": issuer, "exp": unix_now() + 300 }),
-        ),
-        token_with(
-            "k1",
-            json!({ "email": GUEST, "aud": [AUDIENCE], "iss": "https://evil.example.com", "exp": unix_now() + 300 }),
-        ),
-        token_with(
-            "k1",
-            json!({ "email": GUEST, "aud": [AUDIENCE], "iss": issuer, "exp": unix_now() - 3600 }),
-        ),
-        token_with(
-            "k2",
-            json!({ "email": GUEST, "aud": [AUDIENCE], "iss": issuer, "exp": unix_now() + 300 }),
-        ),
-        "not.a.token".to_string(),
-    ];
-    for token in bad {
-        assert!(verifier.verify(&token).await.is_err(), "accepted {token}");
     }
 }
 
@@ -134,7 +41,7 @@ fn admits_only_listed_guests() {
     let (engine, _) = mpsc::unbounded_channel();
     let live = LiveShare::new("id".into(), share(Mode::View, unix_now() + 60), engine);
     assert!(live.admits("guest@example.com"));
-    assert!(live.admits("GUEST@EXAMPLE.COM"));
+    assert!(live.admits("Guest@Example.com"));
     assert!(!live.admits("stranger@example.com"));
 }
 
@@ -171,13 +78,22 @@ struct Running {
     agent: String,
     db: Arc<tempfile::TempDir>,
     server: tokio::task::JoinHandle<anyhow::Result<()>>,
+    passwords: Arc<Mutex<HashMap<String, String>>>,
 }
 
 async fn start_relay() -> Running {
-    start_relay_on(Arc::new(tempfile::tempdir().unwrap())).await
+    start_relay_on(Arc::new(tempfile::tempdir().unwrap()), Arc::default()).await
 }
 
-async fn start_relay_on(db: Arc<tempfile::TempDir>) -> Running {
+async fn restart(running: &Running) -> Running {
+    running.server.abort();
+    start_relay_on(running.db.clone(), running.passwords.clone()).await
+}
+
+async fn start_relay_on(
+    db: Arc<tempfile::TempDir>,
+    passwords: Arc<Mutex<HashMap<String, String>>>,
+) -> Running {
     let viewers = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agents = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let viewer = viewers.local_addr().unwrap().to_string();
@@ -187,22 +103,19 @@ async fn start_relay_on(db: Arc<tempfile::TempDir>) -> Running {
         agent_listen: agent.clone(),
         public_url: "https://share.example.com/".into(),
         secret: SECRET.into(),
-        access_team_domain: TEAM.into(),
-        access_audience: AUDIENCE.into(),
-        access_certs_url: Some(certs_server().await),
         db_url: format!("file:{}", db.path().join("share.db").display()),
         db_token_file: None,
-        #[cfg(debug_assertions)]
-        dev_email: None,
+        trust_proxy_header: None,
     };
     let mut relay = crate::relay::Relay::new(config).await.unwrap();
-    relay.engine_grace = Duration::from_secs(2);
+    relay.engine_grace = Duration::from_secs(5);
     let server = tokio::spawn(crate::serve_relay(relay, viewers, agents));
     Running {
         viewer,
         agent,
         db,
         server,
+        passwords,
     }
 }
 
@@ -210,11 +123,17 @@ type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn connect(url: String, header: &str, value: &str) -> Result<Socket, tungstenite::Error> {
+    connect_with(url, &[(header, value)]).await
+}
+
+async fn connect_with(url: String, headers: &[(&str, &str)]) -> Result<Socket, tungstenite::Error> {
     let mut request = url.into_client_request().unwrap();
-    request.headers_mut().insert(
-        tungstenite::http::HeaderName::from_bytes(header.as_bytes()).unwrap(),
-        value.parse().unwrap(),
-    );
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            tungstenite::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+    }
     tokio_tungstenite::connect_async(request)
         .await
         .map(|(socket, _)| socket)
@@ -228,7 +147,7 @@ async fn send_json(socket: &mut Socket, value: &impl serde::Serialize) {
 }
 
 async fn next(socket: &mut Socket) -> Message {
-    tokio::time::timeout(Duration::from_secs(5), socket.next())
+    tokio::time::timeout(Duration::from_secs(10), socket.next())
         .await
         .unwrap()
         .unwrap()
@@ -248,22 +167,99 @@ async fn register(running: &Running, share: Share) -> (Socket, String) {
     .await
     .unwrap();
     send_json(&mut engine, &AgentMessage::Register { share }).await;
-    let RelayMessage::Registered { share_id, url } = next_json(&mut engine).await else {
+    let RelayMessage::Registered {
+        share_id,
+        url,
+        credentials,
+    } = next_json(&mut engine).await
+    else {
         panic!("not registered")
     };
     assert_eq!(url, format!("https://share.example.com/s/{share_id}"));
     assert!(URL_SAFE_NO_PAD.decode(&share_id).unwrap().len() >= 16);
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(credentials[0].email, GUEST);
+    assert!(credentials[0].password.len() >= 20);
+    running
+        .passwords
+        .lock()
+        .unwrap()
+        .insert(share_id.clone(), credentials[0].password.clone());
     (engine, share_id)
 }
 
-async fn status(running: &Running, path: &str, email: &str) -> u16 {
-    let response = reqwest::Client::new()
-        .get(format!("http://{}{path}", running.viewer))
-        .header(ACCESS_JWT_HEADER, token(email))
+fn password(running: &Running, id: &str) -> String {
+    running.passwords.lock().unwrap()[id].clone()
+}
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+async fn login(running: &Running, id: &str, email: &str, password: &str) -> (u16, Option<String>) {
+    let body = format!("email={}&password={password}", email.replace('@', "%40"));
+    let response = client()
+        .post(format!("http://{}/s/{id}/login", running.viewer))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await
         .unwrap();
-    response.status().as_u16()
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .map(|value| value.to_str().unwrap().to_string());
+    (response.status().as_u16(), cookie)
+}
+
+async fn sign_in(running: &Running, id: &str) -> String {
+    let (status, cookie) = login(running, id, GUEST, &password(running, id)).await;
+    assert_eq!(status, 303);
+    cookie_pair(&cookie.unwrap())
+}
+
+fn cookie_pair(set_cookie: &str) -> String {
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+async fn page(running: &Running, path: &str, cookie: Option<&str>) -> (u16, String) {
+    let mut request = client().get(format!("http://{}{path}", running.viewer));
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    let response = request.send().await.unwrap();
+    (response.status().as_u16(), response.text().await.unwrap())
+}
+
+async fn status(running: &Running, path: &str) -> u16 {
+    page(running, path, None).await.0
+}
+
+async fn viewer_socket(running: &Running, id: &str) -> Socket {
+    let cookie = sign_in(running, id).await;
+    viewer_socket_with(running, id, &cookie).await.unwrap()
+}
+
+async fn viewer_socket_with(
+    running: &Running,
+    id: &str,
+    cookie: &str,
+) -> Result<Socket, tungstenite::Error> {
+    connect_with(
+        format!("ws://{}/s/{id}/ws", running.viewer),
+        &[("cookie", cookie), ("origin", ORIGIN)],
+    )
+    .await
+}
+
+fn refused_status(result: Result<Socket, tungstenite::Error>) -> u16 {
+    match result {
+        Err(tungstenite::Error::Http(response)) => response.status().as_u16(),
+        other => panic!("expected refusal, got {:?}", other.map(|_| ())),
+    }
 }
 
 async fn prompts(running: &Running) -> Vec<(String, String)> {
@@ -296,36 +292,13 @@ async fn rejects_engine_without_secret() {
 }
 
 #[tokio::test]
-async fn gates_viewer_requests() {
-    let running = start_relay().await;
-    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 200);
-    assert_eq!(status(&running, "/assets/xterm.js", GUEST).await, 200);
-    assert_eq!(
-        status(&running, &format!("/s/{id}"), "stranger@example.com").await,
-        403
-    );
-    assert_eq!(status(&running, "/s/unknown", GUEST).await, 404);
-    let anonymous = reqwest::get(format!("http://{}/s/{id}", running.viewer))
-        .await
-        .unwrap();
-    assert_eq!(anonymous.status().as_u16(), 403);
-}
-
-#[tokio::test]
 async fn relays_screen_bytes_and_input() {
     let running = start_relay().await;
     let (mut engine, id) = register(&running, share(Mode::Input, unix_now() + 60)).await;
     send_json(&mut engine, &AgentMessage::Status { status: None }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut viewer = connect(
-        format!("ws://{}/s/{id}/ws", running.viewer),
-        ACCESS_JWT_HEADER,
-        &token(GUEST),
-    )
-    .await
-    .unwrap();
+    let mut viewer = viewer_socket(&running, &id).await;
     assert!(matches!(
         next_json(&mut viewer).await,
         ViewerMessage::Hello { .. }
@@ -405,7 +378,7 @@ async fn relays_screen_bytes_and_input() {
             reason: "stopped".into()
         }
     );
-    assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 404);
+    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
 }
 
 #[tokio::test]
@@ -428,7 +401,7 @@ async fn stops_engine_at_expiry() {
             reason: "expired".into()
         }
     );
-    assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 404);
+    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
 }
 
 async fn engine_socket(running: &Running) -> Socket {
@@ -442,13 +415,7 @@ async fn engine_socket(running: &Running) -> Socket {
 }
 
 async fn joined_viewer(running: &Running, id: &str) -> Socket {
-    let mut viewer = connect(
-        format!("ws://{}/s/{id}/ws", running.viewer),
-        ACCESS_JWT_HEADER,
-        &token(GUEST),
-    )
-    .await
-    .unwrap();
+    let mut viewer = viewer_socket(running, id).await;
     for _ in 0..3 {
         next(&mut viewer).await;
     }
@@ -532,8 +499,8 @@ async fn resumes_share_after_engine_drop() {
         ViewerMessage::Screen { vt: "again".into() }
     );
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 200);
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(status(&running, &format!("/s/{id}")).await, 200);
     assert!(prompts(&running).await.is_empty());
 }
 
@@ -647,26 +614,28 @@ async fn closes_viewer_that_falls_behind() {
 async fn restores_open_shares_after_restart() {
     let first = start_relay().await;
     let (_old_engine, id) = register(&first, share(Mode::Input, unix_now() + 60)).await;
-    first.server.abort();
-
-    let second = start_relay_on(first.db.clone()).await;
-    let mut viewer = connect(
-        format!("ws://{}/s/{id}/ws", second.viewer),
-        ACCESS_JWT_HEADER,
-        &token(GUEST),
-    )
-    .await
-    .unwrap();
+    let cookie = sign_in(&first, &id).await;
+    let second = restart(&first).await;
+    let mut viewer = viewer_socket_with(&second, &id, &cookie).await.unwrap();
     let ViewerMessage::Hello {
         share: restored, ..
     } = next_json(&mut viewer).await
     else {
         panic!("no hello")
     };
-    assert_eq!(restored, share(Mode::Input, restored.expires_at_unix));
+    let mut expected = share(Mode::Input, restored.expires_at_unix);
+    expected.guests = vec![GUEST.into()];
+    assert_eq!(restored, expected);
     assert_eq!(
-        status(&second, &format!("/s/{id}"), "stranger@example.com").await,
-        403
+        login(
+            &second,
+            &id,
+            "stranger@example.com",
+            &password(&second, &id)
+        )
+        .await
+        .0,
+        401
     );
 
     let mut engine = engine_socket(&second).await;
@@ -693,13 +662,177 @@ async fn restores_open_shares_after_restart() {
 async fn ends_restored_share_without_engine() {
     let first = start_relay().await;
     let (_old_engine, _) = register(&first, share(Mode::View, unix_now() + 60)).await;
-    first.server.abort();
-    let second = start_relay_on(first.db.clone()).await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let second = restart(&first).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
     let reasons = end_reasons(&second).await;
     assert!(
         reasons
             .iter()
             .any(|reason| reason.as_deref() == Some("engine lost"))
     );
+}
+
+async fn credential_hashes(running: &Running) -> Vec<String> {
+    let database = libsql::Builder::new_local(running.db.path().join("share.db"))
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    let mut rows = connection
+        .query("SELECT password_hash FROM guest_credentials", ())
+        .await
+        .unwrap();
+    let mut hashes = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        hashes.push(row.get(0).unwrap());
+    }
+    hashes
+}
+
+#[tokio::test]
+async fn login_sets_a_session_cookie_scoped_to_the_share() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let (status, body) = page(&running, &format!("/s/{id}"), None).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("Sign in"));
+
+    let (status, set_cookie) =
+        login(&running, &id, "Guest@Example.COM", &password(&running, &id)).await;
+    assert_eq!(status, 303);
+    let set_cookie = set_cookie.unwrap();
+    for attribute in [
+        &format!("Path=/s/{id}"),
+        "HttpOnly",
+        "SameSite=Strict",
+        "Secure",
+        "Max-Age=",
+    ] {
+        assert!(
+            set_cookie.contains(attribute),
+            "{set_cookie} lacks {attribute}"
+        );
+    }
+    let cookie = cookie_pair(&set_cookie);
+    let (status, body) = page(&running, &format!("/s/{id}"), Some(&cookie)).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("id=\"terminal\""));
+
+    let (_other_engine, other) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let (_, body) = page(&running, &format!("/s/{other}"), Some(&cookie)).await;
+    assert!(body.contains("Sign in"));
+    assert_eq!(
+        refused_status(viewer_socket_with(&running, &other, &cookie).await),
+        401
+    );
+}
+
+#[tokio::test]
+async fn rejects_wrong_password_and_unknown_email() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let (status, cookie) = login(&running, &id, GUEST, "wrong-password").await;
+    assert_eq!((status, cookie), (401, None));
+    let (status, cookie) = login(
+        &running,
+        &id,
+        "stranger@example.com",
+        &password(&running, &id),
+    )
+    .await;
+    assert_eq!((status, cookie), (401, None));
+    assert_eq!(login(&running, "unknown", GUEST, "x").await.0, 404);
+}
+
+#[tokio::test]
+async fn rate_limits_failed_logins() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    for _ in 0..crate::limits::MAX_FAILURES {
+        assert_eq!(login(&running, &id, GUEST, "wrong-password").await.0, 401);
+    }
+    assert_eq!(
+        login(&running, &id, GUEST, &password(&running, &id))
+            .await
+            .0,
+        429
+    );
+}
+
+#[tokio::test]
+async fn socket_needs_session_cookie_and_matching_origin() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let url = format!("ws://{}/s/{id}/ws", running.viewer);
+    assert_eq!(
+        refused_status(connect_with(url.clone(), &[("origin", ORIGIN)]).await),
+        401
+    );
+    let cookie = sign_in(&running, &id).await;
+    let wrong_origin = connect_with(
+        url.clone(),
+        &[("cookie", &cookie), ("origin", "https://evil.example.com")],
+    )
+    .await;
+    assert_eq!(refused_status(wrong_origin), 403);
+    assert_eq!(
+        refused_status(connect_with(url, &[("cookie", &cookie)]).await),
+        403
+    );
+    assert!(viewer_socket_with(&running, &id, &cookie).await.is_ok());
+}
+
+#[tokio::test]
+async fn logout_ends_the_session() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let cookie = sign_in(&running, &id).await;
+    let response = client()
+        .post(format!("http://{}/s/{id}/logout", running.viewer))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    assert_eq!(
+        refused_status(viewer_socket_with(&running, &id, &cookie).await),
+        401
+    );
+}
+
+#[tokio::test]
+async fn session_and_credentials_survive_restart() {
+    let first = start_relay().await;
+    let (_old_engine, id) = register(&first, share(Mode::View, unix_now() + 60)).await;
+    let cookie = sign_in(&first, &id).await;
+    let second = restart(&first).await;
+    let (_, body) = page(&second, &format!("/s/{id}"), Some(&cookie)).await;
+    assert!(body.contains("id=\"terminal\""));
+    assert_eq!(
+        login(&second, &id, GUEST, &password(&second, &id)).await.0,
+        303
+    );
+}
+
+#[tokio::test]
+async fn stores_only_password_hashes() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let password = password(&running, &id);
+    let hashes = credential_hashes(&running).await;
+    assert_eq!(hashes.len(), 1);
+    assert!(hashes[0].starts_with("$argon2id$"));
+    for entry in std::fs::read_dir(running.db.path()).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        assert!(
+            !bytes
+                .windows(password.len())
+                .any(|window| window == password.as_bytes())
+        );
+    }
 }

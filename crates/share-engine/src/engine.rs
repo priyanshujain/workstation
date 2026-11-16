@@ -6,7 +6,9 @@ use crate::{ShareEvent, ShareRequest};
 use anyhow::{Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use share_protocol::{AgentMessage, Mode, ProgramStatus, RelayMessage, Share, Theme};
+use share_protocol::{
+    AgentMessage, GuestCredential, Mode, ProgramStatus, RelayMessage, Share, Theme,
+};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::signal::unix::{Signal, SignalKind, signal};
@@ -72,10 +74,11 @@ impl<'a> Engine<'a> {
 
     pub async fn run(mut self) -> Result<()> {
         self.status = self.read_status().await;
-        let (mut relay, url) = self.register().await?;
+        let (mut relay, url, credentials) = self.register().await?;
         (self.on_event)(ShareEvent::Ready {
             url,
             expires_at_unix: self.share.expires_at_unix,
+            credentials,
         });
         self.send_state(&mut relay).await;
         loop {
@@ -313,14 +316,21 @@ impl<'a> Engine<'a> {
             .await
     }
 
-    async fn register(&mut self) -> Result<(Relay, String)> {
+    async fn register(&mut self) -> Result<(Relay, String, Vec<GuestCredential>)> {
         let register = AgentMessage::Register {
             share: self.share.clone(),
         };
         match self.connect_relay(&register).await? {
-            (relay, RelayMessage::Registered { share_id, url }) => {
+            (
+                relay,
+                RelayMessage::Registered {
+                    share_id,
+                    url,
+                    credentials,
+                },
+            ) => {
                 self.share_id = share_id;
-                Ok((relay, url))
+                Ok((relay, url, credentials))
             }
             _ => bail!("the relay did not register the share"),
         }
