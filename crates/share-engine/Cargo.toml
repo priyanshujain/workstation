@@ -1,0 +1,11 @@
+[package]
+name = "share-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Stream one Rex tab to the share relay"
+
+[dependencies]
+anyhow.workspace = true
+share-protocol.workspace = true

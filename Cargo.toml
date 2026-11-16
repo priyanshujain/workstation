@@ -9,6 +9,8 @@ members = [
     "crates/apps",
     "crates/agents",
     "crates/share-protocol",
+    "crates/share-engine",
+    "crates/share-relay",
 ]
 
 [workspace.package]
@@ -49,6 +51,8 @@ display = { path = "crates/display" }
 apps = { path = "crates/apps" }
 agents = { path = "crates/agents" }
 share-protocol = { path = "crates/share-protocol" }
+share-engine = { path = "crates/share-engine" }
+share-relay = { path = "crates/share-relay" }
 
 [package]
 name = "wsctl"

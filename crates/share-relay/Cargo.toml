@@ -1,0 +1,11 @@
+[package]
+name = "share-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Public front door for shared Rex tabs"
+
+[dependencies]
+anyhow.workspace = true
+share-protocol.workspace = true

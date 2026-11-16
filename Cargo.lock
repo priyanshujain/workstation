@@ -1594,11 +1594,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "share-engine"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "share-protocol",
+]
+
+[[package]]
 name = "share-protocol"
 version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "share-relay"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "share-protocol",
 ]
 
 [[package]]
