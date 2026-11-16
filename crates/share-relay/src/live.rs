@@ -14,11 +14,13 @@ pub enum Outbound {
 
 pub struct LiveShare {
     pub id: String,
-    engine: UnboundedSender<RelayMessage>,
     state: Mutex<State>,
 }
 
 struct State {
+    engine: UnboundedSender<RelayMessage>,
+    orphaned: Option<u64>,
+    generation: u64,
     share: Share,
     theme: Option<Theme>,
     status: Option<Option<ProgramStatus>>,
@@ -40,10 +42,12 @@ impl LiveShare {
             status: None,
             viewers: BTreeMap::new(),
             ended: false,
+            engine,
+            orphaned: None,
+            generation: 0,
         };
         Self {
             id,
-            engine,
             state: Mutex::new(state),
         }
     }
@@ -81,7 +85,12 @@ impl LiveShare {
             },
         );
         state.broadcast_viewers();
-        self.send_engine(RelayMessage::ViewerJoined {
+        if state.orphaned.is_some() {
+            let _ = state.viewers[&viewer_id]
+                .tx
+                .send(Outbound::Message(ViewerMessage::Reconnecting));
+        }
+        state.send_engine(RelayMessage::ViewerJoined {
             viewer_id,
             email: email.to_string(),
         });
@@ -94,17 +103,18 @@ impl LiveShare {
             return;
         };
         state.broadcast_viewers();
-        self.send_engine(RelayMessage::ViewerLeft {
+        state.send_engine(RelayMessage::ViewerLeft {
             viewer_id,
             email: viewer.email,
         });
     }
 
     pub fn input(&self, viewer_id: u64, email: &str, data: String) -> bool {
-        if self.state().share.mode != Mode::Input {
+        let state = self.state();
+        if state.share.mode != Mode::Input || state.orphaned.is_some() {
             return false;
         }
-        self.send_engine(RelayMessage::Input {
+        state.send_engine(RelayMessage::Input {
             viewer_id,
             email: email.to_string(),
             data,
@@ -153,7 +163,47 @@ impl LiveShare {
     }
 
     pub fn send_engine(&self, message: RelayMessage) {
-        let _ = self.engine.send(message);
+        self.state().send_engine(message);
+    }
+
+    pub fn orphan(&self) -> u64 {
+        let mut state = self.state();
+        state.generation += 1;
+        state.orphaned = Some(state.generation);
+        state.broadcast(ViewerMessage::Reconnecting);
+        state.generation
+    }
+
+    pub fn still_orphaned(&self, generation: u64) -> bool {
+        self.state().orphaned == Some(generation)
+    }
+
+    pub fn adopt(&self, engine: UnboundedSender<RelayMessage>) -> bool {
+        let mut state = self.state();
+        if state.orphaned.is_none() || state.ended {
+            return false;
+        }
+        state.orphaned = None;
+        state.engine = engine;
+        state.send_engine(RelayMessage::Resumed {
+            share_id: self.id.clone(),
+        });
+        let joined: Vec<(u64, String)> = state
+            .viewers
+            .iter()
+            .map(|(id, viewer)| (*id, viewer.email.clone()))
+            .collect();
+        for (viewer_id, email) in joined {
+            let hello = ViewerMessage::Hello {
+                share: state.share.clone(),
+                email: email.clone(),
+            };
+            let viewer = state.viewers.get_mut(&viewer_id).expect("listed viewer");
+            viewer.ready = false;
+            let _ = viewer.tx.send(Outbound::Message(hello));
+            state.send_engine(RelayMessage::ViewerJoined { viewer_id, email });
+        }
+        true
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -164,6 +214,10 @@ impl LiveShare {
 }
 
 impl State {
+    fn send_engine(&self, message: RelayMessage) {
+        let _ = self.engine.send(message);
+    }
+
     fn greeting(&self, email: &str) -> Vec<ViewerMessage> {
         let mut messages = vec![
             ViewerMessage::Hello {
