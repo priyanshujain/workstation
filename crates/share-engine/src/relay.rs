@@ -14,8 +14,8 @@ pub type Relay = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub async fn connect(
     relay_url: &str,
     secret: &str,
-    register: &AgentMessage,
-) -> Result<(Relay, String)> {
+    hello: &AgentMessage,
+) -> Result<(Relay, RelayMessage)> {
     let url = agent_url(relay_url)?;
     let mut request = url.as_str().into_client_request()?;
     request
@@ -24,11 +24,11 @@ pub async fn connect(
     let (mut relay, _) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| format!("could not connect to the relay at {url}"))?;
-    send(&mut relay, register).await?;
-    let url = tokio::time::timeout(REGISTER_TIMEOUT, registered(&mut relay))
+    send(&mut relay, hello).await?;
+    let reply = tokio::time::timeout(REGISTER_TIMEOUT, handshake(&mut relay))
         .await
         .context("the relay did not confirm the share")??;
-    Ok((relay, url))
+    Ok((relay, reply))
 }
 
 pub async fn send(relay: &mut Relay, message: &AgentMessage) -> Result<()> {
@@ -45,10 +45,14 @@ pub fn parse(message: &Message) -> Option<RelayMessage> {
     }
 }
 
-async fn registered(relay: &mut Relay) -> Result<String> {
+async fn handshake(relay: &mut Relay) -> Result<RelayMessage> {
     while let Some(message) = relay.next().await {
         match parse(&message?) {
-            Some(RelayMessage::Registered { url, .. }) => return Ok(url),
+            Some(
+                reply @ (RelayMessage::Registered { .. }
+                | RelayMessage::Resumed { .. }
+                | RelayMessage::ResumeRejected { .. }),
+            ) => return Ok(reply),
             Some(RelayMessage::Stop { reason }) => bail!("the relay refused the share: {reason}"),
             _ => continue,
         }

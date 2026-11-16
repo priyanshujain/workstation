@@ -3,17 +3,18 @@ use crate::rex::{Control, DataConnection, Events};
 use crate::stream::{Piece, StreamParser};
 use crate::translate;
 use crate::{ShareEvent, ShareRequest};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use share_protocol::{AgentMessage, Mode, ProgramStatus, RelayMessage, Share, Theme};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const RELAY_LOST_SHARE: &str = "the relay lost the share";
 const DATA_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 pub struct Engine<'a> {
@@ -22,12 +23,19 @@ pub struct Engine<'a> {
     pub events: Events,
     pub share: Share,
     pub deadline: Instant,
-    viewers: BTreeSet<u64>,
+    viewers: BTreeMap<u64, String>,
     theme: Option<Theme>,
     status: Option<ProgramStatus>,
     interrupt: Signal,
     terminate: Signal,
     on_event: Box<dyn FnMut(ShareEvent) + 'a>,
+    share_id: String,
+}
+
+enum Reconnect {
+    Back(Box<Relay>),
+    Gone,
+    Rejected,
 }
 
 enum Step {
@@ -52,18 +60,19 @@ impl<'a> Engine<'a> {
             events,
             share,
             deadline,
-            viewers: BTreeSet::new(),
+            viewers: BTreeMap::new(),
             theme: None,
             status: None,
             interrupt: signal(SignalKind::interrupt())?,
             terminate: signal(SignalKind::terminate())?,
             on_event: Box::new(on_event),
+            share_id: String::new(),
         })
     }
 
     pub async fn run(mut self) -> Result<()> {
         self.status = self.read_status().await;
-        let (mut relay, url) = self.connect_relay().await?;
+        let (mut relay, url) = self.register().await?;
         (self.on_event)(ShareEvent::Ready {
             url,
             expires_at_unix: self.share.expires_at_unix,
@@ -90,11 +99,12 @@ impl<'a> Engine<'a> {
             match step {
                 Step::DataLost => tokio::time::sleep(DATA_RETRY_DELAY).await,
                 Step::RelayLost => match self.reconnect_relay().await {
-                    Some(fresh) => relay = fresh,
-                    None => {
+                    Reconnect::Back(fresh) => relay = *fresh,
+                    Reconnect::Gone => {
                         self.notify_end("the share ended while the relay was away");
                         return Ok(());
                     }
+                    Reconnect::Rejected => bail!(RELAY_LOST_SHARE),
                 },
                 Step::Finish(reason) => {
                     self.end(&mut relay, reason).await;
@@ -220,8 +230,8 @@ impl<'a> Engine<'a> {
     async fn on_relay(&mut self, relay: &mut Relay, message: RelayMessage) -> Step {
         match message {
             RelayMessage::ViewerJoined { viewer_id, email } => {
+                self.viewers.insert(viewer_id, email.clone());
                 (self.on_event)(ShareEvent::ViewerJoined { email });
-                self.viewers.insert(viewer_id);
                 self.send_screen(relay, viewer_id).await
             }
             RelayMessage::ViewerLeft { viewer_id, email } => {
@@ -262,7 +272,7 @@ impl<'a> Engine<'a> {
     }
 
     async fn resend_screens(&self, relay: &mut Relay) {
-        for viewer_id in self.viewers.clone() {
+        for viewer_id in self.viewers.keys().copied().collect::<Vec<_>>() {
             self.send_screen(relay, viewer_id).await;
         }
     }
@@ -303,29 +313,57 @@ impl<'a> Engine<'a> {
             .await
     }
 
-    async fn connect_relay(&self) -> Result<(Relay, String)> {
+    async fn register(&mut self) -> Result<(Relay, String)> {
         let register = AgentMessage::Register {
             share: self.share.clone(),
         };
-        relay::connect(&self.request.relay_url, &self.request.secret, &register).await
+        match self.connect_relay(&register).await? {
+            (relay, RelayMessage::Registered { share_id, url }) => {
+                self.share_id = share_id;
+                Ok((relay, url))
+            }
+            _ => bail!("the relay did not register the share"),
+        }
     }
 
-    async fn reconnect_relay(&mut self) -> Option<Relay> {
-        self.viewers.clear();
+    async fn resume(&mut self) -> Result<Reconnect> {
+        let resume = AgentMessage::Resume {
+            share_id: self.share_id.clone(),
+        };
+        match self.connect_relay(&resume).await? {
+            (mut relay, RelayMessage::ResumeRejected { .. }) => {
+                self.end(&mut relay, Some(RELAY_LOST_SHARE.to_string()))
+                    .await;
+                Ok(Reconnect::Rejected)
+            }
+            (mut relay, _) => {
+                self.send_state(&mut relay).await;
+                Ok(Reconnect::Back(Box::new(relay)))
+            }
+        }
+    }
+
+    async fn connect_relay(&self, hello: &AgentMessage) -> Result<(Relay, RelayMessage)> {
+        relay::connect(&self.request.relay_url, &self.request.secret, hello).await
+    }
+
+    async fn reconnect_relay(&mut self) -> Reconnect {
+        for email in std::mem::take(&mut self.viewers).into_values() {
+            (self.on_event)(ShareEvent::ViewerLeft { email });
+        }
         let mut backoff = Duration::from_secs(1);
         loop {
             let wake = (Instant::now() + backoff).min(self.deadline);
             tokio::select! {
                 _ = tokio::time::sleep_until(wake) => {},
-                _ = self.interrupt.recv() => return None,
-                _ = self.terminate.recv() => return None,
+                _ = self.interrupt.recv() => return Reconnect::Gone,
+                _ = self.terminate.recv() => return Reconnect::Gone,
             }
             if Instant::now() >= self.deadline {
-                return None;
+                return Reconnect::Gone;
             }
-            if let Ok((mut relay, _)) = self.connect_relay().await {
-                self.send_state(&mut relay).await;
-                return Some(relay);
+            if let Ok(outcome) = self.resume().await {
+                return outcome;
             }
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
