@@ -105,11 +105,20 @@ impl LiveShare {
         });
     }
 
-    pub fn input(&self, viewer_id: u64, email: &str, data: String) -> bool {
+    pub fn accepts_input(&self) -> bool {
         let state = self.state();
-        if state.share.mode != Mode::Input || state.orphaned.is_some() {
+        state.share.mode == Mode::Input && state.orphaned.is_none() && !state.ended
+    }
+
+    pub fn is_ended(&self) -> bool {
+        self.state().ended
+    }
+
+    pub fn input(&self, viewer_id: u64, email: &str, data: String) -> bool {
+        if !self.accepts_input() {
             return false;
         }
+        let state = self.state();
         state.send_engine(RelayMessage::Input {
             viewer_id,
             email: email.to_string(),
