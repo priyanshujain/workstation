@@ -1,5 +1,6 @@
 mod socket;
 mod stream;
+mod translate;
 
 use share_protocol::Mode;
 
