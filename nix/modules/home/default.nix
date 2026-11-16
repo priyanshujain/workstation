@@ -100,6 +100,23 @@ in
       };
     };
 
+    share = lib.mkOption {
+      default = null;
+      description = "Relay `wsctl share` streams tabs to; also installs the Rex actions as rex/wsctl-share.lua.";
+      type = lib.types.nullOr (lib.types.submodule {
+        options = {
+          relayUrl = lib.mkOption {
+            type = lib.types.str;
+            example = "wss://share.example.com";
+          };
+          secretFile = lib.mkOption {
+            type = lib.types.str;
+            description = "File holding the secret the relay expects from agents.";
+          };
+        };
+      });
+    };
+
     trackInputs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -152,6 +169,16 @@ in
       };
       services.wsctl.checks.xcode.command =
         "${lib.getExe' pkgs.xcodes "xcodes"} installed | grep -F '(Selected)' | grep -q '^${cfg.xcode.version} '";
+    })
+
+    (lib.mkIf (cfg.share != null) {
+      xdg.configFile."wsctl/share.json".text = builtins.toJSON {
+        relay_url = cfg.share.relayUrl;
+        secret_file = cfg.share.secretFile;
+      };
+      xdg.configFile."rex/wsctl-share.lua".source = pkgs.replaceVars ./wsctl-share.lua {
+        wsctl = lib.getExe cfg.package;
+      };
     })
 
     (lib.mkIf (pkgs.stdenv.isDarwin && (cfg.defaultApps.types != { } || cfg.defaultApps.replace != { })) {
