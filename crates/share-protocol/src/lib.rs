@@ -49,6 +49,7 @@ pub struct ProgramStatus {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessage {
     Register { share: Share },
+    Resume { share_id: String },
     Screen { viewer_id: u64, vt: String },
     Resize { cols: u16, rows: u16 },
     Theme { theme: Theme },
