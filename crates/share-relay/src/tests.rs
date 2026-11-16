@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::Json;
@@ -169,11 +169,15 @@ fn share_expires_at_deadline() {
 struct Running {
     viewer: String,
     agent: String,
-    db: tempfile::TempDir,
+    db: Arc<tempfile::TempDir>,
+    server: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 
 async fn start_relay() -> Running {
-    let db = tempfile::tempdir().unwrap();
+    start_relay_on(Arc::new(tempfile::tempdir().unwrap())).await
+}
+
+async fn start_relay_on(db: Arc<tempfile::TempDir>) -> Running {
     let viewers = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let agents = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let viewer = viewers.local_addr().unwrap().to_string();
@@ -193,8 +197,13 @@ async fn start_relay() -> Running {
     };
     let mut relay = crate::relay::Relay::new(config).await.unwrap();
     relay.engine_grace = Duration::from_secs(2);
-    tokio::spawn(crate::serve_relay(relay, viewers, agents));
-    Running { viewer, agent, db }
+    let server = tokio::spawn(crate::serve_relay(relay, viewers, agents));
+    Running {
+        viewer,
+        agent,
+        db,
+        server,
+    }
 }
 
 type Socket =
@@ -446,6 +455,23 @@ async fn joined_viewer(running: &Running, id: &str) -> Socket {
     viewer
 }
 
+async fn end_reasons(running: &Running) -> Vec<Option<String>> {
+    let database = libsql::Builder::new_local(running.db.path().join("share.db"))
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    let mut rows = connection
+        .query("SELECT end_reason FROM shares", ())
+        .await
+        .unwrap();
+    let mut reasons = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        reasons.push(row.get(0).unwrap());
+    }
+    reasons
+}
+
 async fn end_reason(running: &Running) -> Option<String> {
     let database = libsql::Builder::new_local(running.db.path().join("share.db"))
         .build()
@@ -614,4 +640,65 @@ async fn closes_viewer_that_falls_behind() {
         }
     };
     assert_eq!(reason, "viewer fell behind; reload to catch up");
+}
+
+#[tokio::test]
+async fn restores_open_shares_after_restart() {
+    let first = start_relay().await;
+    let (_old_engine, id) = register(&first, share(Mode::Input, unix_now() + 60)).await;
+    first.server.abort();
+
+    let second = start_relay_on(first.db.clone()).await;
+    let mut viewer = connect(
+        format!("ws://{}/s/{id}/ws", second.viewer),
+        ACCESS_JWT_HEADER,
+        &token(GUEST),
+    )
+    .await
+    .unwrap();
+    let ViewerMessage::Hello {
+        share: restored, ..
+    } = next_json(&mut viewer).await
+    else {
+        panic!("no hello")
+    };
+    assert_eq!(restored, share(Mode::Input, restored.expires_at_unix));
+    assert_eq!(
+        status(&second, &format!("/s/{id}"), "stranger@example.com").await,
+        403
+    );
+
+    let mut engine = engine_socket(&second).await;
+    send_json(
+        &mut engine,
+        &AgentMessage::Resume {
+            share_id: id.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::Resumed {
+            share_id: id.clone()
+        }
+    );
+    let RelayMessage::ViewerJoined { email, .. } = next_json(&mut engine).await else {
+        panic!("no rejoin")
+    };
+    assert_eq!(email, GUEST);
+}
+
+#[tokio::test]
+async fn ends_restored_share_without_engine() {
+    let first = start_relay().await;
+    let (_old_engine, _) = register(&first, share(Mode::View, unix_now() + 60)).await;
+    first.server.abort();
+    let second = start_relay_on(first.db.clone()).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let reasons = end_reasons(&second).await;
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.as_deref() == Some("engine lost"))
+    );
 }
