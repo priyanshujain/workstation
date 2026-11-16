@@ -87,7 +87,7 @@ socket.onmessage = (event) => {
   if (typeof event.data === "string") handle(JSON.parse(event.data));
   else terminal.write(new Uint8Array(event.data));
 };
-socket.onclose = () => { if (!ended) showEnded("connection closed"); };
+socket.onclose = (event) => { if (!ended) showEnded(event.reason || "connection closed"); };
 terminal.onData((data) => {
   if (!terminal.options.disableStdin && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "input", data }));
