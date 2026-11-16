@@ -252,7 +252,7 @@ pub struct ShareArgs {
     #[arg(long, value_enum)]
     pub mode: Option<ShareMode>,
 
-    /// Email of a guest Cloudflare Access lets in (repeatable); asks when left out
+    /// Email of a guest who may sign in (repeatable); asks when left out
     #[arg(long = "guest", value_name = "EMAIL")]
     pub guests: Vec<String>,
 
