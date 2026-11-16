@@ -1594,6 +1594,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "share-protocol"
+version = "0.1.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

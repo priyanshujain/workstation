@@ -8,6 +8,7 @@ members = [
     "crates/display",
     "crates/apps",
     "crates/agents",
+    "crates/share-protocol",
 ]
 
 [workspace.package]
@@ -47,6 +48,7 @@ disk = { path = "crates/disk" }
 display = { path = "crates/display" }
 apps = { path = "crates/apps" }
 agents = { path = "crates/agents" }
+share-protocol = { path = "crates/share-protocol" }
 
 [package]
 name = "wsctl"
