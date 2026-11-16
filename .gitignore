@@ -15,6 +15,7 @@
 # Secrets (if any)
 *.age.key
 secrets.decrypted.*
+.env
 
 
 .claude/*
