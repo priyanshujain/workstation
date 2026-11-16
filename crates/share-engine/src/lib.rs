@@ -1,4 +1,5 @@
 mod socket;
+mod stream;
 
 use share_protocol::Mode;
 
