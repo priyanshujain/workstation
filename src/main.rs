@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand};
+use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand, ShareCommand, ShareMode};
 #[cfg(target_os = "macos")]
 use cli::{AppCommand, DisplayCommand};
 
@@ -150,6 +150,40 @@ fn main() -> anyhow::Result<()> {
                 yes,
             } => commands::app::remove(name, dry_run, purge, include_likely, yes)?,
         },
+        Commands::Share { sub, target } => match sub {
+            None => commands::share::share(commands::share::Target {
+                block: target.block,
+                session: target.session,
+                mode: target.mode.map(protocol_mode),
+                guests: target.guests,
+                ttl: target.ttl,
+            })?,
+            Some(relay) => {
+                let ShareCommand::Relay {
+                    viewer_listen,
+                    agent_listen,
+                    public_url,
+                    secret_file,
+                    access_team_domain,
+                    access_audience,
+                    audit_log,
+                    db_url,
+                    db_token_file,
+                } = *relay;
+                let config = share_relay::RelayConfig {
+                    viewer_listen,
+                    agent_listen,
+                    public_url,
+                    secret: String::new(),
+                    access_team_domain,
+                    access_audience,
+                    audit_log,
+                    db_url,
+                    db_token_file,
+                };
+                commands::share::relay(config, &secret_file)?;
+            }
+        },
         Commands::Packages => {
             tui::packages::run()?;
         }
@@ -159,4 +193,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn protocol_mode(mode: ShareMode) -> share_protocol::Mode {
+    match mode {
+        ShareMode::View => share_protocol::Mode::View,
+        ShareMode::Input => share_protocol::Mode::Input,
+    }
 }

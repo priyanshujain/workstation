@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "wsctl")]
@@ -118,6 +118,16 @@ pub enum Commands {
         sub: DisplayCommand,
     },
 
+    /// Share one Rex tab through a temporary web link, or run the relay
+    #[command(args_conflicts_with_subcommands = true)]
+    Share {
+        #[command(subcommand)]
+        sub: Option<Box<ShareCommand>>,
+
+        #[command(flatten)]
+        target: ShareArgs,
+    },
+
     /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
     Packages,
 
@@ -225,6 +235,74 @@ pub enum DiskCommand {
         /// Rescan instead of reading the cached report, and refresh the cache
         #[arg(long)]
         no_cache: bool,
+    },
+}
+
+#[derive(Args)]
+pub struct ShareArgs {
+    /// Block to share; asks with a picker when left out
+    #[arg(long, requires = "session")]
+    pub block: Option<String>,
+
+    /// Session that holds the block
+    #[arg(long, requires = "block")]
+    pub session: Option<String>,
+
+    /// What guests may do; asks when left out
+    #[arg(long, value_enum)]
+    pub mode: Option<ShareMode>,
+
+    /// Email of a guest Cloudflare Access lets in (repeatable); asks when left out
+    #[arg(long = "guest", value_name = "EMAIL")]
+    pub guests: Vec<String>,
+
+    /// How long the link lives, such as 30m or 2h; asks when left out
+    #[arg(long)]
+    pub ttl: Option<String>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ShareMode {
+    View,
+    Input,
+}
+
+#[derive(Subcommand)]
+pub enum ShareCommand {
+    /// Serve the public side of shares: guest pages and the agent socket
+    Relay {
+        #[arg(long)]
+        viewer_listen: String,
+
+        #[arg(long)]
+        agent_listen: String,
+
+        /// Base URL guests open
+        #[arg(long)]
+        public_url: String,
+
+        /// File holding the secret agents present
+        #[arg(long)]
+        secret_file: std::path::PathBuf,
+
+        /// Cloudflare Access team domain, such as team.cloudflareaccess.com
+        #[arg(long)]
+        access_team_domain: String,
+
+        /// Cloudflare Access application audience tag
+        #[arg(long)]
+        access_audience: String,
+
+        #[arg(long)]
+        audit_log: std::path::PathBuf,
+
+        /// Turso database that records every guest prompt
+        #[arg(long)]
+        db_url: String,
+
+        /// File holding the Turso auth token
+        #[arg(long)]
+        db_token_file: Option<std::path::PathBuf>,
     },
 }
 
