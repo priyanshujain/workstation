@@ -1,7 +1,6 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -45,8 +44,8 @@ pub fn share(target: Target) -> Result<()> {
         None => ask_ttl()?,
     };
 
-    let marker = Arc::new(Marker::set(&session_id, &block_id)?);
-    restore_on_signal(Arc::clone(&marker));
+    let marker = Marker::set(&session_id, &block_id)?;
+    end_on_hangup();
     let request = ShareRequest {
         session_id,
         block_id,
@@ -174,20 +173,19 @@ fn announce(url: &str, mode: Mode, guests: &[String], ttl_secs: u64) {
     let _ = io::stdout().flush();
 }
 
-fn restore_on_signal(marker: Arc<Marker>) {
-    let mut signals: libc::sigset_t = unsafe { std::mem::zeroed() };
+fn end_on_hangup() {
+    let mut hangup: libc::sigset_t = unsafe { std::mem::zeroed() };
     unsafe {
-        libc::sigemptyset(&mut signals);
-        for signal in [libc::SIGHUP, libc::SIGINT, libc::SIGTERM] {
-            libc::sigaddset(&mut signals, signal);
-        }
-        libc::pthread_sigmask(libc::SIG_BLOCK, &signals, std::ptr::null_mut());
+        libc::sigemptyset(&mut hangup);
+        libc::sigaddset(&mut hangup, libc::SIGHUP);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &hangup, std::ptr::null_mut());
     }
     std::thread::spawn(move || {
         let mut signal = 0;
-        unsafe { libc::sigwait(&signals, &mut signal) };
-        marker.restore();
-        std::process::exit(128 + signal);
+        unsafe {
+            libc::sigwait(&hangup, &mut signal);
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
     });
 }
 
