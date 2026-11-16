@@ -12,6 +12,8 @@ use crate::limits::FailureLimiter;
 use crate::live::LiveShare;
 use crate::store::{Store, unix_now};
 
+pub const AUDIT_FAILED: &str = "the relay could not record guest input";
+
 const ENGINE_GRACE: Duration = Duration::from_secs(60);
 
 pub struct Relay {
@@ -51,7 +53,7 @@ impl Relay {
         let mut share = share;
         share.guests = guest_emails(&share.guests);
         let credentials = self.issue_credentials(&id, &share.guests).await?;
-        self.store.share_registered(&id, &share).await;
+        self.store.share_registered(&id, &share).await?;
         let live = Arc::new(LiveShare::new(id.clone(), share, engine));
         self.shares().insert(id, live.clone());
         Ok((live, credentials))
@@ -67,7 +69,7 @@ impl Relay {
             let password = generate_password()?;
             let hashed = password.clone();
             let hash = tokio::task::spawn_blocking(move || hash_password(&hashed)).await??;
-            self.store.add_credential(id, email, &hash).await;
+            self.store.add_credential(id, email, &hash).await?;
             credentials.push(GuestCredential {
                 email: email.clone(),
                 password,
@@ -84,12 +86,28 @@ impl Relay {
     }
 
     pub async fn end(&self, live: &LiveShare, reason: &str) {
+        if live.is_ended() {
+            return;
+        }
         self.shares().remove(&live.id);
-        self.store.share_ended(&live.id, reason).await;
+        if let Err(error) = self.store.share_ended(&live.id, reason).await {
+            tracing::error!(%error, share_id = %live.id, "could not record the share end");
+        }
         live.end(reason);
     }
 
+    pub async fn stop_unaudited(&self, live: &LiveShare) {
+        tracing::error!(share_id = %live.id, "input could not be recorded; ending the share");
+        live.send_engine(RelayMessage::Stop {
+            reason: AUDIT_FAILED.to_string(),
+        });
+        self.end(live, AUDIT_FAILED).await;
+    }
+
     pub fn orphan(self: &Arc<Self>, live: Arc<LiveShare>) {
+        if live.is_ended() {
+            return;
+        }
         let generation = live.orphan();
         let left = Duration::from_secs(live.share().expires_at_unix.saturating_sub(unix_now()));
         let wait = self.engine_grace.min(left);

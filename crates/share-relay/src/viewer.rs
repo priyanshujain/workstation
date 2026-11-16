@@ -46,10 +46,11 @@ async fn page(
     let Some(live) = relay.find(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if signed_in(&relay, &headers, &live).await.is_some() {
-        return html(StatusCode::OK, assets::PAGE.to_string());
+    match signed_in(&relay, &headers, &live).await {
+        Ok(Some(_)) => html(StatusCode::OK, assets::PAGE.to_string()),
+        Ok(None) => html(StatusCode::OK, login_page(&id, "")),
+        Err(status) => status.into_response(),
     }
-    html(StatusCode::OK, login_page(&id, ""))
 }
 
 async fn login(
@@ -74,7 +75,10 @@ async fn login(
             login_page(&id, LIMITED_LOGIN),
         );
     }
-    let hash = relay.store.credential_hash(&id, &email).await;
+    let hash = match relay.store.credential_hash(&id, &email).await {
+        Ok(hash) => hash,
+        Err(error) => return unavailable(error),
+    };
     let password = form.password;
     let verified = tokio::task::spawn_blocking(move || verify_password(&password, hash.as_deref()))
         .await
@@ -85,20 +89,25 @@ async fn login(
     }
     relay.failures.clear(&account);
     match start_session(&relay, &live, &email).await {
-        Some(cookie) => redirect(&id, cookie),
-        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(cookie) => redirect(&id, cookie),
+        Err(error) => unavailable(error),
     }
 }
 
-async fn start_session(relay: &Relay, live: &LiveShare, email: &str) -> Option<String> {
-    let token = random_token::<32>().ok()?;
+fn unavailable(error: anyhow::Error) -> Response {
+    tracing::error!(%error, "share database unavailable");
+    StatusCode::SERVICE_UNAVAILABLE.into_response()
+}
+
+async fn start_session(relay: &Relay, live: &LiveShare, email: &str) -> anyhow::Result<String> {
+    let token = random_token::<32>()?;
     let expires_at = live.share().expires_at_unix;
     relay
         .store
         .add_session(&token_hash(&token), &live.id, email, expires_at)
-        .await;
+        .await?;
     let max_age = expires_at.saturating_sub(unix_now());
-    Some(cookie(relay, &live.id, &token, max_age))
+    Ok(cookie(relay, &live.id, &token, max_age))
 }
 
 async fn logout(
@@ -106,8 +115,10 @@ async fn logout(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    if let Some(token) = session_token(&headers) {
-        relay.store.delete_session(&token_hash(&token)).await;
+    if let Some(token) = session_token(&headers)
+        && let Err(error) = relay.store.delete_session(&token_hash(&token)).await
+    {
+        return unavailable(error);
     }
     redirect(&id, cookie(&relay, &id, "", 0))
 }
@@ -134,18 +145,26 @@ async fn connect(
         return StatusCode::NOT_FOUND.into_response();
     };
     match signed_in(&relay, &headers, &live).await {
-        Some(email) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
-        None => StatusCode::UNAUTHORIZED.into_response(),
+        Ok(Some(email)) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
+        Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(status) => status.into_response(),
     }
 }
 
-async fn signed_in(relay: &Relay, headers: &HeaderMap, live: &LiveShare) -> Option<String> {
-    let token = session_token(headers)?;
+async fn signed_in(
+    relay: &Relay,
+    headers: &HeaderMap,
+    live: &LiveShare,
+) -> Result<Option<String>, StatusCode> {
+    let Some(token) = session_token(headers) else {
+        return Ok(None);
+    };
     let email = relay
         .store
         .session_email(&token_hash(&token), &live.id)
-        .await?;
-    live.admits(&email).then_some(email)
+        .await
+        .map_err(|error| unavailable(error).status())?;
+    Ok(email.filter(|email| live.admits(email)))
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -231,10 +250,14 @@ async fn session(relay: Arc<Relay>, live: Arc<LiveShare>, email: String, mut soc
     if !live.join(viewer_id, &email, tx) {
         return;
     }
-    relay.store.viewer_joined(&live.id, viewer_id, &email).await;
+    if let Err(error) = relay.store.viewer_joined(&live.id, viewer_id, &email).await {
+        tracing::error!(%error, "could not record a viewer join");
+    }
     pump(&relay, &live, viewer_id, &email, &mut socket, outbox).await;
     live.leave(viewer_id);
-    relay.store.viewer_left(&live.id, viewer_id).await;
+    if let Err(error) = relay.store.viewer_left(&live.id, viewer_id).await {
+        tracing::error!(%error, "could not record a viewer leaving");
+    }
     let _ = socket.send(Message::Close(None)).await;
 }
 
@@ -278,14 +301,32 @@ async fn receive(
     let Ok(ViewerInput::Input { data }) = serde_json::from_str(text) else {
         return;
     };
-    if !live.input(viewer_id, email, data.clone()) {
+    if !live.accepts_input() {
         return;
     }
-    relay.store.input(&live.id, email, &data).await;
-    let share = live.share();
-    for prompt in prompts.feed(&data) {
-        relay.store.prompt(&live.id, &share, email, &prompt).await;
+    if record_input(relay, live, email, prompts, &data)
+        .await
+        .is_err()
+    {
+        relay.stop_unaudited(live).await;
+        return;
     }
+    live.input(viewer_id, email, data);
+}
+
+async fn record_input(
+    relay: &Relay,
+    live: &LiveShare,
+    email: &str,
+    prompts: &mut PromptBuffer,
+    data: &str,
+) -> anyhow::Result<()> {
+    relay.store.input(&live.id, email, data).await?;
+    let share = live.share();
+    for prompt in prompts.feed(data) {
+        relay.store.prompt(&live.id, &share, email, &prompt).await?;
+    }
+    Ok(())
 }
 
 async fn send(socket: &mut WebSocket, message: &ViewerMessage) {

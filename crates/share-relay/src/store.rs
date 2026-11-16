@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use libsql::{Builder, Connection, params};
+use libsql::params::{IntoParams, Params};
+use libsql::{Builder, Connection, Database, params};
 use share_protocol::Share;
 use tokio::sync::Mutex;
 
@@ -63,7 +64,8 @@ CREATE TABLE IF NOT EXISTS inputs (
 ";
 
 pub struct Store {
-    connection: Mutex<Connection>,
+    database: Database,
+    order: Mutex<()>,
 }
 
 impl Store {
@@ -76,14 +78,14 @@ impl Store {
                     .await?
             }
         };
-        let connection = database.connect()?;
-        connection.execute_batch(SCHEMA).await?;
+        database.connect()?.execute_batch(SCHEMA).await?;
         Ok(Self {
-            connection: Mutex::new(connection),
+            database,
+            order: Mutex::new(()),
         })
     }
 
-    pub async fn share_registered(&self, share_id: &str, share: &Share) {
+    pub async fn share_registered(&self, share_id: &str, share: &Share) -> anyhow::Result<()> {
         let mode = serde_json::to_value(share.mode)
             .ok()
             .and_then(|mode| mode.as_str().map(str::to_string))
@@ -99,11 +101,11 @@ impl Store {
                 share.label.as_str(), share.host.as_str(), mode, guests, unix_millis(), expires_at, share.cols, share.rows
             ],
         )
-        .await;
+        .await
     }
 
     pub async fn open_shares(&self) -> anyhow::Result<Vec<(String, Share)>> {
-        let connection = self.connection.lock().await;
+        let connection = self.connect().await?;
         let mut rows = connection
             .query(
                 "SELECT share_id, session_id, session_label, block_id, label, host, mode, guests, expires_at, cols, rows
@@ -118,15 +120,24 @@ impl Store {
         Ok(shares)
     }
 
-    pub async fn add_credential(&self, share_id: &str, email: &str, password_hash: &str) {
+    pub async fn add_credential(
+        &self,
+        share_id: &str,
+        email: &str,
+        password_hash: &str,
+    ) -> anyhow::Result<()> {
         self.execute(
             "INSERT INTO guest_credentials (share_id, email, password_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![share_id, email, password_hash, unix_millis()],
         )
-        .await;
+        .await
     }
 
-    pub async fn credential_hash(&self, share_id: &str, email: &str) -> Option<String> {
+    pub async fn credential_hash(
+        &self,
+        share_id: &str,
+        email: &str,
+    ) -> anyhow::Result<Option<String>> {
         self.text(
             "SELECT password_hash FROM guest_credentials WHERE share_id = ?1 AND email = ?2",
             params![share_id, email],
@@ -140,16 +151,20 @@ impl Store {
         share_id: &str,
         email: &str,
         expires_at_unix: u64,
-    ) {
+    ) -> anyhow::Result<()> {
         let expires_at = i64::try_from(expires_at_unix.saturating_mul(1000)).unwrap_or(i64::MAX);
         self.execute(
             "INSERT INTO viewer_sessions (token_hash, share_id, email, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![token_hash, share_id, email, unix_millis(), expires_at],
         )
-        .await;
+        .await
     }
 
-    pub async fn session_email(&self, token_hash: &str, share_id: &str) -> Option<String> {
+    pub async fn session_email(
+        &self,
+        token_hash: &str,
+        share_id: &str,
+    ) -> anyhow::Result<Option<String>> {
         self.text(
             "SELECT email FROM viewer_sessions WHERE token_hash = ?1 AND share_id = ?2 AND expires_at > ?3",
             params![token_hash, share_id, unix_millis()],
@@ -157,59 +172,58 @@ impl Store {
         .await
     }
 
-    pub async fn delete_session(&self, token_hash: &str) {
+    pub async fn delete_session(&self, token_hash: &str) -> anyhow::Result<()> {
         self.execute(
             "DELETE FROM viewer_sessions WHERE token_hash = ?1",
             params![token_hash],
         )
-        .await;
+        .await
     }
 
-    async fn text(&self, sql: &str, values: impl libsql::params::IntoParams) -> Option<String> {
-        let connection = self.connection.lock().await;
-        let mut rows = match connection.query(sql, values).await {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::error!(%error, "share database read failed");
-                return None;
-            }
-        };
-        rows.next().await.ok().flatten()?.get(0).ok()
-    }
-
-    pub async fn share_ended(&self, share_id: &str, reason: &str) {
+    pub async fn share_ended(&self, share_id: &str, reason: &str) -> anyhow::Result<()> {
         self.execute(
             "UPDATE shares SET ended_at = ?2, end_reason = ?3 WHERE share_id = ?1",
             params![share_id, unix_millis(), reason],
         )
-        .await;
+        .await
     }
 
-    pub async fn viewer_joined(&self, share_id: &str, viewer_id: u64, email: &str) {
+    pub async fn viewer_joined(
+        &self,
+        share_id: &str,
+        viewer_id: u64,
+        email: &str,
+    ) -> anyhow::Result<()> {
         self.execute(
             "INSERT INTO viewers (share_id, viewer_id, email, joined_at) VALUES (?1, ?2, ?3, ?4)",
             params![share_id, viewer_id as i64, email, unix_millis()],
         )
-        .await;
+        .await
     }
 
-    pub async fn viewer_left(&self, share_id: &str, viewer_id: u64) {
+    pub async fn viewer_left(&self, share_id: &str, viewer_id: u64) -> anyhow::Result<()> {
         self.execute(
             "UPDATE viewers SET left_at = ?3 WHERE share_id = ?1 AND viewer_id = ?2",
             params![share_id, viewer_id as i64, unix_millis()],
         )
-        .await;
+        .await
     }
 
-    pub async fn input(&self, share_id: &str, email: &str, data: &str) {
+    pub async fn input(&self, share_id: &str, email: &str, data: &str) -> anyhow::Result<()> {
         self.execute(
             "INSERT INTO inputs (share_id, email, data, ts) VALUES (?1, ?2, ?3, ?4)",
             params![share_id, email, data, unix_millis()],
         )
-        .await;
+        .await
     }
 
-    pub async fn prompt(&self, share_id: &str, share: &Share, email: &str, prompt: &str) {
+    pub async fn prompt(
+        &self,
+        share_id: &str,
+        share: &Share,
+        email: &str,
+        prompt: &str,
+    ) -> anyhow::Result<()> {
         self.execute(
             "INSERT INTO prompts (share_id, session_id, session_label, block_id, email, prompt, submitted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -218,13 +232,41 @@ impl Store {
                 email, prompt, unix_millis()
             ],
         )
-        .await;
+        .await
     }
 
-    async fn execute(&self, sql: &str, values: impl libsql::params::IntoParams) {
-        if let Err(error) = self.connection.lock().await.execute(sql, values).await {
-            tracing::error!(%error, "share database write failed");
+    async fn connect(&self) -> anyhow::Result<Connection> {
+        Ok(self.database.connect()?)
+    }
+
+    async fn text(&self, sql: &str, values: impl IntoParams) -> anyhow::Result<Option<String>> {
+        let values = values.into_params()?;
+        let _order = self.order.lock().await;
+        match self.read_text(sql, &values).await {
+            Ok(text) => Ok(text),
+            Err(error) => {
+                tracing::warn!(%error, "share database read failed, retrying");
+                self.read_text(sql, &values).await
+            }
         }
+    }
+
+    async fn read_text(&self, sql: &str, values: &Params) -> anyhow::Result<Option<String>> {
+        let mut rows = self.connect().await?.query(sql, values).await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn execute(&self, sql: &str, values: impl IntoParams) -> anyhow::Result<()> {
+        let values = values.into_params()?;
+        let _order = self.order.lock().await;
+        if let Err(error) = self.connect().await?.execute(sql, &values).await {
+            tracing::warn!(%error, "share database write failed, retrying");
+            self.connect().await?.execute(sql, &values).await?;
+        }
+        Ok(())
     }
 }
 
@@ -256,4 +298,28 @@ fn unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "needs a running sqld; set SQLD_URL"]
+    async fn survives_idle_remote_streams() {
+        let url = std::env::var("SQLD_URL").expect("SQLD_URL");
+        let store = Store::open(&url, None).await.unwrap();
+        let share_id = crate::auth::random_token::<16>().unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        store
+            .add_credential(&share_id, "guest@example.com", "hash")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        let hash = store
+            .credential_hash(&share_id, "guest@example.com")
+            .await
+            .unwrap();
+        assert_eq!(hash.as_deref(), Some("hash"));
+    }
 }
