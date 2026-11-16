@@ -166,7 +166,7 @@ fn main() -> anyhow::Result<()> {
                     secret_file,
                     access_team_domain,
                     access_audience,
-                    audit_log,
+                    access_certs_url,
                     db_url,
                     db_token_file,
                 } = *relay;
@@ -177,9 +177,11 @@ fn main() -> anyhow::Result<()> {
                     secret: String::new(),
                     access_team_domain,
                     access_audience,
-                    audit_log,
+                    access_certs_url,
                     db_url,
                     db_token_file,
+                    #[cfg(debug_assertions)]
+                    dev_email: None,
                 };
                 commands::share::relay(config, &secret_file)?;
             }

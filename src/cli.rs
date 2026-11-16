@@ -293,8 +293,9 @@ pub enum ShareCommand {
         #[arg(long)]
         access_audience: String,
 
+        /// Where Access publishes its signing keys; derived from the team domain when left out
         #[arg(long)]
-        audit_log: std::path::PathBuf,
+        access_certs_url: Option<String>,
 
         /// Turso database that records every guest prompt
         #[arg(long)]
