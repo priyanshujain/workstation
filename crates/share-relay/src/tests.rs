@@ -620,6 +620,7 @@ async fn closes_viewer_that_falls_behind() {
     });
     for _ in 0..64 {
         engine.send(Message::binary(chunk.clone())).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(20), reader)
