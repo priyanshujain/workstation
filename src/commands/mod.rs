@@ -13,6 +13,7 @@ pub mod outdated;
 pub mod pins;
 pub mod projects;
 pub mod self_cmd;
+pub mod share;
 pub mod stale_daemons;
 pub mod upgrade;
 pub mod why;
