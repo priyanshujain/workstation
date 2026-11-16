@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared terminal</title>
+<link rel="stylesheet" href="/assets/xterm.css">
+<link rel="stylesheet" href="/assets/share.css">
+</head>
+<body>
+<header>
+  <span id="label">Connecting</span>
+  <span id="mode" class="pill"></span>
+  <span id="status" class="pill" hidden></span>
+  <span id="viewers"></span>
+  <span id="expiry"></span>
+</header>
+<main><div id="terminal"></div></main>
+<div id="ended" hidden></div>
+<script src="/assets/xterm.js"></script>
+<script src="/assets/share.js"></script>
+</body>
+</html>

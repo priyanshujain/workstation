@@ -1,0 +1,16 @@
+html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+header { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #1b1b1b; border-bottom: 1px solid #333; flex-wrap: wrap; }
+#label { font-weight: 600; }
+#viewers, #expiry { color: #999; }
+#expiry { margin-left: auto; }
+.pill { padding: 2px 8px; border-radius: 10px; background: #333; }
+.pill.input { background: #7a4b00; }
+.pill.working { background: #1d4f91; }
+.pill.blocked { background: #8a6d00; }
+.pill.done { background: #1e6b34; }
+.pill.error { background: #8b1e1e; }
+main { flex: 1; overflow: auto; padding: 12px; }
+#terminal { display: inline-block; }
+#ended { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.7); font-size: 18px; }
+#ended[hidden] { display: none; }
