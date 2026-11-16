@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS shares (
     guests TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
+    cols INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
     ended_at INTEGER,
     end_reason TEXT
 );
@@ -76,14 +78,30 @@ impl Store {
         let expires_at =
             i64::try_from(share.expires_at_unix.saturating_mul(1000)).unwrap_or(i64::MAX);
         self.execute(
-            "INSERT INTO shares (share_id, session_id, session_label, block_id, label, host, mode, guests, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO shares (share_id, session_id, session_label, block_id, label, host, mode, guests, created_at, expires_at, cols, rows)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 share_id, share.session_id.as_str(), share.session_label.as_str(), share.block_id.as_str(),
-                share.label.as_str(), share.host.as_str(), mode, guests, unix_millis(), expires_at
+                share.label.as_str(), share.host.as_str(), mode, guests, unix_millis(), expires_at, share.cols, share.rows
             ],
         )
         .await;
+    }
+
+    pub async fn open_shares(&self) -> anyhow::Result<Vec<(String, Share)>> {
+        let connection = self.connection.lock().await;
+        let mut rows = connection
+            .query(
+                "SELECT share_id, session_id, session_label, block_id, label, host, mode, guests, expires_at, cols, rows
+                 FROM shares WHERE ended_at IS NULL AND expires_at > ?1",
+                params![unix_millis()],
+            )
+            .await?;
+        let mut shares = Vec::new();
+        while let Some(row) = rows.next().await? {
+            shares.push((row.get(0)?, share_from(&row)?));
+        }
+        Ok(shares)
     }
 
     pub async fn share_ended(&self, share_id: &str, reason: &str) {
@@ -135,6 +153,24 @@ impl Store {
             tracing::error!(%error, "share database write failed");
         }
     }
+}
+
+fn share_from(row: &libsql::Row) -> anyhow::Result<Share> {
+    let mode: String = row.get(6)?;
+    let guests: String = row.get(7)?;
+    let expires_at: i64 = row.get(8)?;
+    Ok(Share {
+        session_id: row.get(1)?,
+        session_label: row.get(2)?,
+        block_id: row.get(3)?,
+        label: row.get(4)?,
+        host: row.get(5)?,
+        mode: serde_json::from_value(serde_json::Value::String(mode))?,
+        guests: serde_json::from_str(&guests)?,
+        expires_at_unix: u64::try_from(expires_at / 1000)?,
+        cols: u16::try_from(row.get::<i64>(9)?)?,
+        rows: u16::try_from(row.get::<i64>(10)?)?,
+    })
 }
 
 pub fn unix_now() -> u64 {
