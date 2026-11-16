@@ -7,9 +7,9 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use share_protocol::{AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, RelayMessage, Share};
+use share_protocol::{AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, RelayMessage};
 use subtle::ConstantTimeEq;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::live::LiveShare;
 use crate::relay::Relay;
@@ -39,31 +39,57 @@ pub fn secret_matches(headers: &HeaderMap, secret: &str) -> bool {
     !secret.is_empty() && bool::from(given.ct_eq(secret.as_bytes()))
 }
 
+enum Outcome {
+    Ended(String),
+    Disconnected,
+}
+
 async fn session(relay: Arc<Relay>, mut socket: WebSocket) {
-    let Some(share) = read_register(&mut socket).await else {
+    let Some(first) = read_first(&mut socket).await else {
         return;
     };
     let (engine, outbox) = mpsc::unbounded_channel();
-    let expires_at = share.expires_at_unix;
-    let Ok(live) = relay.register(share, engine).await else {
+    let Some(live) = attach(&relay, &mut socket, first, engine).await else {
         return;
     };
-    live.send_engine(RelayMessage::Registered {
-        share_id: live.id.clone(),
-        url: relay.viewer_url(&live.id),
-    });
-    let reason = pump(&live, &mut socket, outbox, expires_at).await;
-    relay.end(&live, &reason).await;
+    let expires_at = live.share().expires_at_unix;
+    match pump(&live, &mut socket, outbox, expires_at).await {
+        Outcome::Ended(reason) => relay.end(&live, &reason).await,
+        Outcome::Disconnected => relay.orphan(live),
+    }
 }
 
-async fn read_register(socket: &mut WebSocket) -> Option<Share> {
+async fn attach(
+    relay: &Arc<Relay>,
+    socket: &mut WebSocket,
+    first: AgentMessage,
+    engine: UnboundedSender<RelayMessage>,
+) -> Option<Arc<LiveShare>> {
+    match first {
+        AgentMessage::Register { share } if share.expires_at_unix > unix_now() => {
+            let live = relay.register(share, engine).await.ok()?;
+            live.send_engine(RelayMessage::Registered {
+                share_id: live.id.clone(),
+                url: relay.viewer_url(&live.id),
+            });
+            Some(live)
+        }
+        AgentMessage::Resume { share_id } => {
+            let resumed = relay.resume(&share_id, engine);
+            if resumed.is_none() {
+                send(socket, &RelayMessage::ResumeRejected { share_id }).await;
+            }
+            resumed
+        }
+        _ => None,
+    }
+}
+
+async fn read_first(socket: &mut WebSocket) -> Option<AgentMessage> {
     let Some(Ok(Message::Text(text))) = socket.recv().await else {
         return None;
     };
-    match serde_json::from_str(&text) {
-        Ok(AgentMessage::Register { share }) if share.expires_at_unix > unix_now() => Some(share),
-        _ => None,
-    }
+    serde_json::from_str(&text).ok()
 }
 
 async fn pump(
@@ -71,7 +97,7 @@ async fn pump(
     socket: &mut WebSocket,
     mut outbox: UnboundedReceiver<RelayMessage>,
     expires_at: u64,
-) -> String {
+) -> Outcome {
     let expiry = tokio::time::sleep(Duration::from_secs(expires_at.saturating_sub(unix_now())));
     tokio::pin!(expiry);
     loop {
@@ -79,18 +105,18 @@ async fn pump(
             () = &mut expiry => {
                 let reason = "expired".to_string();
                 send(socket, &RelayMessage::Stop { reason: reason.clone() }).await;
-                return reason;
+                return Outcome::Ended(reason);
             }
             Some(message) = outbox.recv() => send(socket, &message).await,
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Binary(bytes))) => live.bytes(&bytes),
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(AgentMessage::Ended { reason }) => return reason,
+                    Ok(AgentMessage::Ended { reason }) => return Outcome::Ended(reason),
                     Ok(message) => live.apply(message),
                     Err(error) => tracing::warn!(%error, "bad engine message"),
                 },
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                _ => return "engine disconnected".to_string(),
+                _ => return Outcome::Disconnected,
             },
         }
     }

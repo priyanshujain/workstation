@@ -38,7 +38,15 @@ pub fn serve(config: RelayConfig) -> anyhow::Result<()> {
 }
 
 async fn run(config: RelayConfig, viewers: TcpListener, agents: TcpListener) -> anyhow::Result<()> {
-    let relay = Arc::new(Relay::new(config).await?);
+    serve_relay(Relay::new(config).await?, viewers, agents).await
+}
+
+async fn serve_relay(
+    relay: Relay,
+    viewers: TcpListener,
+    agents: TcpListener,
+) -> anyhow::Result<()> {
+    let relay = Arc::new(relay);
     let viewer_server = axum::serve(viewers, viewer::router(relay.clone()));
     let agent_server = axum::serve(agents, agent::router(relay));
     tokio::try_join!(async { viewer_server.await }, async { agent_server.await })?;
