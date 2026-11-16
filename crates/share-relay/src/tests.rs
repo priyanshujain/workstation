@@ -836,3 +836,77 @@ async fn stores_only_password_hashes() {
         );
     }
 }
+
+async fn drop_table(running: &Running, table: &str) {
+    let database = libsql::Builder::new_local(running.db.path().join("share.db"))
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute(&format!("DROP TABLE {table}"), ())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn register_fails_when_credentials_cannot_be_saved() {
+    let running = start_relay().await;
+    drop_table(&running, "guest_credentials").await;
+    let mut engine = engine_socket(&running).await;
+    send_json(
+        &mut engine,
+        &AgentMessage::Register {
+            share: share(Mode::View, unix_now() + 60),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::Stop {
+            reason: "the relay could not save the share".into()
+        }
+    );
+}
+
+#[tokio::test]
+async fn login_reports_an_unavailable_database() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    drop_table(&running, "guest_credentials").await;
+    assert_eq!(
+        login(&running, &id, GUEST, &password(&running, &id))
+            .await
+            .0,
+        503
+    );
+}
+
+#[tokio::test]
+async fn ends_share_when_input_cannot_be_recorded() {
+    let running = start_relay().await;
+    let (mut engine, id) = register(&running, share(Mode::Input, unix_now() + 60)).await;
+    let mut viewer = joined_viewer(&running, &id).await;
+    let RelayMessage::ViewerJoined { .. } = next_json(&mut engine).await else {
+        panic!("no join")
+    };
+    drop_table(&running, "inputs").await;
+    send_json(
+        &mut viewer,
+        &json!({ "type": "input", "data": "rm -rf /\r" }),
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::Stop {
+            reason: crate::relay::AUDIT_FAILED.into()
+        }
+    );
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Ended {
+            reason: crate::relay::AUDIT_FAILED.into()
+        }
+    );
+    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
+}
