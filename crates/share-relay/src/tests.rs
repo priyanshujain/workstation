@@ -191,7 +191,9 @@ async fn start_relay() -> Running {
         #[cfg(debug_assertions)]
         dev_email: None,
     };
-    tokio::spawn(crate::run(config, viewers, agents));
+    let mut relay = crate::relay::Relay::new(config).await.unwrap();
+    relay.engine_grace = Duration::from_secs(2);
+    tokio::spawn(crate::serve_relay(relay, viewers, agents));
     Running { viewer, agent, db }
 }
 
@@ -418,4 +420,143 @@ async fn stops_engine_at_expiry() {
         }
     );
     assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 404);
+}
+
+async fn engine_socket(running: &Running) -> Socket {
+    connect(
+        format!("ws://{}{AGENT_PATH}", running.agent),
+        AGENT_SECRET_HEADER,
+        SECRET,
+    )
+    .await
+    .unwrap()
+}
+
+async fn joined_viewer(running: &Running, id: &str) -> Socket {
+    let mut viewer = connect(
+        format!("ws://{}/s/{id}/ws", running.viewer),
+        ACCESS_JWT_HEADER,
+        &token(GUEST),
+    )
+    .await
+    .unwrap();
+    for _ in 0..3 {
+        next(&mut viewer).await;
+    }
+    viewer
+}
+
+async fn end_reason(running: &Running) -> Option<String> {
+    let database = libsql::Builder::new_local(running.db.path().join("share.db"))
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    let mut rows = connection
+        .query("SELECT end_reason FROM shares", ())
+        .await
+        .unwrap();
+    rows.next().await.unwrap().unwrap().get(0).unwrap()
+}
+
+#[tokio::test]
+async fn resumes_share_after_engine_drop() {
+    let running = start_relay().await;
+    let (engine, id) = register(&running, share(Mode::Input, unix_now() + 60)).await;
+    let mut viewer = joined_viewer(&running, &id).await;
+    drop(engine);
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Reconnecting
+    );
+    send_json(&mut viewer, &json!({ "type": "input", "data": "lost\r" })).await;
+
+    let mut engine = engine_socket(&running).await;
+    send_json(
+        &mut engine,
+        &AgentMessage::Resume {
+            share_id: id.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::Resumed {
+            share_id: id.clone()
+        }
+    );
+    let RelayMessage::ViewerJoined { viewer_id, email } = next_json(&mut engine).await else {
+        panic!("no rejoin")
+    };
+    assert_eq!(email, GUEST);
+    assert!(matches!(
+        next_json(&mut viewer).await,
+        ViewerMessage::Hello { .. }
+    ));
+    send_json(
+        &mut engine,
+        &AgentMessage::Screen {
+            viewer_id,
+            vt: "again".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Screen { vt: "again".into() }
+    );
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(status(&running, &format!("/s/{id}"), GUEST).await, 200);
+    assert!(prompts(&running).await.is_empty());
+}
+
+#[tokio::test]
+async fn ends_share_when_grace_runs_out() {
+    let running = start_relay().await;
+    let (engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut viewer = joined_viewer(&running, &id).await;
+    drop(engine);
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Reconnecting
+    );
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Ended {
+            reason: "engine lost".into()
+        }
+    );
+    assert_eq!(end_reason(&running).await.as_deref(), Some("engine lost"));
+
+    let mut engine = engine_socket(&running).await;
+    send_json(
+        &mut engine,
+        &AgentMessage::Resume {
+            share_id: id.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::ResumeRejected { share_id: id }
+    );
+}
+
+#[tokio::test]
+async fn rejects_resume_of_live_share() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut other = engine_socket(&running).await;
+    send_json(
+        &mut other,
+        &AgentMessage::Resume {
+            share_id: id.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        next_json::<RelayMessage>(&mut other).await,
+        RelayMessage::ResumeRejected { share_id: id }
+    );
 }
