@@ -9,3 +9,21 @@ description = "Public front door for shared Rex tabs"
 [dependencies]
 anyhow.workspace = true
 share-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
+axum = { version = "0.8", features = ["ws"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto", "use_pem"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+libsql = { version = "0.10", default-features = false, features = ["core", "remote", "tls"] }
+getrandom = "0.3"
+base64 = "0.22"
+subtle = "2"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[dev-dependencies]
+rsa = { version = "0.9", features = ["pem"] }
+tokio-tungstenite = "0.29"
+tempfile = "3"
