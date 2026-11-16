@@ -332,6 +332,7 @@ impl<'a> Engine<'a> {
                 self.share_id = share_id;
                 Ok((relay, url, credentials))
             }
+            (_, RelayMessage::Stop { reason }) => bail!("the relay refused the share: {reason}"),
             _ => bail!("the relay did not register the share"),
         }
     }
