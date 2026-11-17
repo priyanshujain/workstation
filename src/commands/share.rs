@@ -58,7 +58,17 @@ pub fn share(target: Target) -> Result<()> {
         secret,
     };
     let pane = Pane::start(mode);
-    let result = share_engine::run(request, |event| pane.handle(event));
+    let popup = Popup {
+        session_id: request.session_id.clone(),
+        shared_block_id: request.block_id.clone(),
+    };
+    let result = share_engine::run(request, |event| {
+        let ready = matches!(event, ShareEvent::Ready { .. });
+        pane.handle(event);
+        if ready {
+            popup.hide_on_enter();
+        }
+    });
     pane.stop();
     marker.restore();
     result
@@ -268,7 +278,7 @@ fn announce(url: &str, mode: Mode, credentials: &[GuestCredential]) {
     }
     println!("\nSend each guest their password privately; it is shown only once.");
     println!("Mode:    {mode:?}");
-    println!("\nClose this pane or run Stop Sharing to end the share.\n");
+    println!("\nPress Enter to hide this window. Run Stop Sharing to end the share.\n");
     let _ = io::stdout().flush();
 }
 
@@ -286,6 +296,55 @@ fn end_on_hangup() {
             libc::kill(libc::getpid(), libc::SIGTERM);
         }
     });
+}
+
+struct Popup {
+    session_id: String,
+    shared_block_id: String,
+}
+
+impl Popup {
+    fn hide_on_enter(&self) {
+        let Ok(own_block_id) = std::env::var("REX_BLOCK") else {
+            return;
+        };
+        let session_id = self.session_id.clone();
+        let shared_block_id = self.shared_block_id.clone();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let _ = minimize_floating_layer(&session_id, &own_block_id, &shared_block_id);
+        });
+    }
+}
+
+fn minimize_floating_layer(
+    session_id: &str,
+    own_block_id: &str,
+    shared_block_id: &str,
+) -> Result<()> {
+    let view = rex_call("session.view", json!({ "session_id": session_id }))?;
+    let window = window_holding(&view, own_block_id).context("own block is in no window")?;
+    let layer = window["layers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|layer| {
+            layer["kind"] != "tiled"
+                && layer["blocks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|block| block["block_id"] == own_block_id)
+        })
+        .context("own block is not in a floating layer")?;
+    let args =
+        json!({ "session_id": session_id, "layer_id": layer["layer_id"], "state": "minimized" });
+    share_engine::rex_call(session_id, "session.set_layer_state", args)?;
+    let args = json!({ "session_id": session_id, "block_id": shared_block_id });
+    share_engine::rex_call(session_id, "session.focus_block", args).map(drop)
 }
 
 struct Marker {
