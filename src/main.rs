@@ -151,15 +151,13 @@ fn main() -> anyhow::Result<()> {
             } => commands::app::remove(name, dry_run, purge, include_likely, yes)?,
         },
         Commands::Share { sub, target } => match sub {
-            None => commands::share::share(commands::share::Target {
-                block: target.block,
-                session: target.session,
-                mode: target.mode.map(protocol_mode),
-                guests: target.guests,
-                ttl: target.ttl,
-            })?,
-            Some(relay) => {
-                let ShareCommand::Relay {
+            None => commands::share::share(share_target(target))?,
+            Some(sub) => match *sub {
+                ShareCommand::List { wait: true } => commands::share::list_and_wait()?,
+                ShareCommand::List { wait: false } => commands::share::list()?,
+                ShareCommand::Stop { block, all } => commands::share::stop(block, all)?,
+                ShareCommand::Serve { target } => commands::share::serve(share_target(target))?,
+                ShareCommand::Relay {
                     viewer_listen,
                     agent_listen,
                     public_url,
@@ -167,18 +165,19 @@ fn main() -> anyhow::Result<()> {
                     db_url,
                     db_token_file,
                     trust_proxy_header,
-                } = *relay;
-                let config = share_relay::RelayConfig {
-                    viewer_listen,
-                    agent_listen,
-                    public_url,
-                    secret: String::new(),
-                    db_url,
-                    db_token_file,
-                    trust_proxy_header,
-                };
-                commands::share::relay(config, &secret_file)?;
-            }
+                } => {
+                    let config = share_relay::RelayConfig {
+                        viewer_listen,
+                        agent_listen,
+                        public_url,
+                        secret: String::new(),
+                        db_url,
+                        db_token_file,
+                        trust_proxy_header,
+                    };
+                    commands::share::relay(config, &secret_file)?;
+                }
+            },
         },
         Commands::Packages => {
             tui::packages::run()?;
@@ -189,6 +188,16 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn share_target(target: cli::ShareArgs) -> commands::share::Target {
+    commands::share::Target {
+        block: target.block,
+        session: target.session,
+        mode: target.mode.map(protocol_mode),
+        guests: target.guests,
+        ttl: target.ttl,
+    }
 }
 
 fn protocol_mode(mode: ShareMode) -> share_protocol::Mode {

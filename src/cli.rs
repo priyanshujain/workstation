@@ -269,6 +269,31 @@ pub enum ShareMode {
 
 #[derive(Subcommand)]
 pub enum ShareCommand {
+    /// List the tabs shared from this machine, with links and guest passwords
+    List {
+        /// Wait for Enter after the list, for a Rex pane
+        #[arg(long, hide = true)]
+        wait: bool,
+    },
+
+    /// Stop sharing a tab
+    Stop {
+        /// Block whose share to stop
+        #[arg(long, conflicts_with = "all")]
+        block: Option<String>,
+
+        /// Stop every share on this machine
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Run one share in the background; Share Tab starts it
+    #[command(hide = true)]
+    Serve {
+        #[command(flatten)]
+        target: ShareArgs,
+    },
+
     /// Serve the public side of shares: guest pages and the agent socket
     Relay {
         #[arg(long)]

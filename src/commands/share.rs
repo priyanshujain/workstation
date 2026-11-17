@@ -1,14 +1,14 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use share_engine::{ShareEvent, ShareRequest, Tab};
 use share_protocol::{GuestCredential, Mode};
+use std::os::unix::fs::OpenOptionsExt;
 
 const MARKER: &str = "shared: ";
 
@@ -27,8 +27,7 @@ struct Config {
 }
 
 pub fn share(target: Target) -> Result<()> {
-    let config = load_config()?;
-    let secret = read_secret(&config.secret_file)?;
+    load_config()?;
     let (session_id, block_id) = match (target.session, target.block) {
         (Some(session), Some(block)) => (session, block),
         _ => pick_tab()?,
@@ -46,32 +45,283 @@ pub fn share(target: Target) -> Result<()> {
         None => ask_ttl()?,
     };
 
+    if let Some(existing) = find_share(&block_id)? {
+        println!("This tab is already shared.\n");
+        print_share(&existing);
+        return wait_for_key();
+    }
+    let started = start_background(&session_id, &block_id, mode, &guests, ttl_secs)?;
+    print_share(&started);
+    println!("The share runs in the background; closing this window keeps it running.");
+    println!("Stop it with Stop Sharing. See every share with Shared Tabs.\n");
+    wait_for_key()
+}
+
+pub fn serve(target: Target) -> Result<()> {
+    let config = load_config()?;
+    let secret = read_secret(&config.secret_file)?;
+    let (Some(session_id), Some(block_id), Some(mode), Some(ttl)) =
+        (target.session, target.block, target.mode, target.ttl)
+    else {
+        bail!("serve needs --session, --block, --mode and --ttl");
+    };
+    let ttl_secs = parse_ttl(&ttl)?;
     let marker = Marker::set(&session_id, &block_id)?;
-    end_on_hangup();
     let request = ShareRequest {
-        session_id,
-        block_id,
+        session_id: session_id.clone(),
+        block_id: block_id.clone(),
         mode,
-        guests,
+        guests: target.guests.clone(),
         ttl_secs,
         relay_url: config.relay_url,
         secret,
     };
-    let pane = Pane::start(mode);
-    let popup = Popup {
-        session_id: request.session_id.clone(),
-        shared_block_id: request.block_id.clone(),
+    let path = state_path(&block_id);
+    let block_id_for_log = block_id.clone();
+    let mut state = ActiveShare {
+        pid: std::process::id(),
+        session_id,
+        block_id,
+        name: marker.name.clone(),
+        mode,
+        url: String::new(),
+        credentials: Vec::new(),
+        expires_at_unix: 0,
+        viewers: Vec::new(),
     };
     let result = share_engine::run(request, |event| {
-        let ready = matches!(event, ShareEvent::Ready { .. });
-        pane.handle(event);
-        if ready {
-            popup.hide_on_enter();
+        match event {
+            ShareEvent::Ready {
+                url,
+                expires_at_unix,
+                credentials,
+            } => {
+                state.url = url;
+                state.expires_at_unix = expires_at_unix;
+                state.credentials = credentials;
+            }
+            ShareEvent::ViewerJoined { email } => state.viewers.push(email),
+            ShareEvent::ViewerLeft { email } => {
+                if let Some(index) = state.viewers.iter().position(|viewer| *viewer == email) {
+                    state.viewers.remove(index);
+                }
+            }
+            ShareEvent::Input { .. } => return,
+            ShareEvent::Ended { reason } => {
+                eprintln!("share ended: {reason}");
+                let _ = std::fs::remove_file(&path);
+                return;
+            }
+        }
+        if let Err(error) = write_state(&path, &state) {
+            eprintln!("could not record the share: {error:#}");
         }
     });
-    pane.stop();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(log_path(&block_id_for_log));
     marker.restore();
     result
+}
+
+pub fn list() -> Result<()> {
+    let shares = active_shares()?;
+    if shares.is_empty() {
+        println!("No tab is shared.");
+    }
+    for share in &shares {
+        print_share(share);
+    }
+    Ok(())
+}
+
+pub fn list_and_wait() -> Result<()> {
+    list()?;
+    wait_for_key()
+}
+
+pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
+    let targets: Vec<ActiveShare> = match (block_id, all) {
+        (_, true) => active_shares()?,
+        (Some(block_id), false) => find_share(&block_id)?.into_iter().collect(),
+        (None, false) => bail!("name a tab with --block, or pass --all"),
+    };
+    if targets.is_empty() {
+        println!("This tab is not shared");
+        return Ok(());
+    }
+    for share in &targets {
+        unsafe { libc::kill(share.pid as i32, libc::SIGTERM) };
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while targets.iter().any(|share| alive(share.pid)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let names: Vec<String> = targets.iter().map(|share| share.name.clone()).collect();
+    println!("Sharing stopped: {}", names.join(", "));
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct ActiveShare {
+    pid: u32,
+    session_id: String,
+    block_id: String,
+    name: String,
+    mode: Mode,
+    url: String,
+    credentials: Vec<GuestCredential>,
+    expires_at_unix: u64,
+    viewers: Vec<String>,
+}
+
+fn print_share(share: &ActiveShare) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let left = share.expires_at_unix.saturating_sub(now);
+    let viewers = match share.viewers.is_empty() {
+        true => "none".to_string(),
+        false => share.viewers.join(", "),
+    };
+    println!("{}  ({:?})", share.name, share.mode);
+    println!("  {}", share.url);
+    for credential in &share.credentials {
+        println!("  {}  {}", credential.email, credential.password);
+    }
+    println!(
+        "  viewers: {viewers}  expires in {:02}:{:02}:{:02}\n",
+        left / 3600,
+        left / 60 % 60,
+        left % 60
+    );
+}
+
+fn wait_for_key() -> Result<()> {
+    print!("Press Enter to close.");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(())
+}
+
+fn start_background(
+    session_id: &str,
+    block_id: &str,
+    mode: Mode,
+    guests: &[String],
+    ttl_secs: u64,
+) -> Result<ActiveShare> {
+    let dir = shares_dir();
+    std::fs::create_dir_all(&dir)?;
+    let log_path = log_path(block_id);
+    let log = std::fs::File::create(&log_path)?;
+    let mode = match mode {
+        Mode::View => "view",
+        Mode::Input => "input",
+    };
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "share",
+            "serve",
+            "--session",
+            session_id,
+            "--block",
+            block_id,
+        ])
+        .args(["--mode", mode, "--ttl", &format!("{ttl_secs}s")])
+        .args(guests.iter().flat_map(|guest| ["--guest", guest.as_str()]))
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().context("could not start the share")?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(share) = find_share(block_id)?
+            && !share.url.is_empty()
+        {
+            return Ok(share);
+        }
+        if child.try_wait()?.is_some() || std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            bail!("the share did not start:\n{}", log.trim());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn shares_dir() -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/state"))
+        .join("wsctl/shares")
+}
+
+fn file_stem(block_id: &str) -> String {
+    block_id.replace(':', "-")
+}
+
+fn log_path(block_id: &str) -> PathBuf {
+    shares_dir().join(format!("{}.log", file_stem(block_id)))
+}
+
+fn state_path(block_id: &str) -> PathBuf {
+    shares_dir().join(format!("{}.json", file_stem(block_id)))
+}
+
+fn write_state(path: &Path, state: &ActiveShare) -> Result<()> {
+    std::fs::create_dir_all(shares_dir())?;
+    let staging = path.with_extension("tmp");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&staging)?;
+    file.write_all(serde_json::to_string(state)?.as_bytes())?;
+    std::fs::rename(staging, path)?;
+    Ok(())
+}
+
+fn alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+fn find_share(block_id: &str) -> Result<Option<ActiveShare>> {
+    Ok(active_shares()?
+        .into_iter()
+        .find(|share| share.block_id == block_id))
+}
+
+fn active_shares() -> Result<Vec<ActiveShare>> {
+    let Ok(entries) = std::fs::read_dir(shares_dir()) else {
+        return Ok(Vec::new());
+    };
+    let mut shares = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        match serde_json::from_str::<ActiveShare>(&raw) {
+            Ok(share) if alive(share.pid) => shares.push(share),
+            _ => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    Ok(shares)
 }
 
 pub fn relay(mut config: share_relay::RelayConfig, secret_file: &Path) -> Result<()> {
@@ -178,176 +428,8 @@ fn parse_ttl(text: &str) -> Result<u64> {
     Ok(number * scale)
 }
 
-#[derive(Default)]
-struct PaneState {
-    expires_at_unix: Option<u64>,
-    viewers: Vec<String>,
-    last_input: Option<String>,
-    ended: Option<String>,
-}
-
-struct Pane {
-    state: Arc<Mutex<PaneState>>,
-    mode: Mode,
-}
-
-impl Pane {
-    fn start(mode: Mode) -> Self {
-        let state = Arc::new(Mutex::new(PaneState::default()));
-        let ticking = state.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(1));
-                let state = ticking.lock().unwrap();
-                if state.ended.is_some() {
-                    break;
-                }
-                redraw(&state);
-            }
-        });
-        Self { state, mode }
-    }
-
-    fn handle(&self, event: ShareEvent) {
-        let mut state = self.state.lock().unwrap();
-        match event {
-            ShareEvent::Ready {
-                url,
-                expires_at_unix,
-                credentials,
-            } => {
-                announce(&url, self.mode, &credentials);
-                state.expires_at_unix = Some(expires_at_unix);
-            }
-            ShareEvent::ViewerJoined { email } => state.viewers.push(email),
-            ShareEvent::ViewerLeft { email } => {
-                if let Some(index) = state.viewers.iter().position(|viewer| *viewer == email) {
-                    state.viewers.remove(index);
-                }
-            }
-            ShareEvent::Input { email } => state.last_input = Some(email),
-            ShareEvent::Ended { reason } => {
-                redraw(&state);
-                println!("\nShare ended: {reason}");
-                state.ended = Some(reason);
-                return;
-            }
-        }
-        redraw(&state);
-    }
-
-    fn stop(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.ended.is_none() {
-            state.ended = Some(String::new());
-            println!();
-        }
-    }
-}
-
-fn redraw(state: &PaneState) {
-    let Some(expires_at_unix) = state.expires_at_unix else {
-        return;
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default();
-    let left = expires_at_unix.saturating_sub(now);
-    let viewers = match state.viewers.is_empty() {
-        true => "none".to_string(),
-        false => state.viewers.join(", "),
-    };
-    let input = match &state.last_input {
-        Some(email) => format!("  last input: {email}"),
-        None => String::new(),
-    };
-    print!(
-        "\r\x1b[KViewers: {viewers}  expires in {:02}:{:02}:{:02}{input}",
-        left / 3600,
-        left / 60 % 60,
-        left % 60
-    );
-    let _ = io::stdout().flush();
-}
-
-fn announce(url: &str, mode: Mode, credentials: &[GuestCredential]) {
-    println!("\n{url}\n");
-    for credential in credentials {
-        println!("  {}  {}", credential.email, credential.password);
-    }
-    println!("\nSend each guest their password privately; it is shown only once.");
-    println!("Mode:    {mode:?}");
-    println!("\nPress Enter to hide this window. Run Stop Sharing to end the share.\n");
-    let _ = io::stdout().flush();
-}
-
-fn end_on_hangup() {
-    let mut hangup: libc::sigset_t = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::sigemptyset(&mut hangup);
-        libc::sigaddset(&mut hangup, libc::SIGHUP);
-        libc::pthread_sigmask(libc::SIG_BLOCK, &hangup, std::ptr::null_mut());
-    }
-    std::thread::spawn(move || {
-        let mut signal = 0;
-        unsafe {
-            libc::sigwait(&hangup, &mut signal);
-            libc::kill(libc::getpid(), libc::SIGTERM);
-        }
-    });
-}
-
-struct Popup {
-    session_id: String,
-    shared_block_id: String,
-}
-
-impl Popup {
-    fn hide_on_enter(&self) {
-        let Ok(own_block_id) = std::env::var("REX_BLOCK") else {
-            return;
-        };
-        let session_id = self.session_id.clone();
-        let shared_block_id = self.shared_block_id.clone();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
-            let _ = minimize_floating_layer(&session_id, &own_block_id, &shared_block_id);
-        });
-    }
-}
-
-fn minimize_floating_layer(
-    session_id: &str,
-    own_block_id: &str,
-    shared_block_id: &str,
-) -> Result<()> {
-    let view = rex_call("session.view", json!({ "session_id": session_id }))?;
-    let window = window_holding(&view, own_block_id).context("own block is in no window")?;
-    let layer = window["layers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|layer| {
-            layer["kind"] != "tiled"
-                && layer["blocks"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|block| block["block_id"] == own_block_id)
-        })
-        .context("own block is not in a floating layer")?;
-    let args =
-        json!({ "session_id": session_id, "layer_id": layer["layer_id"], "state": "minimized" });
-    share_engine::rex_call(session_id, "session.set_layer_state", args)?;
-    let args = json!({ "session_id": session_id, "block_id": shared_block_id });
-    share_engine::rex_call(session_id, "session.focus_block", args).map(drop)
-}
-
 struct Marker {
+    name: String,
     session_id: String,
     window_id: String,
     label: String,
@@ -358,7 +440,11 @@ impl Marker {
         let view = rex_call("session.view", json!({ "session_id": session_id }))?;
         let window = window_holding(&view, block_id)
             .with_context(|| format!("block {block_id} is in no window of {session_id}"))?;
+        let shown = window["label"].as_str().unwrap_or_default();
+        let tab = shown.strip_prefix(MARKER).unwrap_or(shown);
+        let session = view["label"].as_str().unwrap_or_default();
         let marker = Marker {
+            name: format!("{session} / {tab}"),
             session_id: session_id.to_string(),
             window_id: window["window_id"].as_str().unwrap_or_default().to_string(),
             label: original_label(window),
@@ -408,19 +494,6 @@ fn original_label(window: &Value) -> String {
 }
 
 fn rex_call(method: &str, args: Value) -> Result<Value> {
-    let output = Command::new("rex")
-        .args(["api", "call", method, &args.to_string()])
-        .output()
-        .context("could not run rex")?;
-    if !output.status.success() {
-        bail!(
-            "rex api call {method}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    match stdout.trim().is_empty() {
-        true => Ok(Value::Null),
-        false => Ok(serde_json::from_str(&stdout)?),
-    }
+    let session_id = args["session_id"].as_str().unwrap_or_default().to_string();
+    share_engine::rex_call(&session_id, method, args)
 }
