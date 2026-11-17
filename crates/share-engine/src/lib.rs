@@ -61,6 +61,16 @@ pub fn list_tabs() -> Result<Vec<Tab>> {
     })
 }
 
+pub fn rex_call(session_id: &str, method: &str, args: Value) -> Result<Value> {
+    runtime()?.block_on(async {
+        let (control, _events) = Control::connect(&socket::server_socket()?).await?;
+        control
+            .call("session.attach", json!({"session_id": session_id}))
+            .await?;
+        control.call(method, args).await
+    })
+}
+
 pub fn run(request: ShareRequest, on_event: impl FnMut(ShareEvent)) -> Result<()> {
     runtime()?.block_on(async {
         let (control, events) = Control::connect(&socket::server_socket()?).await?;
