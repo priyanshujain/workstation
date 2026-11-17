@@ -1,52 +1,30 @@
 local wsctl = "@wsctl@"
-local share_label = "wsctl share"
 
-local function open_share(mode)
-  return function(ctx)
-    local _, err = rex.session.new_layer{
-      bounds = { 0.15, 0.15, 0.7, 0.6 },
-      focus = true,
-      layout = {
-        block = {
-          flavor = "com.superlogical.terminal.shell",
-          label = share_label,
-          options = {
-            command = { wsctl, "share", "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode },
-            exit = { on_completion = false },
-          },
-        },
+local function open_pane(label, command, bounds)
+  local _, err = rex.session.new_layer{
+    bounds = bounds,
+    focus = true,
+    layout = {
+      block = {
+        flavor = "com.superlogical.terminal.shell",
+        label = label,
+        options = { command = command, exit = { on_completion = true } },
       },
-    }
-    if err ~= nil then error(err, 0) end
-  end
-end
-
-local function holds(layer, label)
-  for _, block in ipairs(layer.blocks or {}) do
-    if block.label == label then return true end
-  end
-  return false
-end
-
-local function holds_block(window, block_id)
-  for _, layer in ipairs(window.layers or {}) do
-    for _, block in ipairs(layer.blocks or {}) do
-      if block.block_id == block_id then return true end
-    end
-  end
-  return false
+    },
+  }
+  if err ~= nil then error(err, 0) end
 end
 
 local function flash(message)
   rex.session.new_layer{
-    bounds = { 0.35, 0.4, 0.3, 0.12 },
+    bounds = { 0.3, 0.4, 0.4, 0.12 },
     focus = false,
     layout = {
       block = {
         flavor = "com.superlogical.terminal.shell",
-        label = message,
+        label = "wsctl share",
         options = {
-          command = { "/bin/sh", "-c", "printf '\\n  %s' \"$1\"; sleep 2", "sh", message },
+          command = { "/bin/sh", "-c", "printf '\\n  %s' \"$1\"; sleep 3", "sh", message },
           exit = { on_completion = true },
         },
       },
@@ -54,27 +32,29 @@ local function flash(message)
   }
 end
 
-local function stop_sharing(ctx)
-  local view, err = rex.session.view{}
-  if err ~= nil then error(err, 0) end
-  local stopped = 0
-  for _, window in ipairs(view.windows or {}) do
-    if holds_block(window, ctx.block_id) then
-      for _, layer in ipairs(window.layers or {}) do
-        if layer.kind ~= "tiled" and holds(layer, share_label) then
-          rex.session.close_layer{ layer_id = layer.layer_id }
-          stopped = stopped + 1
-        end
-      end
-    end
-  end
-  if stopped > 0 then
-    flash("Sharing stopped")
-  else
-    flash("This tab is not shared")
+local function share_tab(mode)
+  return function(ctx)
+    open_pane("Share Tab", { wsctl, "share", "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode },
+      { 0.2, 0.2, 0.6, 0.5 })
   end
 end
 
-rex.action{ name = "share_tab_view", title = "Share Tab (view)", category = "Share", run = open_share("view") }
-rex.action{ name = "share_tab_input", title = "Share Tab (input)", category = "Share", run = open_share("input") }
+local function stop_sharing(ctx)
+  local result, err = rex.exec{ wsctl, "share", "stop", "--block", ctx.block_id }
+  if err ~= nil then
+    flash("Stop Sharing failed: " .. tostring(err))
+  elseif not result.ok then
+    flash("Stop Sharing failed: " .. result.stderr)
+  else
+    flash((result.stdout:gsub("%s+$", "")))
+  end
+end
+
+local function shared_tabs()
+  open_pane("Shared Tabs", { wsctl, "share", "list", "--wait" }, { 0.15, 0.15, 0.7, 0.6 })
+end
+
+rex.action{ name = "share_tab_view", title = "Share Tab (view)", category = "Share", run = share_tab("view") }
+rex.action{ name = "share_tab_input", title = "Share Tab (input)", category = "Share", run = share_tab("input") }
 rex.action{ name = "stop_sharing", title = "Stop Sharing", category = "Share", run = stop_sharing }
+rex.action{ name = "shared_tabs", title = "Shared Tabs", category = "Share", run = shared_tabs }
