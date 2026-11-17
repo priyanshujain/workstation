@@ -37,17 +37,41 @@ local function holds_block(window, block_id)
   return false
 end
 
+local function flash(message)
+  rex.session.new_layer{
+    bounds = { 0.35, 0.4, 0.3, 0.12 },
+    focus = false,
+    layout = {
+      block = {
+        flavor = "com.superlogical.terminal.shell",
+        label = message,
+        options = {
+          command = { "/bin/sh", "-c", "printf '\\n  %s' \"$1\"; sleep 2", "sh", message },
+          exit = { on_completion = true },
+        },
+      },
+    },
+  }
+end
+
 local function stop_sharing(ctx)
   local view, err = rex.session.view{}
   if err ~= nil then error(err, 0) end
+  local stopped = 0
   for _, window in ipairs(view.windows or {}) do
     if holds_block(window, ctx.block_id) then
       for _, layer in ipairs(window.layers or {}) do
         if layer.kind ~= "tiled" and holds(layer, share_label) then
           rex.session.close_layer{ layer_id = layer.layer_id }
+          stopped = stopped + 1
         end
       end
     end
+  end
+  if stopped > 0 then
+    flash("Sharing stopped")
+  else
+    flash("This tab is not shared")
   end
 end
 
