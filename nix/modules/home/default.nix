@@ -177,7 +177,7 @@ in
         secret_file = cfg.share.secretFile;
       };
       xdg.configFile."rex/wsctl-share.lua".source = pkgs.replaceVars ./wsctl-share.lua {
-        wsctl = lib.getExe cfg.package;
+        wsctl = "${config.home.profileDirectory}/bin/wsctl";
       };
     })
 
