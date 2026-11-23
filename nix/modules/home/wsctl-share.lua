@@ -1,5 +1,3 @@
-local wsctl = "@wsctl@"
-
 local function open_pane(label, command, bounds)
   local _, err = rex.session.new_layer{
     bounds = bounds,
@@ -15,43 +13,20 @@ local function open_pane(label, command, bounds)
   if err ~= nil then error(err, 0) end
 end
 
-local function flash(message)
-  rex.session.new_layer{
-    bounds = { 0.3, 0.4, 0.4, 0.12 },
-    focus = false,
-    layout = {
-      block = {
-        flavor = "com.superlogical.terminal.shell",
-        label = "wsctl share",
-        options = {
-          command = { "/bin/sh", "-c", "printf '\\n  %s' \"$1\"; sleep 3", "sh", message },
-          exit = { on_completion = true },
-        },
-      },
-    },
-  }
-end
-
 local function share_tab(mode)
   return function(ctx)
-    open_pane("Share Tab", { wsctl, "share", "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode },
+    open_pane("Share Tab", { "wsctl", "share", "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode },
       { 0.2, 0.2, 0.6, 0.5 })
   end
 end
 
 local function stop_sharing(ctx)
-  local result, err = rex.exec{ wsctl, "share", "stop", "--block", ctx.block_id }
-  if err ~= nil then
-    flash("Stop Sharing failed: " .. tostring(err))
-  elseif not result.ok then
-    flash("Stop Sharing failed: " .. result.stderr)
-  else
-    flash((result.stdout:gsub("%s+$", "")))
-  end
+  open_pane("Stop Sharing", { "/bin/sh", "-c", "wsctl share stop --block \"$1\"; sleep 3", "sh", ctx.block_id },
+    { 0.3, 0.4, 0.4, 0.12 })
 end
 
 local function shared_tabs()
-  open_pane("Shared Tabs", { wsctl, "share", "list", "--wait" }, { 0.15, 0.15, 0.7, 0.6 })
+  open_pane("Shared Tabs", { "wsctl", "share", "list", "--wait" }, { 0.15, 0.15, 0.7, 0.6 })
 end
 
 rex.action{ name = "share_tab_view", title = "Share Tab (view)", category = "Share", run = share_tab("view") }

@@ -176,9 +176,7 @@ in
         relay_url = cfg.share.relayUrl;
         secret_file = cfg.share.secretFile;
       };
-      xdg.configFile."rex/wsctl-share.lua".source = pkgs.replaceVars ./wsctl-share.lua {
-        wsctl = "${config.home.profileDirectory}/bin/wsctl";
-      };
+      xdg.configFile."rex/wsctl-share.lua".source = ./wsctl-share.lua;
     })
 
     (lib.mkIf (pkgs.stdenv.isDarwin && (cfg.defaultApps.types != { } || cfg.defaultApps.replace != { })) {
