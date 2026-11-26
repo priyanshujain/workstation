@@ -11,12 +11,18 @@ pub fn unattended() -> bool {
 
 pub fn sudo() -> Command {
     let mut command = Command::new("sudo");
-    if unattended() {
-        command.arg("-n");
-    } else if askpass_wanted() {
-        command.arg("-A");
-    }
+    command.args(sudo_flag());
     command
+}
+
+pub fn sudo_flag() -> Option<&'static str> {
+    if unattended() {
+        Some("-n")
+    } else if askpass_wanted() {
+        Some("-A")
+    } else {
+        None
+    }
 }
 
 fn askpass_wanted() -> bool {
