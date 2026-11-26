@@ -13,6 +13,13 @@ in
       defaultText = lib.literalExpression "workstation.packages.\${system}.wsctl";
     };
 
+    pinentry.package = lib.mkOption {
+      type = lib.types.package;
+      default = if pkgs.stdenv.isDarwin then pkgs.pinentry_mac else pkgs.pinentry-qt;
+      defaultText = lib.literalExpression "if pkgs.stdenv.isDarwin then pkgs.pinentry_mac else pkgs.pinentry-qt";
+      description = "pinentry that shows the password dialog when wsctl needs root without a terminal.";
+    };
+
     agents = lib.mkOption {
       default = [ ];
       description = "Commands that start coding agents, and the environment variable each one sets in its children.";
@@ -143,7 +150,10 @@ in
   };
 
   config = lib.mkMerge [
-    { home.packages = [ cfg.package ]; }
+    {
+      home.packages = [ cfg.package ];
+      home.sessionVariables.WSCTL_PINENTRY = lib.getExe cfg.pinentry.package;
+    }
 
     (lib.mkIf (cfg.agents != [ ]) {
       xdg.configFile."wsctl/agents.json".text = builtins.toJSON { inherit (cfg) agents; };
