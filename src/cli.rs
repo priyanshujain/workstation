@@ -262,7 +262,7 @@ pub enum DiskCommand {
 
 #[derive(Args)]
 pub struct ShareArgs {
-    /// Block to share; asks with a picker when left out
+    /// Block to share; asks for a tab number on a terminal when left out
     #[arg(long, requires = "session")]
     pub block: Option<String>,
 
@@ -270,15 +270,15 @@ pub struct ShareArgs {
     #[arg(long, requires = "block")]
     pub session: Option<String>,
 
-    /// What guests may do; asks when left out
+    /// What guests may do; asks on a terminal when left out
     #[arg(long, value_enum)]
     pub mode: Option<ShareMode>,
 
-    /// Email of a guest who may sign in (repeatable); asks when left out
+    /// Email of a guest who may sign in (repeatable); asks on a terminal when left out
     #[arg(long = "guest", value_name = "EMAIL")]
     pub guests: Vec<String>,
 
-    /// How long the link lives, such as 30m or 2h; asks when left out
+    /// How long the link lives, such as 30m or 2h; asks on a terminal, else 1h
     #[arg(long)]
     pub ttl: Option<String>,
 }

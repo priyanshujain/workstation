@@ -11,6 +11,7 @@ use share_protocol::{GuestCredential, ManageReply, ManageRequest, Mode, SharedTa
 use std::os::unix::fs::OpenOptionsExt;
 
 const MARKER: &str = "shared: ";
+const DEFAULT_TTL: &str = "1h";
 
 pub struct Target {
     pub block: Option<String>,
@@ -341,6 +342,9 @@ struct ActiveShare {
 }
 
 fn wait_for_key() -> Result<()> {
+    if !io::stdin().is_terminal() {
+        return Ok(());
+    }
     print!("Press Enter to close.");
     io::stdout().flush()?;
     let mut line = String::new();
@@ -554,6 +558,7 @@ fn ask(prompt: &str) -> Result<String> {
 }
 
 fn ask_mode() -> Result<Mode> {
+    require_terminal("--mode")?;
     loop {
         match ask("Guests may [v]iew or also [i]nput? ")?.as_str() {
             "v" | "view" => return Ok(Mode::View),
@@ -564,9 +569,16 @@ fn ask_mode() -> Result<Mode> {
 }
 
 fn ask_ttl() -> Result<u64> {
+    if !io::stdin().is_terminal() {
+        return parse_ttl(DEFAULT_TTL);
+    }
     loop {
-        let answer = ask("Expires after [1h]: ")?;
-        match parse_ttl(if answer.is_empty() { "1h" } else { &answer }) {
+        let answer = ask(&format!("Expires after [{DEFAULT_TTL}]: "))?;
+        match parse_ttl(if answer.is_empty() {
+            DEFAULT_TTL
+        } else {
+            &answer
+        }) {
             Ok(secs) => return Ok(secs),
             Err(error) => eprintln!("{error}"),
         }
