@@ -321,6 +321,16 @@ pub enum ShareCommand {
         yes: bool,
     },
 
+    /// Forget a guest: take them off every tab and delete their password
+    Forget {
+        /// Guest email
+        email: String,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Stop sharing a tab
     Stop {
         /// Block whose share to stop

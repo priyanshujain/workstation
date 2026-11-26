@@ -407,6 +407,22 @@ pub fn reset_password(email: &str, yes: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn forget(email: &str, yes: bool) -> Result<()> {
+    let relay = Relay::connect()?;
+    let (known, _) = relay.state()?;
+    let email = known_guest(&known, email)?;
+    let question = format!("Forget {email}? They lose every tab and their password.");
+    if !confirm(yes, &question)? {
+        println!("Nothing changed.");
+        return Ok(());
+    }
+    relay.call(ManageRequest::ForgetGuest {
+        email: email.clone(),
+    })?;
+    println!("Forgot {email}.");
+    Ok(())
+}
+
 fn known_guest(known: &[String], email: &str) -> Result<String> {
     let email = email.trim().to_lowercase();
     if !known.contains(&email) {

@@ -176,6 +176,7 @@ fn main() -> anyhow::Result<()> {
                 ShareCommand::ResetPassword { email, yes } => {
                     commands::share::reset_password(&email, yes)?
                 }
+                ShareCommand::Forget { email, yes } => commands::share::forget(&email, yes)?,
                 ShareCommand::Stop { block, all } => commands::share::stop(block, all)?,
                 ShareCommand::Serve { target } => commands::share::serve(share_target(target))?,
                 ShareCommand::Relay {
