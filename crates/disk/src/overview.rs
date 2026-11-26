@@ -145,7 +145,7 @@ fn read_other_volumes() -> Vec<Volume> {
     Vec::new()
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn volumes_besides_data(list: &plist::Value, nix_device: Option<&str>) -> Vec<Volume> {
     let volumes = list
         .as_dictionary()
