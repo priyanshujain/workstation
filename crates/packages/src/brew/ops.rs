@@ -1,4 +1,4 @@
-//! Homebrew uninstall operations: removal, autoremove, verification, dependents.
+//! Homebrew uninstall operations: removal, autoremove, verification.
 
 use crate::brew::info::PkgKind;
 use wsctl_core::{CommandRunner, Error, Result};
@@ -47,23 +47,6 @@ pub fn is_installed(runner: &dyn CommandRunner, name: &str, kind: PkgKind) -> Re
     };
     let out = runner.run("brew", &["list", kind_flag, name])?;
     Ok(out.success)
-}
-
-/// `brew uses --installed <name>`: returns names of installed packages that
-/// directly depend on `name`. Only meaningful for formulae.
-pub fn dependents(runner: &dyn CommandRunner, name: &str) -> Result<Vec<String>> {
-    let out = runner.run("brew", &["uses", "--installed", name])?;
-    if !out.success {
-        return Err(Error::CommandFailed {
-            command: format!("brew uses --installed {name}"),
-            stderr: out.stderr,
-        });
-    }
-    Ok(out
-        .stdout
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect())
 }
 
 #[cfg(test)]
@@ -137,30 +120,6 @@ mod tests {
         );
         assert!(is_installed(mock.as_ref(), "fzf", PkgKind::Formula).unwrap());
         assert!(!is_installed(mock.as_ref(), "vlc", PkgKind::Cask).unwrap());
-        mock.verify();
-    }
-
-    #[test]
-    fn dependents_splits_whitespace_output() {
-        let mock = Arc::new(MockCommandRunner::new().expect(
-            "brew",
-            &["uses", "--installed", "pcre2"],
-            CommandOutput::success("ripgrep\nfd\nbat\n"),
-        ));
-        let deps = dependents(mock.as_ref(), "pcre2").unwrap();
-        assert_eq!(deps, vec!["ripgrep", "fd", "bat"]);
-        mock.verify();
-    }
-
-    #[test]
-    fn dependents_empty_when_no_uses() {
-        let mock = Arc::new(MockCommandRunner::new().expect(
-            "brew",
-            &["uses", "--installed", "orphan"],
-            CommandOutput::success(""),
-        ));
-        let deps = dependents(mock.as_ref(), "orphan").unwrap();
-        assert!(deps.is_empty());
         mock.verify();
     }
 }
