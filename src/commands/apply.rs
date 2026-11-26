@@ -366,7 +366,11 @@ pub mod linux {
                 out.status
             );
         }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let profile = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if profile.is_empty() {
+            bail!("system-manager build --flake {system} printed no store path");
+        }
+        Ok(profile)
     }
 
     const STATE: &str = "/var/lib/system-manager/state/system-manager-state.json";
