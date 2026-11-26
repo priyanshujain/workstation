@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use console::style;
 use serde::Deserialize;
+use wsctl_core::privilege::confirm;
 
 mod workspace;
 
@@ -160,7 +161,7 @@ pub fn describe(mismatch: &Mismatch) -> String {
     )
 }
 
-pub fn run() -> Result<()> {
+pub fn run(yes: bool) -> Result<()> {
     let report = report()?
         .with_context(|| format!("no default apps declared in {}", rules_path().display()))?;
     if report.mismatches.is_empty() {
@@ -174,7 +175,7 @@ pub fn run() -> Result<()> {
         "macOS asks once per type; choose the new app in each of the {} dialogs.",
         report.mismatches.len()
     );
-    if !confirm("Set them now?")? {
+    if !confirm(yes, "Set them now?")? {
         return Ok(());
     }
     for mismatch in &report.mismatches {
@@ -194,13 +195,4 @@ pub fn run() -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn confirm(prompt: &str) -> Result<bool> {
-    use std::io::Write;
-    print!("{prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
 }

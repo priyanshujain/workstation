@@ -109,7 +109,11 @@ pub enum Commands {
 
     #[cfg(target_os = "macos")]
     /// Point each declared file type at its declared app; macOS asks once per changed type
-    DefaultApps,
+    DefaultApps {
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 
     #[cfg(target_os = "macos")]
     /// Keep the menu bar on a chosen monitor across dock reconnects
