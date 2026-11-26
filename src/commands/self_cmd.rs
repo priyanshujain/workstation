@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use console::style;
 use std::path::{Path, PathBuf};
+use wsctl_core::privilege::confirm;
 
 pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     let path = std::env::current_exe().context("could not determine current executable path")?;
@@ -27,7 +28,7 @@ pub fn uninstall(yes: bool, purge: bool) -> Result<()> {
     }
     println!();
 
-    if !confirm("Continue with uninstall?", yes)? {
+    if !confirm(yes, "Continue with uninstall?")? {
         println!("{} Aborted.", style("×").red());
         return Ok(());
     }
@@ -77,18 +78,6 @@ fn remove_paths(paths: &[PathBuf]) -> Result<()> {
         result.with_context(|| format!("failed to remove {}", path.display()))?;
     }
     Ok(())
-}
-
-fn confirm(prompt: &str, yes: bool) -> Result<bool> {
-    if yes {
-        return Ok(true);
-    }
-    use std::io::Write;
-    print!("{prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
 
 #[cfg(test)]
