@@ -275,6 +275,10 @@ impl Target {
         self.clean_by(sudo_rm_rf)
     }
 
+    pub fn clean_or_sudo(&self) -> Result<u64, String> {
+        self.clean_by(rm_rf_or_sudo)
+    }
+
     fn clean_by(&self, remove: fn(&Path) -> Result<(), String>) -> Result<u64, String> {
         if self.size.denials().unattended > 0 {
             return Err(format!("{} left closed: needs Full Disk Access", self.name));
@@ -392,6 +396,7 @@ fn rm_rf(path: &Path) -> Result<(), String> {
     let _ = Command::new("chmod").args(["-R", "u+w"]).arg(path).output();
 
     let output = Command::new("rm")
+        .env("LC_ALL", "C")
         .arg("-rf")
         .arg(path)
         .output()
@@ -401,6 +406,13 @@ fn rm_rf(path: &Path) -> Result<(), String> {
         return Err(format!("rm -rf {}: {}", path.display(), stderr.trim()));
     }
     Ok(())
+}
+
+fn rm_rf_or_sudo(path: &Path) -> Result<(), String> {
+    match rm_rf(path) {
+        Err(reason) if reason.contains("Permission denied") => sudo_rm_rf(path),
+        outcome => outcome,
+    }
 }
 
 fn sudo_rm_rf(path: &Path) -> Result<(), String> {
