@@ -149,16 +149,8 @@ pub fn sync(target: &Target, pins: Option<Pins>, named: &[String], dry_run: bool
     pins::commit_lock(target, &inputs)
 }
 
-pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
-    let applied = apply_system(target, dry_run);
-    if !dry_run {
-        let _ = wsctl_core::privilege::sudo().arg("-k").status();
-    }
-    applied
-}
-
 #[cfg(target_os = "macos")]
-fn apply_system(target: &Target, dry_run: bool) -> Result<()> {
+pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
     let attr = target.attr();
     if dry_run {
         step(&format!("darwin-rebuild build --flake {attr}"));
@@ -204,9 +196,7 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     use std::sync::mpsc::{RecvTimeoutError, channel};
     use std::time::Duration;
 
-    if !sudo_already_authorised() {
-        run_sudo(&["-v"])?;
-    }
+    let _ticket = SudoTicket::obtain()?;
     let (stop, stopped) = channel::<()>();
     let refresher = std::thread::spawn(move || {
         while stopped.recv_timeout(Duration::from_secs(60)) == Err(RecvTimeoutError::Timeout) {
@@ -223,6 +213,30 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     result
 }
 
+struct SudoTicket {
+    granted_here: bool,
+}
+
+impl SudoTicket {
+    fn obtain() -> Result<Self> {
+        if sudo_already_authorised() {
+            return Ok(Self {
+                granted_here: false,
+            });
+        }
+        run_sudo(&["-v"])?;
+        Ok(Self { granted_here: true })
+    }
+}
+
+impl Drop for SudoTicket {
+    fn drop(&mut self) {
+        if self.granted_here {
+            let _ = wsctl_core::privilege::sudo().arg("-k").status();
+        }
+    }
+}
+
 fn sudo_already_authorised() -> bool {
     wsctl_core::privilege::sudo()
         .args(["-n", "true"])
@@ -233,7 +247,7 @@ fn sudo_already_authorised() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn apply_system(target: &Target, dry_run: bool) -> Result<()> {
+pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
     if dry_run {
         return linux::run_apply(target, true);
     }
