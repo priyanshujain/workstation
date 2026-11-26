@@ -10,6 +10,8 @@ use disk::offers::{ids, offers};
 use disk::util::format_size;
 use wsctl_core::privilege::confirm;
 
+use super::table::{self, size_label};
+
 struct Item {
     id: String,
     comes_back: &'static str,
@@ -304,14 +306,6 @@ fn action_label(action: &CleanAction) -> &'static str {
     }
 }
 
-fn size_label(size: Size) -> String {
-    match (size.total(), size.bytes()) {
-        (Some(bytes), _) => format_size(bytes),
-        (None, 0) => "unknown".to_string(),
-        (None, bytes) => format!(">= {}", format_size(bytes)),
-    }
-}
-
 fn total_label(sizes: &[Size]) -> String {
     let bytes: u64 = sizes.iter().map(|size| size.bytes()).sum();
     let complete = sizes.iter().all(|size| size.total().is_some());
@@ -334,18 +328,10 @@ fn where_label(target: &Target) -> String {
 }
 
 fn print_table(items: &[Item], live: &Liveness) {
-    let header = [
-        "ID".to_string(),
-        "ACTION".to_string(),
-        "SIZE".to_string(),
-        "COMES BACK".to_string(),
-        "STATUS".to_string(),
-        "PATH".to_string(),
-    ];
-    let rows: Vec<[String; 6]> = items
+    let rows: Vec<Vec<String>> = items
         .iter()
         .map(|item| {
-            [
+            vec![
                 item.id.clone(),
                 action_label(item.target.action()).to_string(),
                 size_label(item.target.size()),
@@ -355,38 +341,8 @@ fn print_table(items: &[Item], live: &Liveness) {
             ]
         })
         .collect();
-    let widths: Vec<usize> = (0..5)
-        .map(|column| {
-            std::iter::once(&header)
-                .chain(&rows)
-                .map(|row| row[column].chars().count())
-                .max()
-                .unwrap_or(0)
-        })
-        .collect();
-    print_row(&header, &widths, true);
-    for row in &rows {
-        print_row(row, &widths, false);
-    }
-}
-
-fn print_row(row: &[String; 6], widths: &[usize], bold: bool) {
-    let line = format!(
-        "{:<w0$}  {:<w1$}  {:>w2$}  {:<w3$}  {:<w4$}  {}",
-        row[0],
-        row[1],
-        row[2],
-        row[3],
-        row[4],
-        row[5],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2],
-        w3 = widths[3],
-        w4 = widths[4],
+    table::print(
+        &["ID", "ACTION", "SIZE", "COMES BACK", "STATUS", "PATH"],
+        &rows,
     );
-    match bold {
-        true => println!("{}", style(line).bold()),
-        false => println!("{line}"),
-    }
 }
