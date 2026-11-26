@@ -68,9 +68,9 @@ fn add_guests(
     guests: Vec<String>,
     known: &[String],
 ) -> Result<()> {
-    let name = format!("{} / {}", shared.share.session_label, shared.share.label);
     println!(
-        "{name} is already shared ({}).",
+        "{} is already shared ({}).",
+        tab_title(shared),
         mode_text(shared.share.mode)
     );
     println!("Guests: {}\n", shared.share.guests.join(", "));
@@ -281,30 +281,67 @@ pub fn serve(target: Target) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
-    let (_, shares) = Relay::connect()?.state()?;
+    let (guests, shares) = Relay::connect()?.state()?;
+    print_tabs(&shares);
+    print_guests(&guests, &shares);
+    Ok(())
+}
+
+fn print_tabs(shares: &[SharedTab]) {
     if shares.is_empty() {
-        println!("No tab is shared.");
+        println!("No tab is shared.\n");
     }
-    for tab in &shares {
-        let watching = match tab.watching.is_empty() {
-            true => "nobody".to_string(),
-            false => tab.watching.join(", "),
-        };
+    for tab in shares {
         println!(
-            "{} / {} on {}  ({})",
-            tab.share.session_label,
-            tab.share.label,
+            "{} on {}  ({})",
+            tab_title(tab),
             tab.share.host,
             mode_text(tab.share.mode)
         );
-        println!("  {}", tab.url);
-        println!("  guests: {}", tab.share.guests.join(", "));
-        println!(
-            "  watching: {watching}  ends in {}\n",
-            ends_in(tab.share.expires_at_unix)
-        );
+        println!("  session  {}", tab.share.session_id);
+        println!("  block    {}", tab.share.block_id);
+        println!("  link     {}", tab.url);
+        println!("  ends in  {}", ends_in(tab.share.expires_at_unix));
+        println!("  guests   {}\n", guests_of(tab).join(", "));
     }
-    Ok(())
+}
+
+fn guests_of(tab: &SharedTab) -> Vec<String> {
+    tab.share
+        .guests
+        .iter()
+        .map(|email| match tab.watching.contains(email) {
+            true => format!("{email} (watching)"),
+            false => email.clone(),
+        })
+        .collect()
+}
+
+fn print_guests(guests: &[String], shares: &[SharedTab]) {
+    if guests.is_empty() {
+        println!("No guests yet.");
+        return;
+    }
+    println!("Guests:");
+    let width = guests.iter().map(String::len).max().unwrap_or(0);
+    for email in guests {
+        let tabs: Vec<String> = tabs_of(shares, email).map(tab_title).collect();
+        let tabs = match tabs.is_empty() {
+            true => "no tabs".to_string(),
+            false => tabs.join(", "),
+        };
+        println!("  {email:width$}  {tabs}");
+    }
+}
+
+fn tabs_of<'a>(shares: &'a [SharedTab], email: &'a str) -> impl Iterator<Item = &'a SharedTab> {
+    shares
+        .iter()
+        .filter(move |tab| tab.share.guests.iter().any(|guest| guest == email))
+}
+
+fn tab_title(tab: &SharedTab) -> String {
+    format!("{} / {}", tab.share.session_label, tab.share.label)
 }
 
 pub fn manage() -> Result<()> {
