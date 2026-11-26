@@ -93,7 +93,8 @@ fn main() -> anyhow::Result<()> {
                 Some(DiskCommand::List {
                     no_cache, refresh, ..
                 }) => *no_cache || !refresh.is_empty() || cache_missing(),
-                Some(DiskCommand::Browse { .. } | DiskCommand::Clean) => true,
+                Some(DiskCommand::Browse { no_cache }) => *no_cache || cache_missing(),
+                Some(DiskCommand::Clean) => true,
                 Some(DiskCommand::Refresh | DiskCommand::Projects { .. }) => false,
             };
             if walks {
@@ -104,13 +105,7 @@ fn main() -> anyhow::Result<()> {
             }
             match sub {
                 None => commands::disk::summary(no_cache, &refresh)?,
-                Some(DiskCommand::Browse { no_cache }) => {
-                    if std::io::stdout().is_terminal() {
-                        tui::audit::run(no_cache)?;
-                    } else {
-                        commands::audit::run_report(no_cache)?;
-                    }
-                }
+                Some(DiskCommand::Browse { no_cache }) => commands::audit::run_report(no_cache)?,
                 Some(DiskCommand::Clean) => {
                     if std::io::stdout().is_terminal() {
                         tui::cleanup::run()?;

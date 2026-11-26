@@ -181,7 +181,7 @@ pub enum DisplayCommand {
 
 #[derive(Subcommand)]
 pub enum DiskCommand {
-    /// Browse usage folder by folder, or print the full report when piped
+    /// Print the full disk report
     Browse {
         /// Rescan instead of reading the cached report, and refresh the cache
         #[arg(long)]
