@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Result, bail};
 use console::style;
+use disk::cleanup::Size;
 use disk::util::format_size;
 use packages::brew::info::{self, InstalledPackage, PkgKind};
 use packages::brew::ops;
@@ -9,6 +10,7 @@ use wsctl_core::privilege::confirm;
 use wsctl_core::{CommandRunner, SystemCommandRunner};
 
 use super::apply::{Target, output};
+use super::table::{self, size_label};
 
 struct Declared {
     brews: BTreeSet<String>,
@@ -137,7 +139,7 @@ pub fn list(target: &Target) -> Result<()> {
                 package.name.clone(),
                 kind_label(package.kind).to_string(),
                 package.version.clone().unwrap_or_else(|| "-".to_string()),
-                size_label(package.size_bytes),
+                size_label(package_size(package.size_bytes)),
                 inventory.state(package).to_string(),
                 package
                     .installed_at
@@ -146,7 +148,7 @@ pub fn list(target: &Target) -> Result<()> {
             ]
         })
         .collect();
-    print_table(
+    table::print(
         &[
             "NAME",
             "KIND",
@@ -293,7 +295,7 @@ fn print_plan(order: &[&InstalledPackage], refusals: &[Option<String>]) {
                 (step + 1).to_string(),
                 package.name.clone(),
                 kind_label(package.kind).to_string(),
-                size_label(package.size_bytes),
+                size_label(package_size(package.size_bytes)),
                 refusal.as_ref().map_or_else(
                     || "ready".to_string(),
                     |reason| format!("refused: {reason}"),
@@ -301,7 +303,7 @@ fn print_plan(order: &[&InstalledPackage], refusals: &[Option<String>]) {
             ]
         })
         .collect();
-    print_table(&["STEP", "NAME", "KIND", "SIZE", "STATUS"], &rows);
+    table::print(&["STEP", "NAME", "KIND", "SIZE", "STATUS"], &rows);
 }
 
 fn print_orphans(orphans: &[&InstalledPackage]) {
@@ -384,10 +386,10 @@ fn kind_label(kind: PkgKind) -> &'static str {
     }
 }
 
-fn size_label(bytes: u64) -> String {
+fn package_size(bytes: u64) -> Size {
     match bytes {
-        0 => "-".to_string(),
-        _ => format_size(bytes),
+        0 => Size::Unknown(0),
+        _ => Size::known(bytes),
     }
 }
 
@@ -397,34 +399,4 @@ fn format_date(unix_secs: u64) -> String {
         .ok()
         .and_then(|date| date.format(&format).ok())
         .unwrap_or_else(|| "-".to_string())
-}
-
-fn print_table(header: &[&str], rows: &[Vec<String>]) {
-    let last = header.len() - 1;
-    let widths: Vec<usize> = (0..last)
-        .map(|column| {
-            rows.iter()
-                .map(|row| row[column].chars().count())
-                .chain([header[column].len()])
-                .max()
-                .unwrap_or(0)
-        })
-        .collect();
-    let header: Vec<String> = header.iter().map(|cell| cell.to_string()).collect();
-    println!("{}", style(table_line(&header, &widths)).bold());
-    for row in rows {
-        println!("{}", table_line(row, &widths));
-    }
-}
-
-fn table_line(row: &[String], widths: &[usize]) -> String {
-    let cells: Vec<String> = row
-        .iter()
-        .enumerate()
-        .map(|(column, cell)| match widths.get(column) {
-            Some(width) => format!("{cell:<width$}"),
-            None => cell.clone(),
-        })
-        .collect();
-    cells.join("  ").trim_end().to_string()
 }
