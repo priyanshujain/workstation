@@ -193,11 +193,13 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     use std::sync::mpsc::{RecvTimeoutError, channel};
     use std::time::Duration;
 
-    run_sudo(&["-v"])?;
+    if !sudo_already_authorised() {
+        run_sudo(&["-v"])?;
+    }
     let (stop, stopped) = channel::<()>();
     let refresher = std::thread::spawn(move || {
         while stopped.recv_timeout(Duration::from_secs(60)) == Err(RecvTimeoutError::Timeout) {
-            let _ = Command::new("sudo")
+            let _ = wsctl_core::privilege::sudo()
                 .args(["-n", "-v"])
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
@@ -208,6 +210,16 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     drop(stop);
     let _ = refresher.join();
     result
+}
+
+#[cfg(target_os = "macos")]
+fn sudo_already_authorised() -> bool {
+    wsctl_core::privilege::sudo()
+        .args(["-n", "true"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 #[cfg(target_os = "linux")]
