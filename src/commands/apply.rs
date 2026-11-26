@@ -530,20 +530,54 @@ pub mod linux {
             }
             run("cp", &["-r", src, &dir.display().to_string()])?;
             run("chmod", &["-R", "u+w", &dir.display().to_string()])?;
-            let config = dir.join("wsctl-makepkg.conf");
-            std::fs::write(&config, makepkg_config())?;
-            let status = std::process::Command::new("makepkg")
-                .args(["-si", "--noconfirm", "--needed", "--config"])
-                .arg(&config)
-                .current_dir(&dir)
-                .status()
-                .context("could not run makepkg")?;
+            let built = build_and_install(name, &dir);
             std::fs::remove_dir_all(&dir)?;
-            if !status.success() {
-                anyhow::bail!("makepkg for {name} failed with {status}");
-            }
+            built?;
         }
         Ok(())
+    }
+
+    fn build_and_install(name: &str, dir: &Path) -> Result<()> {
+        let config = dir.join("wsctl-makepkg.conf");
+        std::fs::write(&config, makepkg_config())?;
+        let status = makepkg(dir, &config)
+            .args(["-s", "--noconfirm", "--needed"])
+            .status()
+            .context("could not run makepkg")?;
+        if !status.success() {
+            bail!("makepkg for {name} failed with {status}");
+        }
+        let packages = built_packages(dir, &config)?;
+        if packages.is_empty() {
+            bail!("makepkg for {name} built no package file");
+        }
+        let mut args = vec!["pacman", "-U", "--needed", "--noconfirm"];
+        args.extend(packages.iter().map(String::as_str));
+        run_sudo(&args)
+    }
+
+    fn makepkg(dir: &Path, config: &Path) -> std::process::Command {
+        let mut command = std::process::Command::new("makepkg");
+        command.arg("--config").arg(config).current_dir(dir);
+        command
+    }
+
+    fn built_packages(dir: &Path, config: &Path) -> Result<Vec<String>> {
+        let out = makepkg(dir, config)
+            .arg("--packagelist")
+            .output()
+            .context("could not run makepkg --packagelist")?;
+        if !out.status.success() {
+            bail!(
+                "makepkg --packagelist failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|file| Path::new(file).is_file())
+            .map(str::to_string)
+            .collect())
     }
 
     fn makepkg_config() -> String {
