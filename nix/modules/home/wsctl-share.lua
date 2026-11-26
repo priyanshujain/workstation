@@ -15,8 +15,8 @@ end
 
 local function share_tab(mode)
   return function(ctx)
-    open_pane("Share Tab", { "wsctl", "share", "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode },
-      { 0.2, 0.2, 0.6, 0.5 })
+    open_pane("Share Tab", { "/bin/sh", "-c", "wsctl share \"$@\" || { printf 'Press Enter to close.'; read _; }", "sh",
+      "--session", ctx.session_id, "--block", ctx.block_id, "--mode", mode }, { 0.2, 0.2, 0.6, 0.5 })
   end
 end
 
@@ -26,7 +26,8 @@ local function stop_sharing(ctx)
 end
 
 local function shared_tabs()
-  open_pane("Shared Tabs", { "wsctl", "share", "manage" }, { 0.15, 0.15, 0.7, 0.6 })
+  open_pane("Shared Tabs", { "/bin/sh", "-c", "wsctl share manage; exec \"${SHELL:-/bin/sh}\"" },
+    { 0.15, 0.15, 0.7, 0.6 })
 end
 
 rex.action{ name = "share_tab_view", title = "Share Tab (view)", category = "Share", run = share_tab("view") }
