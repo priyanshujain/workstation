@@ -170,6 +170,9 @@ fn main() -> anyhow::Result<()> {
             Some(sub) => match *sub {
                 ShareCommand::List => commands::share::list()?,
                 ShareCommand::Manage => commands::share::manage()?,
+                ShareCommand::RemoveGuest { email, block, yes } => {
+                    commands::share::remove_guest(&email, block.as_deref(), yes)?
+                }
                 ShareCommand::Stop { block, all } => commands::share::stop(block, all)?,
                 ShareCommand::Serve { target } => commands::share::serve(share_target(target))?,
                 ShareCommand::Relay {

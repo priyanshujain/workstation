@@ -297,6 +297,20 @@ pub enum ShareCommand {
     /// Manage shared tabs and guests: stop shares, remove guests, reset passwords
     Manage,
 
+    /// Take a guest off one shared tab, or off every tab
+    RemoveGuest {
+        /// Guest email
+        email: String,
+
+        /// Block of the one tab to take the guest off; every tab when left out
+        #[arg(long)]
+        block: Option<String>,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Stop sharing a tab
     Stop {
         /// Block whose share to stop

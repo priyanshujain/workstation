@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use share_engine::{ShareEvent, ShareRequest, Tab};
 use share_protocol::{GuestCredential, ManageReply, ManageRequest, Mode, SharedTab};
 use std::os::unix::fs::OpenOptionsExt;
+use wsctl_core::privilege::confirm;
 
 const MARKER: &str = "shared: ";
 const DEFAULT_TTL: &str = "1h";
@@ -354,6 +355,52 @@ pub fn manage() -> Result<()> {
         return wait_for_key();
     }
     result
+}
+
+pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()> {
+    let relay = Relay::connect()?;
+    let (_, shares) = relay.state()?;
+    let only = block_id
+        .map(|block| shared_tab(&shares, block))
+        .transpose()?;
+    let tabs: Vec<&SharedTab> = tabs_of(&shares, email)
+        .filter(|tab| only.is_none_or(|only| only.share_id == tab.share_id))
+        .collect();
+    let question = match (only, tabs.len()) {
+        (_, 0) => bail!("{email} is not a guest of that tab; see wsctl share list"),
+        (Some(tab), _) => format!("Stop sharing {} with {email}?", tab_title(tab)),
+        (None, count) => format!("Stop sharing {count} tabs with {email}?"),
+    };
+    if !confirm(yes, &format!("{question}{}", sharing_stops(&tabs, email)))? {
+        println!("Nothing changed.");
+        return Ok(());
+    }
+    let request = ManageRequest::RemoveGuest {
+        email: email.to_string(),
+        share_id: only.map(|tab| tab.share_id.clone()),
+    };
+    relay.call(request)?;
+    println!("{email} no longer has access.");
+    Ok(())
+}
+
+fn shared_tab<'a>(shares: &'a [SharedTab], block_id: &str) -> Result<&'a SharedTab> {
+    shares
+        .iter()
+        .find(|tab| tab.share.block_id == block_id)
+        .with_context(|| format!("no shared tab has block {block_id}; see wsctl share list"))
+}
+
+fn sharing_stops(tabs: &[&SharedTab], email: &str) -> String {
+    match tabs
+        .iter()
+        .filter(|tab| tab.share.guests.len() == 1)
+        .count()
+    {
+        0 => String::new(),
+        1 => format!(" {email} is the only guest of a tab, so its sharing stops."),
+        count => format!(" Sharing stops on {count} tabs where {email} is the only guest."),
+    }
 }
 
 pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
