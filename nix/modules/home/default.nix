@@ -198,6 +198,7 @@ in
         enable = true;
         config = {
           ProgramArguments = program job;
+          EnvironmentVariables.WSCTL_UNATTENDED = "1";
           StartInterval = job.interval;
           RunAtLoad = false;
           ProcessType = "Background";
@@ -217,6 +218,7 @@ in
         enable = true;
         config = {
           ProgramArguments = [ (lib.getExe cfg.package) "-v" "display" "apply" ];
+          EnvironmentVariables.WSCTL_UNATTENDED = "1";
           RunAtLoad = true;
           WatchPaths = [ "/Library/Preferences/com.apple.windowserver.displays.plist" ];
           StartInterval = 5;
@@ -233,6 +235,7 @@ in
         Service = {
           Type = "oneshot";
           ExecStart = lib.escapeShellArgs (program job);
+          Environment = "WSCTL_UNATTENDED=1";
           Nice = 19;
           IOSchedulingClass = "idle";
         };
