@@ -512,7 +512,7 @@ pub mod linux {
             run("cp", &["-r", src, &dir.display().to_string()])?;
             run("chmod", &["-R", "u+w", &dir.display().to_string()])?;
             let config = dir.join("wsctl-makepkg.conf");
-            std::fs::write(&config, "source /etc/makepkg.conf\nOPTIONS+=(!debug)\n")?;
+            std::fs::write(&config, makepkg_config())?;
             let status = std::process::Command::new("makepkg")
                 .args(["-si", "--noconfirm", "--needed", "--config"])
                 .arg(&config)
@@ -525,6 +525,14 @@ pub mod linux {
             }
         }
         Ok(())
+    }
+
+    fn makepkg_config() -> String {
+        let auth = match wsctl_core::privilege::sudo_flag() {
+            Some(flag) => format!("sudo {flag}"),
+            None => "sudo".to_string(),
+        };
+        format!("source /etc/makepkg.conf\nOPTIONS+=(!debug)\nPACMAN_AUTH=({auth})\n")
     }
 
     pub fn srcinfo_version(src: &Path) -> Result<String> {
