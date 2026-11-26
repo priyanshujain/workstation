@@ -188,8 +188,19 @@ pub enum DiskCommand {
         no_cache: bool,
     },
 
-    /// Browse and delete what is safe to remove, sizes filling in as it measures
-    Clean,
+    /// List what is safe to remove, or clean the named items
+    Clean {
+        /// Ids from the list, or absolute paths inside a listed folder
+        items: Vec<String>,
+
+        /// Show what would be cleaned without changing anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 
     /// Every attributed path with its kind, how it comes back, and when it was last used
     List {
