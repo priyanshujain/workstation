@@ -46,12 +46,65 @@ pub fn offers(
 
     if on_path("nix-collect-garbage") {
         targets.push(Target::unknown(
-            "Nix > garbage",
+            "Nix store > garbage",
             "Store paths no generation or GC root uses",
             CleanAction::RunCommand("nix-collect-garbage".into(), Vec::new()),
         ));
     }
     targets
+}
+
+pub fn ids(targets: &[Target]) -> Vec<String> {
+    let names: Vec<String> = targets.iter().map(|t| slug(&t.name)).collect();
+    targets
+        .iter()
+        .zip(&names)
+        .map(|(target, name)| {
+            let namesakes: Vec<&Target> = targets
+                .iter()
+                .zip(&names)
+                .filter(|(_, other)| *other == name)
+                .map(|(t, _)| t)
+                .collect();
+            match namesakes.len() {
+                1 => name.clone(),
+                _ => format!("{name}-{}", distinct_tail(target, &namesakes)),
+            }
+        })
+        .collect()
+}
+
+fn distinct_tail(target: &Target, namesakes: &[&Target]) -> String {
+    let depth = target.path().map_or(0, |p| p.components().count());
+    (1..=depth)
+        .map(|count| (count, path_tail(target, count)))
+        .find(|(count, tail)| {
+            namesakes
+                .iter()
+                .filter(|other| path_tail(other, *count) == *tail)
+                .count()
+                == 1
+        })
+        .map_or_else(|| path_tail(target, depth), |(_, tail)| tail)
+}
+
+fn path_tail(target: &Target, count: usize) -> String {
+    let parts: Vec<String> = target
+        .path()
+        .into_iter()
+        .flat_map(|p| p.components())
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let start = parts.len().saturating_sub(count);
+    slug(&parts[start..].join(" "))
+}
+
+pub fn slug(text: &str) -> String {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn offer(kind: Kind, owner: &str, path: PathBuf) -> Option<Target> {
@@ -224,6 +277,34 @@ mod tests {
                 format!("delete {}", home.path().join("old/target").display())
             )]
         );
+    }
+
+    #[test]
+    fn every_offered_target_gets_a_unique_id() {
+        let home = tempfile::tempdir().unwrap();
+        for dir in [".cache/tool", ".local/share/Trash"] {
+            fs::create_dir_all(home.path().join(dir)).unwrap();
+        }
+        let project = Project {
+            root: home.path().join("app"),
+            kind: ProjectKind::Gradle,
+            artifacts: ["app/build", "lib/build"]
+                .iter()
+                .map(|dir| Artifact {
+                    path: home.path().join("app").join(dir),
+                    size: 10,
+                })
+                .collect(),
+            last_active: Some(SystemTime::now() - Duration::from_secs(90 * 86_400)),
+        };
+
+        let targets = offers(&places(home.path()), &[], &[project], SystemTime::now());
+        let ids = ids(&targets);
+
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+        assert!(ids.iter().all(|id| !id.is_empty()), "{ids:?}");
+        assert!(ids.iter().any(|id| id.ends_with("-app-lib-build")), "{ids:?}");
     }
 
     #[test]
