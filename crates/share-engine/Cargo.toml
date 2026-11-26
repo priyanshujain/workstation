@@ -9,6 +9,7 @@ description = "Stream one Rex tab to the share relay"
 [dependencies]
 anyhow.workspace = true
 base64 = "0.23.1"
+getrandom = "0.3"
 dirs.workspace = true
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 libc = "0.2.191"

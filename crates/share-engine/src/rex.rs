@@ -20,6 +20,8 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 const API_REVISION: u64 = 14;
 const CONTROL_PROTOCOL: &str = "rex.control.v1";
 const TERMINAL_PROTOCOL: &str = "rex.data.terminal.v1";
+const BYTES_PROTOCOL: &str = "rex.data.bytes.v1";
+const UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
 const TERMINAL: &str = "com.superlogical.terminal";
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const WELCOME: u8 = 0x81;
@@ -115,9 +117,32 @@ impl Control {
         let ticket = reply["ticket"]
             .as_str()
             .context("data.connect returned no ticket")?;
+        let (socket, nonce) = self.redeem(ticket, TERMINAL_PROTOCOL).await?;
+        Ok(DataConnection { socket, nonce })
+    }
+
+    pub async fn upload(
+        &self,
+        session_id: &str,
+        block_id: &str,
+        args: Value,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
+        let reply = self
+            .terminal(session_id, block_id, "upload_begin", args)
+            .await?;
+        let ticket = reply["ticket"]
+            .as_str()
+            .context("upload_begin returned no ticket")?;
+        let (socket, _) = self.redeem(ticket, BYTES_PROTOCOL).await?;
+        tokio::spawn(send_bytes(socket, bytes));
+        Ok(())
+    }
+
+    async fn redeem(&self, ticket: &str, protocol: &str) -> Result<(Socket, u64)> {
         let mut hello = vec![0x01];
         hello.extend(URL_SAFE_NO_PAD.decode(ticket.trim_end_matches('='))?);
-        let mut socket = open(&self.socket, "/api/data", TERMINAL_PROTOCOL).await?;
+        let mut socket = open(&self.socket, "/api/data", protocol).await?;
         socket.send(Message::Binary(hello.into())).await?;
         let nonce = loop {
             match socket
@@ -130,8 +155,45 @@ impl Control {
                 _ => continue,
             }
         };
-        Ok(DataConnection { socket, nonce })
+        Ok((socket, nonce))
     }
+}
+
+async fn send_bytes(mut socket: Socket, bytes: Vec<u8>) {
+    for chunk in bytes.chunks(UPLOAD_CHUNK_BYTES) {
+        if socket
+            .send(Message::Binary(chunk.to_vec().into()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+    let half_close = Message::Binary(Vec::new().into());
+    if socket.send(half_close).await.is_err() {
+        return;
+    }
+    while let Some(Ok(message)) = socket.next().await {
+        if matches!(message, Message::Close(_)) {
+            return;
+        }
+    }
+}
+
+pub fn upload_ref() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| anyhow!("no randomness: {error}"))?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "upload:{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
 }
 
 impl DataConnection {

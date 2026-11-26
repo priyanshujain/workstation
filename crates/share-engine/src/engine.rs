@@ -1,13 +1,15 @@
 use crate::relay::{self, Relay};
-use crate::rex::{Control, DataConnection, Events};
+use crate::rex::{self, Control, DataConnection, Events};
 use crate::stream::{Piece, StreamParser};
 use crate::translate;
 use crate::{ShareEvent, ShareRequest};
 use anyhow::{Result, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use share_protocol::{
-    AgentMessage, GuestCredential, Mode, ProgramStatus, RelayMessage, Share, Theme,
+    AgentMessage, GuestCredential, Mode, ProgramStatus, RelayMessage, Share, Theme, UploadFile,
 };
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -251,6 +253,14 @@ impl<'a> Engine<'a> {
                 self.paste(email, text).await;
                 Step::Continue
             }
+            RelayMessage::Upload {
+                viewer_id,
+                email,
+                file,
+            } => {
+                self.upload(viewer_id, email, file).await;
+                Step::Continue
+            }
             RelayMessage::Stop { reason } => {
                 self.notify_end(&reason);
                 Step::Finish(None)
@@ -258,8 +268,7 @@ impl<'a> Engine<'a> {
             RelayMessage::Registered { .. }
             | RelayMessage::Managed { .. }
             | RelayMessage::Resumed { .. }
-            | RelayMessage::ResumeRejected { .. }
-            | RelayMessage::Upload { .. } => Step::Continue,
+            | RelayMessage::ResumeRejected { .. } => Step::Continue,
         }
     }
 
@@ -283,6 +292,34 @@ impl<'a> Engine<'a> {
             "event": {"type": "paste", "payload": {"text": text}},
         });
         let _ = self.control.call("block.event", event).await;
+    }
+
+    async fn upload(&mut self, viewer_id: u64, email: String, file: UploadFile) {
+        if self.request.mode != Mode::Input {
+            return;
+        }
+        (self.on_event)(ShareEvent::Input { email });
+        let _ = self.send_upload(viewer_id, file).await;
+    }
+
+    async fn send_upload(&self, viewer_id: u64, file: UploadFile) -> Result<()> {
+        let bytes = STANDARD.decode(&file.data)?;
+        let args = json!({
+            "ref": rex::upload_ref()?,
+            "name": file.name,
+            "size": bytes.len(),
+            "batch": format!("{viewer_id}-{}", file.batch),
+            "index": file.index,
+            "count": file.count,
+        });
+        self.control
+            .upload(
+                &self.request.session_id,
+                &self.request.block_id,
+                args,
+                bytes,
+            )
+            .await
     }
 
     async fn send_screen(&self, relay: &mut Relay, viewer_id: u64) -> Step {
