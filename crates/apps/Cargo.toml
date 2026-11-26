@@ -9,6 +9,7 @@ description = "Remove a macOS application and the support files it leaves behind
 [dependencies]
 anyhow.workspace = true
 disk.workspace = true
+wsctl-core.workspace = true
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

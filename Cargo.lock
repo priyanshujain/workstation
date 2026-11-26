@@ -107,6 +107,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "trash",
+ "wsctl-core",
 ]
 
 [[package]]

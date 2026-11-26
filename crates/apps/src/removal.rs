@@ -40,7 +40,7 @@ pub fn requires_root(items: &[Leftover]) -> bool {
 /// Ask for the sudo timestamp up front, so removal does not stall on a
 /// password prompt halfway through.
 pub fn escalate() -> Result<(), String> {
-    let status = Command::new("sudo")
+    let status = wsctl_core::privilege::sudo()
         .arg("-v")
         .status()
         .map_err(|e| format!("could not run sudo: {e}"))?;
@@ -209,7 +209,7 @@ fn trash_one(path: &Path) -> Result<(), String> {
 fn bootout(domain: &str, label: &str, needs_root: bool) {
     let target = format!("{domain}/{label}");
     if needs_root {
-        let _ = Command::new("sudo")
+        let _ = wsctl_core::privilege::sudo()
             .args(["launchctl", "bootout", &target])
             .output();
     } else {
@@ -235,7 +235,7 @@ fn remove_path(path: &Path, mode: Mode, needs_root: bool) -> Result<(), String> 
 }
 
 fn sudo_rm(path: &Path) -> Result<(), String> {
-    let output = Command::new("sudo")
+    let output = wsctl_core::privilege::sudo()
         .arg("rm")
         .arg("-rf")
         .arg(path)
@@ -265,7 +265,7 @@ fn rm_rf(path: &Path) -> Result<(), String> {
 }
 
 fn forget_receipt(id: &str) -> Result<(), String> {
-    let output = Command::new("sudo")
+    let output = wsctl_core::privilege::sudo()
         .args(["pkgutil", "--forget", id])
         .output()
         .map_err(|e| format!("pkgutil: {e}"))?;
