@@ -17,6 +17,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     /// Generic error wrapper
-    #[error("{0}")]
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
