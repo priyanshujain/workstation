@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -265,6 +266,28 @@ impl Target {
         &self.action
     }
 
+    pub fn path(&self) -> Option<&Path> {
+        match &self.action {
+            CleanAction::RemoveContents(path)
+            | CleanAction::RemoveDir(path)
+            | CleanAction::RemoveFile(path)
+            | CleanAction::RemoveIdleChildren { dir: path, .. } => Some(path),
+            CleanAction::RunCommand(_, _) => None,
+        }
+    }
+
+    pub fn needs_root(&self) -> bool {
+        let uid = effective_uid();
+        if uid == 0 || matches!(self.action, CleanAction::RunCommand(_, _)) {
+            return false;
+        }
+        let owned_by_other = self
+            .path()
+            .and_then(|path| path.symlink_metadata().ok())
+            .is_some_and(|meta| meta.uid() != uid);
+        owned_by_other || self.size.denials().forbidden > 0
+    }
+
     /// A target that holds anything left closed is never touched: deleting it
     /// opens the closed directory and raises the dialog the walk avoided.
     pub fn clean(&self) -> Result<u64, String> {
@@ -351,6 +374,11 @@ impl Target {
     }
 }
 
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid cannot fail and reads no memory we pass in.
+    unsafe { libc::geteuid() }
+}
+
 fn holds_repository(path: &Path) -> bool {
     let children = fs::read_dir(path)
         .into_iter()
@@ -424,6 +452,29 @@ pub fn measurement_groups(targets: &[Target]) -> Vec<Vec<(usize, Root)>> {
     }
 
     groups
+}
+
+pub fn measure(targets: &mut [Target], closed: &[PathBuf]) {
+    for group in measurement_groups(targets) {
+        let roots: Vec<Root> = group.iter().map(|(_, root)| root.clone()).collect();
+        let swept = crate::sweep::sweep_gated(&roots, &[], closed);
+        for ((index, _), usage) in group.iter().zip(&swept.roots) {
+            targets[*index].set_size(Size::Measured {
+                bytes: usage.total,
+                denials: usage.denials,
+            });
+        }
+    }
+    let live = crate::liveness::Liveness::snapshot();
+    for target in targets.iter_mut() {
+        if let Measure::IdleChildren { dir, idle_days } = &target.measure {
+            let bytes = idle_children_with(dir, *idle_days, &live)
+                .iter()
+                .map(|(_, size)| size)
+                .sum();
+            target.set_size(Size::known(bytes));
+        }
+    }
 }
 
 fn overlaps(a: &Path, b: &Path) -> bool {
