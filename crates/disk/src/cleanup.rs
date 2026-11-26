@@ -205,25 +205,6 @@ impl Target {
         }
     }
 
-    /// A target inside a directory left closed: unmeasured, and never cleaned.
-    pub fn closed(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        action: CleanAction,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            description: description.into(),
-            size: Size::Measured {
-                bytes: 0,
-                denials: Denials::one(crate::sweep::Denial::Unattended),
-            },
-            measure: Measure::Nothing,
-            action,
-            owner_app: None,
-        }
-    }
-
     /// A target nothing can size up front: what a command prunes is only known
     /// once it has run.
     pub fn unknown(
@@ -256,10 +237,6 @@ impl Target {
 
     pub fn set_size(&mut self, size: Size) {
         self.size = size;
-    }
-
-    pub fn measure(&self) -> &Measure {
-        &self.measure
     }
 
     pub fn action(&self) -> &CleanAction {
@@ -508,11 +485,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let file = dir.path().join("keep");
         fs::write(&file, b"x").unwrap();
-        let target = Target::closed(
+        let mut target = Target::pending(
             "Closed folder",
             "",
+            Measure::Tree(dir.path().to_path_buf()),
             CleanAction::RemoveContents(dir.path().to_path_buf()),
         );
+        target.set_size(Size::Measured {
+            bytes: 0,
+            denials: Denials::one(crate::sweep::Denial::Unattended),
+        });
 
         assert_eq!(target.size().total(), None, "unmeasured, not empty");
         assert!(target.clean().is_err());
