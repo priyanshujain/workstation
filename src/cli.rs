@@ -132,8 +132,15 @@ pub enum Commands {
         target: ShareArgs,
     },
 
-    /// Interactive TUI for Brewfile package cleanup (uninstall + autoremove + Brewfile edit)
-    Packages,
+    /// Homebrew packages with size, whether declared, and what uses them
+    Packages {
+        #[command(subcommand)]
+        sub: Option<PackagesCommand>,
+
+        /// Flake holding the configuration, with an optional #host (defaults to `hostname -s`)
+        #[arg(long, global = true, default_value_t = default_flake())]
+        flake: String,
+    },
 
     /// Manage the wsctl binary itself (uninstall)
     #[command(name = "self", subcommand)]
@@ -345,6 +352,24 @@ pub enum AgentsCommand {
 
     /// Ask about each leftover, then stop or remove it
     Clean {
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PackagesCommand {
+    /// Uninstall packages in dependency order, then run brew autoremove
+    Remove {
+        /// Package names from the list
+        #[arg(required = true)]
+        names: Vec<String>,
+
+        /// Show the plan without uninstalling anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
         /// Don't ask for confirmation
         #[arg(short = 'y', long)]
         yes: bool,

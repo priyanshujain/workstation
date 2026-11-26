@@ -8,7 +8,10 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand, ShareCommand, ShareMode};
+use cli::{
+    AgentsCommand, Cli, Commands, DiskCommand, PackagesCommand, SelfCommand, ShareCommand,
+    ShareMode,
+};
 #[cfg(target_os = "macos")]
 use cli::{AppCommand, DisplayCommand};
 
@@ -191,8 +194,16 @@ fn main() -> anyhow::Result<()> {
                 }
             },
         },
-        Commands::Packages => {
-            tui::packages::run()?;
+        Commands::Packages { sub, flake } => {
+            let target = commands::apply::Target::parse(&flake)?;
+            match sub {
+                None => commands::packages::list(&target)?,
+                Some(PackagesCommand::Remove {
+                    names,
+                    dry_run,
+                    yes,
+                }) => commands::packages::remove(&target, &names, dry_run, yes)?,
+            }
         }
         Commands::SelfCmd(sub) => match sub {
             SelfCommand::Uninstall { yes, purge } => commands::self_cmd::uninstall(yes, purge)?,
