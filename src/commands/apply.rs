@@ -248,7 +248,7 @@ pub mod linux {
     use console::style;
     use serde::Deserialize;
 
-    use super::{Target, output, run, run_sudo, step};
+    use super::{Target, output, run, run_sudo, scratch_dir, step};
 
     #[derive(Deserialize)]
     struct OnActivation {
@@ -277,7 +277,7 @@ pub mod linux {
             run("system-manager", &["build", "--flake", &system])?;
         } else {
             step(&format!("system-manager switch --flake {system}"));
-            run("system-manager", &["switch", "--flake", &system, "--sudo"])?;
+            switch_system_manager(&system)?;
             if managed_files()?.is_empty() {
                 bail!(
                     "system-manager switch wrote no /etc files; its activation failed, see the output above"
@@ -328,6 +328,30 @@ pub mod linux {
         let home = if dry_run { "build" } else { "switch" };
         step(&format!("home-manager {home} --flake {}", target.flake));
         run("home-manager", &[home, "--flake", &target.flake])
+    }
+
+    /// What `system-manager switch --sudo` does, with the root steps through wsctl's sudo.
+    fn switch_system_manager(system: &str) -> Result<()> {
+        let profile = build_system_manager(system)?;
+        let engine = format!("{profile}/bin/system-manager-engine");
+        run_sudo(&[&engine, "register", "--store-path", &profile])?;
+        run_sudo(&[&engine, "activate", "--store-path", &profile])
+    }
+
+    fn build_system_manager(system: &str) -> Result<String> {
+        let out = std::process::Command::new("system-manager")
+            .args(["build", "--flake", system])
+            .current_dir(scratch_dir()?)
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .context("could not run system-manager")?;
+        if !out.status.success() {
+            bail!(
+                "system-manager build --flake {system} failed with {}",
+                out.status
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
     const STATE: &str = "/var/lib/system-manager/state/system-manager-state.json";
