@@ -1,11 +1,13 @@
+use std::ffi::OsStr;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 
 use wsctl_core::privilege::{UNATTENDED, unattended};
 
 const PINENTRIES: [&str; 4] = ["pinentry-mac", "pinentry-qt", "pinentry-gnome3", "pinentry"];
 const MAX_LINE: usize = 1024;
+const PART_LIMIT: usize = 400;
 
 fn main() -> ExitCode {
     match ask() {
@@ -23,16 +25,25 @@ fn ask() -> Result<(), String> {
             "{UNATTENDED} is set, so no password dialog is shown"
         ));
     }
+    let sudo = std::os::unix::process::parent_id();
+    if !runs_as_sudo(sudo) {
+        return Err("only sudo may ask for a password through wsctl-askpass".into());
+    }
     if !graphical_session() {
         return Err(
             "no graphical session (WAYLAND_DISPLAY or DISPLAY) to show a password dialog in".into(),
         );
     }
-    let command = authorised_command().ok_or("could not read the command sudo wants to run")?;
+    let command =
+        process_field(sudo, "args").ok_or("could not read the command sudo wants to run")?;
+    let requester = process_field(sudo, "ppid")
+        .and_then(|pid| pid.parse().ok())
+        .and_then(|pid| process_field(pid, "args"));
     let pinentry = find_pinentry().ok_or(
         "no pinentry found: set WSCTL_PINENTRY or put pinentry-mac, pinentry-qt, pinentry-gnome3 or pinentry on PATH",
     )?;
-    let mut pin = read_pin(&pinentry, &command)?;
+    let description = describe(&command, requester.as_deref());
+    let mut pin = read_pin(&pinentry, &description)?;
     let written = write_pin(&pin);
     wipe(&mut pin);
     written.map_err(|e| format!("could not hand the password to sudo: {e}"))
@@ -50,15 +61,33 @@ fn graphical_session() -> bool {
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
-fn authorised_command() -> Option<String> {
-    let parent = std::os::unix::process::parent_id().to_string();
+fn runs_as_sudo(pid: u32) -> bool {
+    let as_root = process_field(pid, "uid").is_some_and(|uid| uid == "0");
+    let named_sudo = process_field(pid, "comm")
+        .is_some_and(|comm| Path::new(&comm).file_name() == Some(OsStr::new("sudo")));
+    as_root && named_sudo
+}
+
+fn process_field(pid: u32, field: &str) -> Option<String> {
     let out = Command::new("ps")
-        .args(["-o", "args=", "-p", &parent])
+        .args(["-o", &format!("{field}="), "-p", &pid.to_string()])
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    let command = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !command.is_empty()).then_some(command)
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !value.is_empty()).then_some(value)
+}
+
+fn describe(command: &str, requester: Option<&str>) -> String {
+    let mut description = format!(
+        "wsctl needs your password to run as root:%0A{}",
+        escape_capped(command, PART_LIMIT)
+    );
+    if let Some(requester) = requester {
+        description.push_str("%0Arequested by: ");
+        description.push_str(&escape_capped(requester, PART_LIMIT));
+    }
+    description
 }
 
 fn find_pinentry() -> Option<PathBuf> {
@@ -73,26 +102,25 @@ fn find_pinentry() -> Option<PathBuf> {
     })
 }
 
-fn read_pin(pinentry: &PathBuf, command: &str) -> Result<Vec<u8>, String> {
+fn read_pin(pinentry: &PathBuf, description: &str) -> Result<Vec<u8>, String> {
     let mut child = Command::new(pinentry)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("could not start {}: {e}", pinentry.display()))?;
-    let result = converse(&mut child, command);
+    let result = converse(&mut child, description);
     let _ = child.wait();
     result
 }
 
-fn converse(child: &mut Child, command: &str) -> Result<Vec<u8>, String> {
+fn converse(child: &mut Child, description: &str) -> Result<Vec<u8>, String> {
     let mut session = Session {
         input: child.stdin.take().ok_or("pinentry has no stdin")?,
         output: child.stdout.take().ok_or("pinentry has no stdout")?,
     };
     session.expect_ok()?;
-    let description = format!("wsctl needs your password to run as root:\n{command}");
     session.request("SETTITLE wsctl")?;
-    session.request(&format!("SETDESC {}", escape(&description)))?;
+    session.request(&format!("SETDESC {description}"))?;
     session.request("SETPROMPT Password:")?;
     let pin = session.get_pin();
     let _ = session.send("BYE");
@@ -173,15 +201,27 @@ impl Session {
     }
 }
 
-fn escape(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            c if c == '%' || (c as u32) < 0x20 => escaped.push_str(&format!("%{:02X}", c as u32)),
-            c => escaped.push(c),
-        }
+fn escape_capped(text: &str, limit: usize) -> String {
+    let full: String = text.chars().map(escape).collect();
+    if full.len() <= limit {
+        return full;
     }
-    escaped
+    let mut capped = String::with_capacity(limit);
+    for unit in text.chars().map(escape) {
+        if capped.len() + unit.len() + "...".len() > limit {
+            break;
+        }
+        capped.push_str(&unit);
+    }
+    capped.push_str("...");
+    capped
+}
+
+fn escape(c: char) -> String {
+    match c {
+        c if c == '%' || (c as u32) < 0x20 => format!("%{:02X}", c as u32),
+        c => c.to_string(),
+    }
 }
 
 fn unescape_into(escaped: &[u8], out: &mut Vec<u8>) {
