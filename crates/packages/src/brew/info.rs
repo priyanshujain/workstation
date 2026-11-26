@@ -27,6 +27,8 @@ pub struct InstalledPackage {
     pub deps: Vec<String>,
     /// Unix timestamp (seconds) of installation, if known.
     pub installed_at: Option<u64>,
+    /// False when brew pulled it in as a dependency, so `brew autoremove` may take it.
+    pub on_request: bool,
 }
 
 /// Run `brew info --json=v2 --installed` and parse the result.
@@ -116,6 +118,10 @@ fn parse_installed(json: &str) -> Result<Vec<InstalledPackage>> {
             version: installed.as_ref().map(|i| i.version.clone()),
             size_bytes: 0,
             deps,
+            on_request: installed
+                .as_ref()
+                .and_then(|i| i.installed_on_request)
+                .unwrap_or(true),
             installed_at: installed.and_then(|i| i.time),
         });
     }
@@ -129,6 +135,7 @@ fn parse_installed(json: &str) -> Result<Vec<InstalledPackage>> {
             size_bytes: 0,
             deps,
             installed_at: c.installed_time,
+            on_request: true,
         });
     }
     Ok(pkgs)
@@ -160,6 +167,8 @@ struct FormulaInstalled {
     time: Option<u64>,
     #[serde(default)]
     runtime_dependencies: Vec<RuntimeDep>,
+    #[serde(default)]
+    installed_on_request: Option<bool>,
 }
 
 #[derive(Deserialize)]

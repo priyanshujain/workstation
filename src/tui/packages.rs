@@ -846,6 +846,7 @@ mod tests {
             size_bytes: 0,
             deps: deps.into_iter().map(|s| s.to_string()).collect(),
             installed_at: None,
+            on_request: true,
         });
         Row { entry, installed }
     }
@@ -860,6 +861,7 @@ mod tests {
                 size_bytes: 0,
                 deps: vec!["pcre2".into()],
                 installed_at: None,
+                on_request: true,
             },
             InstalledPackage {
                 name: "bat".into(),
@@ -868,6 +870,7 @@ mod tests {
                 size_bytes: 0,
                 deps: vec!["pcre2".into()],
                 installed_at: None,
+                on_request: true,
             },
         ];
         let map = build_dependents_map(&installed);
