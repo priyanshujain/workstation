@@ -38,6 +38,8 @@ main { flex: 1; overflow: auto; padding: 12px; }
 #notice[hidden] { display: none; }
 #ended { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.7); font-size: 18px; text-align: center; padding: 24px; }
 #ended[hidden] { display: none; }
+#toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); padding: 8px 14px; background: #8b1e1e; color: #fff; border-radius: 6px; }
+#toast[hidden] { display: none; }
 body.login { display: flex; align-items: center; justify-content: center; }
 body.login form { display: flex; flex-direction: column; gap: 12px; width: 320px; padding: 24px; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }
 body.login h1 { margin: 0; font-size: 18px; }

@@ -4,6 +4,11 @@ const PALETTE_KEYS = [
 ];
 const NOTHING_SHARED = "Nothing is shared with you right now. Tabs appear here as soon as the host shares them.";
 const NOT_AVAILABLE = "That tab is not shared with you, or its share ended. Pick a tab on the left.";
+const MAX_PASTE_BYTES = 128 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGES = 5;
+const TOAST_MS = 4000;
+const IS_MAC = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform);
 
 const element = (id) => document.getElementById(id);
 const terminal = new Terminal({ cols: 80, rows: 24, disableStdin: true, scrollback: 5000 });
@@ -275,10 +280,112 @@ function connectLobby() {
   };
 }
 
-connectLobby();
-terminal.onData((data) => {
-  if (!terminal.options.disableStdin && socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "input", data }));
+let toastTimer = null;
+
+function toast(text) {
+  const box = element("toast");
+  box.textContent = text;
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, TOAST_MS);
+}
+
+function canSend() {
+  return !terminal.options.disableStdin && socket && socket.readyState === WebSocket.OPEN;
+}
+
+function sendInput(message) {
+  if (canSend()) socket.send(JSON.stringify(message));
+}
+
+function pasteText(text) {
+  if (new TextEncoder().encode(text).length > MAX_PASTE_BYTES) {
+    toast("That paste is larger than 128 KB.");
+    return;
   }
-});
+  sendInput({ type: "paste", text });
+}
+
+function imagesIn(transfer) {
+  return [...(transfer?.files || [])].filter((file) => file.type.startsWith("image/"));
+}
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.slice(reader.result.indexOf(",") + 1));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageName(file, index) {
+  return file.name || `image-${index + 1}.${file.type.split("/")[1] || "png"}`;
+}
+
+async function uploadImages(files) {
+  if (files.length > MAX_IMAGES) {
+    toast(`Paste or drop at most ${MAX_IMAGES} images at once.`);
+    return;
+  }
+  const large = files.find((file) => file.size > MAX_IMAGE_BYTES);
+  if (large) {
+    toast(`${imageName(large, files.indexOf(large))} is larger than 10 MB.`);
+    return;
+  }
+  const batch = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  for (const [index, file] of files.entries()) {
+    const data = await readBase64(file);
+    sendInput({ type: "upload", file: { batch, index, count: files.length, name: imageName(file, index), mime: file.type, data } });
+  }
+}
+
+function onPaste(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!canSend()) return;
+  const images = imagesIn(event.clipboardData);
+  if (images.length) {
+    uploadImages(images);
+    return;
+  }
+  const text = event.clipboardData?.getData("text/plain");
+  if (text) pasteText(text);
+}
+
+function carriesFiles(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+
+function onDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!canSend()) return;
+  const images = imagesIn(event.dataTransfer);
+  if (images.length !== event.dataTransfer.files.length) {
+    toast("Only images can be dropped on the terminal.");
+    return;
+  }
+  uploadImages(images);
+}
+
+function onKey(event) {
+  if (IS_MAC || event.type !== "keydown" || !event.ctrlKey || event.altKey || event.metaKey) return true;
+  const key = event.key.toLowerCase();
+  if (key === "v") return false;
+  if (key === "c" && !event.shiftKey && terminal.hasSelection()) {
+    event.preventDefault();
+    navigator.clipboard.writeText(terminal.getSelection()).catch(() => toast("The browser blocked copying."));
+    return false;
+  }
+  return true;
+}
+
+connectLobby();
+terminal.onData((data) => sendInput({ type: "input", data }));
+terminal.attachCustomKeyEventHandler(onKey);
+element("terminal").addEventListener("paste", onPaste, true);
+element("screen").addEventListener("dragover", (event) => { if (carriesFiles(event)) event.preventDefault(); });
+element("screen").addEventListener("drop", onDrop, true);
 setInterval(tickExpiry, 1000);
