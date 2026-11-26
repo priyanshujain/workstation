@@ -177,16 +177,20 @@ impl LiveShare {
         self.state().ended
     }
 
+    #[cfg(test)]
     pub fn input(&self, viewer_id: u64, email: &str, data: String) -> bool {
-        if !self.accepts_input() {
-            return false;
-        }
-        let state = self.state();
-        state.send_engine(RelayMessage::Input {
+        self.send_input(RelayMessage::Input {
             viewer_id,
             email: email.to_string(),
             data,
-        });
+        })
+    }
+
+    pub fn send_input(&self, message: RelayMessage) -> bool {
+        if !self.accepts_input() {
+            return false;
+        }
+        self.state().send_engine(message);
         true
     }
 

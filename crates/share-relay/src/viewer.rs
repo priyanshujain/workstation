@@ -7,8 +7,10 @@ use axum::extract::{ConnectInfo, Form, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
-use share_protocol::{VIEWER_PATH_PREFIX, ViewerInput, ViewerMessage};
+use share_protocol::{RelayMessage, UploadFile, VIEWER_PATH_PREFIX, ViewerInput, ViewerMessage};
 
 use crate::assets;
 use crate::auth::{random_token, token_hash, verify_password};
@@ -22,6 +24,11 @@ const COOKIE_NAME: &str = "wsctl_share";
 const BAD_LOGIN: &str = "That email and password do not match.";
 const LIMITED_LOGIN: &str = "Too many failed attempts. Try again in 15 minutes.";
 const SESSION_SECS: u64 = 7 * 24 * 3600;
+const MAX_PASTE_BYTES: usize = 128 * 1024;
+const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+const MAX_UPLOAD_FILES: u32 = 5;
+const MAX_NAME_BYTES: usize = 255;
+const MAX_VIEWER_MESSAGE_BYTES: usize = 14 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Login {
@@ -196,7 +203,10 @@ async fn connect(
         Err(status) => return status.into_response(),
     };
     match relay.find(&id).filter(|live| live.admits(&email)) {
-        Some(live) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
+        Some(live) => upgrade
+            .max_message_size(MAX_VIEWER_MESSAGE_BYTES)
+            .max_frame_size(MAX_VIEWER_MESSAGE_BYTES)
+            .on_upgrade(move |socket| session(relay, live, email, socket)),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -356,20 +366,76 @@ async fn receive(
     prompts: &mut PromptBuffer,
     text: &str,
 ) {
-    let Ok(ViewerInput::Input { data }) = serde_json::from_str(text) else {
+    let Ok(input) = serde_json::from_str(text) else {
         return;
     };
     if !live.accepts_input() {
         return;
     }
-    if record_input(relay, live, email, prompts, &data)
+    let Some((record, message)) = forwarded(input, viewer_id, email) else {
+        return;
+    };
+    if record_input(relay, live, email, prompts, &record)
         .await
         .is_err()
     {
         relay.stop_unaudited(live).await;
         return;
     }
-    live.input(viewer_id, email, data);
+    live.send_input(message);
+}
+
+fn forwarded(input: ViewerInput, viewer_id: u64, email: &str) -> Option<(String, RelayMessage)> {
+    let email = email.to_string();
+    match input {
+        ViewerInput::Input { data } => Some((
+            data.clone(),
+            RelayMessage::Input {
+                viewer_id,
+                email,
+                data,
+            },
+        )),
+        ViewerInput::Paste { text } if text.len() <= MAX_PASTE_BYTES => Some((
+            bracketed(&text),
+            RelayMessage::Paste {
+                viewer_id,
+                email,
+                text,
+            },
+        )),
+        ViewerInput::Upload { file } => {
+            let record = bracketed(&image_placeholder(&file, upload_size(&file)?));
+            Some((
+                record,
+                RelayMessage::Upload {
+                    viewer_id,
+                    email,
+                    file,
+                },
+            ))
+        }
+        ViewerInput::Paste { .. } => None,
+    }
+}
+
+fn upload_size(file: &UploadFile) -> Option<usize> {
+    let described = (1..=MAX_UPLOAD_FILES).contains(&file.count)
+        && file.index < file.count
+        && file.mime.starts_with("image/")
+        && (1..=MAX_NAME_BYTES).contains(&file.name.len())
+        && (1..=MAX_NAME_BYTES).contains(&file.batch.len());
+    let size = STANDARD.decode(&file.data).ok()?.len();
+    (described && (1..=MAX_UPLOAD_BYTES).contains(&size)).then_some(size)
+}
+
+fn image_placeholder(file: &UploadFile, size: usize) -> String {
+    let name: String = file.name.chars().filter(|c| !c.is_control()).collect();
+    format!("[image {name} {} KB]", size.div_ceil(1024))
+}
+
+fn bracketed(text: &str) -> String {
+    format!("\x1b[200~{text}\x1b[201~")
 }
 
 async fn record_input(
