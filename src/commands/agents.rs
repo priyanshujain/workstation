@@ -67,14 +67,17 @@ pub fn clean(yes: bool) -> Result<()> {
     }
     if !yes && !std::io::stdin().is_terminal() {
         print_found(&found);
-        eprintln!("Pass --yes to stop and remove all of these without a terminal.");
-        return Ok(());
+        bail!("Pass --yes to stop and remove all of these without a terminal.");
     }
+    let mut not_done = 0;
     for orphan in &found.orphans {
         if confirm(yes, &format!("stop {}?", describe_orphan(orphan)))? {
             match stop_tree(&found.table, orphan.process.pid) {
                 Ok(()) => println!("  stopped"),
-                Err(err) => println!("  {}", style(err).red()),
+                Err(err) => {
+                    not_done += 1;
+                    println!("  {}", style(err).red());
+                }
             }
         }
     }
@@ -82,9 +85,15 @@ pub fn clean(yes: bool) -> Result<()> {
         if confirm(yes, &format!("remove {}?", describe_leftover(leftover)))? {
             match leftovers::remove(leftover) {
                 Ok(()) => println!("  removed"),
-                Err(reason) => println!("  {}", style(format!("kept: {reason}")).yellow()),
+                Err(reason) => {
+                    not_done += 1;
+                    println!("  {}", style(format!("kept: {reason}")).yellow());
+                }
             }
         }
+    }
+    if not_done > 0 {
+        bail!("{not_done} item(s) not stopped or removed");
     }
     Ok(())
 }
