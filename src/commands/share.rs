@@ -28,15 +28,14 @@ struct Config {
 }
 
 pub fn share(target: Target) -> Result<()> {
-    let config = load_config()?;
-    let secret = read_secret(&config.secret_file)?;
+    let relay = Relay::connect()?;
     let (session_id, block_id) = match (target.session, target.block) {
         (Some(session), Some(block)) => (session, block),
         _ => pick_tab()?,
     };
-    let (known, shares) = relay_state(&config, &secret)?;
+    let (known, shares) = relay.state()?;
     if let Some(shared) = shares.iter().find(|tab| tab.share.block_id == block_id) {
-        return add_guests(&config, &secret, shared, target.guests, &known);
+        return add_guests(&relay, shared, target.guests, &known);
     }
     let mode = match target.mode {
         Some(mode) => mode,
@@ -64,8 +63,7 @@ pub fn share(target: Target) -> Result<()> {
 }
 
 fn add_guests(
-    config: &Config,
-    secret: &str,
+    relay: &Relay,
     shared: &SharedTab,
     guests: Vec<String>,
     known: &[String],
@@ -93,17 +91,15 @@ fn add_guests(
         share_id: shared.share_id.clone(),
         guests,
     };
-    match share_engine::manage(&config.relay_url, secret, request)? {
-        ManageReply::Credentials {
-            credentials,
-            existing,
-        } => {
-            println!("\nLink   {}", shared.url);
-            print_access(&credentials, &existing);
-        }
-        ManageReply::Failed { reason } => bail!("the relay could not add the guests: {reason}"),
-        _ => bail!("the relay sent an unexpected reply"),
-    }
+    let ManageReply::Credentials {
+        credentials,
+        existing,
+    } = relay.call(request)?
+    else {
+        bail!("the relay sent an unexpected reply");
+    };
+    println!("\nLink   {}", shared.url);
+    print_access(&credentials, &existing);
     println!();
     wait_for_key()
 }
@@ -141,11 +137,33 @@ fn mode_text(mode: Mode) -> &'static str {
     }
 }
 
-fn relay_state(config: &Config, secret: &str) -> Result<(Vec<String>, Vec<SharedTab>)> {
-    match share_engine::manage(&config.relay_url, secret, ManageRequest::State)? {
-        ManageReply::State { guests, shares } => Ok((guests, shares)),
-        ManageReply::Failed { reason } => bail!("the relay could not list shares: {reason}"),
-        _ => bail!("the relay sent an unexpected reply"),
+struct Relay {
+    url: String,
+    secret: String,
+}
+
+impl Relay {
+    fn connect() -> Result<Self> {
+        let config = load_config()?;
+        let secret = read_secret(&config.secret_file)?;
+        Ok(Relay {
+            url: config.relay_url,
+            secret,
+        })
+    }
+
+    fn call(&self, request: ManageRequest) -> Result<ManageReply> {
+        match share_engine::manage(&self.url, &self.secret, request)? {
+            ManageReply::Failed { reason } => bail!("the relay refused: {reason}"),
+            reply => Ok(reply),
+        }
+    }
+
+    fn state(&self) -> Result<(Vec<String>, Vec<SharedTab>)> {
+        match self.call(ManageRequest::State)? {
+            ManageReply::State { guests, shares } => Ok((guests, shares)),
+            _ => bail!("the relay sent an unexpected reply"),
+        }
     }
 }
 
@@ -263,9 +281,7 @@ pub fn serve(target: Target) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
-    let config = load_config()?;
-    let secret = read_secret(&config.secret_file)?;
-    let (_, shares) = relay_state(&config, &secret)?;
+    let (_, shares) = Relay::connect()?.state()?;
     if shares.is_empty() {
         println!("No tab is shared.");
     }
@@ -292,10 +308,9 @@ pub fn list() -> Result<()> {
 }
 
 pub fn manage() -> Result<()> {
-    let config = load_config()?;
-    let secret = read_secret(&config.secret_file)?;
+    let relay = Relay::connect()?;
     let result = crate::tui::shares::manage(|request| {
-        share_engine::manage(&config.relay_url, &secret, request)
+        share_engine::manage(&relay.url, &relay.secret, request)
     });
     if let Err(error) = &result {
         eprintln!("{error:#}");
