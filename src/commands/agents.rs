@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use agents::config::{self, Config};
@@ -45,19 +46,28 @@ pub fn leftovers() -> Result<()> {
     if found.is_empty() {
         println!("no leftovers");
     }
+    print_found(&found);
+    Ok(())
+}
+
+fn print_found(found: &Found) {
     for orphan in &found.orphans {
         println!("{}", describe_orphan(orphan));
     }
     for leftover in &found.leftovers {
         println!("{}", describe_leftover(leftover));
     }
-    Ok(())
 }
 
 pub fn clean(yes: bool) -> Result<()> {
     let found = Found::scan()?;
     if found.is_empty() {
         println!("no leftovers");
+        return Ok(());
+    }
+    if !yes && !std::io::stdin().is_terminal() {
+        print_found(&found);
+        eprintln!("Pass --yes to stop and remove all of these without a terminal.");
         return Ok(());
     }
     for orphan in &found.orphans {
