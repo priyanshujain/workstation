@@ -153,8 +153,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Share { sub, target } => match sub {
             None => commands::share::share(share_target(target))?,
             Some(sub) => match *sub {
-                ShareCommand::List { wait: true } => commands::share::list_and_wait()?,
-                ShareCommand::List { wait: false } => commands::share::list()?,
+                ShareCommand::List => commands::share::list()?,
+                ShareCommand::Manage => commands::share::manage()?,
                 ShareCommand::Stop { block, all } => commands::share::stop(block, all)?,
                 ShareCommand::Serve { target } => commands::share::serve(share_target(target))?,
                 ShareCommand::Relay {

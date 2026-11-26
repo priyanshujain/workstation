@@ -269,12 +269,11 @@ pub enum ShareMode {
 
 #[derive(Subcommand)]
 pub enum ShareCommand {
-    /// List the tabs shared from this machine, with links and guest passwords
-    List {
-        /// Wait for Enter after the list, for a Rex pane
-        #[arg(long, hide = true)]
-        wait: bool,
-    },
+    /// List every shared tab on the relay, with guests and watchers
+    List,
+
+    /// Manage shared tabs and guests: stop shares, remove guests, reset passwords
+    Manage,
 
     /// Stop sharing a tab
     Stop {

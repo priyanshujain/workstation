@@ -1,13 +1,13 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use share_engine::{ShareEvent, ShareRequest, Tab};
-use share_protocol::{GuestCredential, Mode};
+use share_protocol::{GuestCredential, ManageReply, ManageRequest, Mode, SharedTab};
 use std::os::unix::fs::OpenOptionsExt;
 
 const MARKER: &str = "shared: ";
@@ -27,34 +27,123 @@ struct Config {
 }
 
 pub fn share(target: Target) -> Result<()> {
-    load_config()?;
+    let config = load_config()?;
+    let secret = read_secret(&config.secret_file)?;
     let (session_id, block_id) = match (target.session, target.block) {
         (Some(session), Some(block)) => (session, block),
         _ => pick_tab()?,
     };
+    let (known, shares) = relay_state(&config, &secret)?;
+    if let Some(shared) = shares.iter().find(|tab| tab.share.block_id == block_id) {
+        return add_guests(&config, &secret, shared, target.guests, &known);
+    }
     let mode = match target.mode {
         Some(mode) => mode,
         None => ask_mode()?,
     };
     let guests = match target.guests.is_empty() {
-        true => ask_guests()?,
+        true => ask_guests("Share with: ", &known, &[], false)?,
         false => target.guests,
     };
     let ttl_secs = match target.ttl {
         Some(ttl) => parse_ttl(&ttl)?,
         None => ask_ttl()?,
     };
+    let started = start_background(&session_id, &block_id, mode, &guests, ttl_secs)?;
+    println!();
+    println!("Shared {}  ({})", started.name, mode_text(mode));
+    println!("Link   {}", started.url);
+    print_access(&started.credentials, &started.existing);
+    println!(
+        "Ends in {}. The share keeps running when this window closes.",
+        crate::tui::shares::ends_in(started.expires_at_unix)
+    );
+    println!("Stop it with Stop Sharing. Manage guests and tabs with Shared Tabs.\n");
+    wait_for_key()
+}
 
-    if let Some(existing) = find_share(&block_id)? {
-        println!("This tab is already shared.\n");
-        print_share(&existing);
+fn add_guests(
+    config: &Config,
+    secret: &str,
+    shared: &SharedTab,
+    guests: Vec<String>,
+    known: &[String],
+) -> Result<()> {
+    let name = format!("{} / {}", shared.share.session_label, shared.share.label);
+    println!(
+        "{name} is already shared ({}).",
+        mode_text(shared.share.mode)
+    );
+    println!("Guests: {}\n", shared.share.guests.join(", "));
+    let guests = match guests.is_empty() {
+        true => ask_guests("Add guests: ", known, &shared.share.guests, true)?,
+        false => guests,
+    };
+    if guests.is_empty() {
+        println!("Nothing changed.\n");
         return wait_for_key();
     }
-    let started = start_background(&session_id, &block_id, mode, &guests, ttl_secs)?;
-    print_share(&started);
-    println!("The share runs in the background; closing this window keeps it running.");
-    println!("Stop it with Stop Sharing. See every share with Shared Tabs.\n");
+    let request = ManageRequest::AddGuests {
+        share_id: shared.share_id.clone(),
+        guests,
+    };
+    match share_engine::manage(&config.relay_url, secret, request)? {
+        ManageReply::Credentials {
+            credentials,
+            existing,
+        } => {
+            println!("\nLink   {}", shared.url);
+            print_access(&credentials, &existing);
+        }
+        ManageReply::Failed { reason } => bail!("the relay could not add the guests: {reason}"),
+        _ => bail!("the relay sent an unexpected reply"),
+    }
+    println!();
     wait_for_key()
+}
+
+fn print_access(credentials: &[GuestCredential], existing: &[String]) {
+    if !credentials.is_empty() {
+        println!("\nNew guests. Send each their password; it shows only once:");
+        let width = credentials.iter().map(|c| c.email.len()).max().unwrap_or(0);
+        for credential in credentials {
+            println!("  {:width$}  {}", credential.email, credential.password);
+        }
+    }
+    if !existing.is_empty() {
+        println!("\nThese guests use their current password:");
+        for email in existing {
+            println!("  {email}");
+        }
+    }
+    println!();
+}
+
+fn mode_text(mode: Mode) -> &'static str {
+    match mode {
+        Mode::View => "view only",
+        Mode::Input => "guests can type",
+    }
+}
+
+fn relay_state(config: &Config, secret: &str) -> Result<(Vec<String>, Vec<SharedTab>)> {
+    match share_engine::manage(&config.relay_url, secret, ManageRequest::State)? {
+        ManageReply::State { guests, shares } => Ok((guests, shares)),
+        ManageReply::Failed { reason } => bail!("the relay could not list shares: {reason}"),
+        _ => bail!("the relay sent an unexpected reply"),
+    }
+}
+
+fn ask_guests(
+    prompt: &str,
+    known: &[String],
+    taken: &[String],
+    allow_empty: bool,
+) -> Result<Vec<String>> {
+    if !io::stdin().is_terminal() {
+        return ask_guest_line(prompt);
+    }
+    crate::tui::guests::ask(prompt, known, taken, allow_empty)
 }
 
 pub fn serve(target: Target) -> Result<()> {
@@ -72,6 +161,7 @@ pub fn serve(target: Target) -> Result<()> {
         block_id: block_id.clone(),
         mode,
         guests: target.guests.clone(),
+        label: (!marker.label.is_empty()).then(|| marker.label.clone()),
         ttl_secs,
         relay_url: config.relay_url,
         secret,
@@ -86,6 +176,7 @@ pub fn serve(target: Target) -> Result<()> {
         mode,
         url: String::new(),
         credentials: Vec::new(),
+        existing: Vec::new(),
         expires_at_unix: 0,
         viewers: Vec::new(),
     };
@@ -95,10 +186,12 @@ pub fn serve(target: Target) -> Result<()> {
                 url,
                 expires_at_unix,
                 credentials,
+                existing,
             } => {
                 state.url = url;
                 state.expires_at_unix = expires_at_unix;
                 state.credentials = credentials;
+                state.existing = existing;
             }
             ShareEvent::ViewerJoined { email } => state.viewers.push(email),
             ShareEvent::ViewerLeft { email } => {
@@ -124,19 +217,45 @@ pub fn serve(target: Target) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
-    let shares = active_shares()?;
+    let config = load_config()?;
+    let secret = read_secret(&config.secret_file)?;
+    let (_, shares) = relay_state(&config, &secret)?;
     if shares.is_empty() {
         println!("No tab is shared.");
     }
-    for share in &shares {
-        print_share(share);
+    for tab in &shares {
+        let watching = match tab.watching.is_empty() {
+            true => "nobody".to_string(),
+            false => tab.watching.join(", "),
+        };
+        println!(
+            "{} / {} on {}  ({})",
+            tab.share.session_label,
+            tab.share.label,
+            tab.share.host,
+            mode_text(tab.share.mode)
+        );
+        println!("  {}", tab.url);
+        println!("  guests: {}", tab.share.guests.join(", "));
+        println!(
+            "  watching: {watching}  ends in {}\n",
+            crate::tui::shares::ends_in(tab.share.expires_at_unix)
+        );
     }
     Ok(())
 }
 
-pub fn list_and_wait() -> Result<()> {
-    list()?;
-    wait_for_key()
+pub fn manage() -> Result<()> {
+    let config = load_config()?;
+    let secret = read_secret(&config.secret_file)?;
+    let result = crate::tui::shares::manage(|request| {
+        share_engine::manage(&config.relay_url, &secret, request)
+    });
+    if let Err(error) = &result {
+        eprintln!("{error:#}");
+        return wait_for_key();
+    }
+    result
 }
 
 pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
@@ -170,31 +289,10 @@ struct ActiveShare {
     mode: Mode,
     url: String,
     credentials: Vec<GuestCredential>,
+    #[serde(default)]
+    existing: Vec<String>,
     expires_at_unix: u64,
     viewers: Vec<String>,
-}
-
-fn print_share(share: &ActiveShare) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default();
-    let left = share.expires_at_unix.saturating_sub(now);
-    let viewers = match share.viewers.is_empty() {
-        true => "none".to_string(),
-        false => share.viewers.join(", "),
-    };
-    println!("{}  ({:?})", share.name, share.mode);
-    println!("  {}", share.url);
-    for credential in &share.credentials {
-        println!("  {}  {}", credential.email, credential.password);
-    }
-    println!(
-        "  viewers: {viewers}  expires in {:02}:{:02}:{:02}\n",
-        left / 3600,
-        left / 60 % 60,
-        left % 60
-    );
 }
 
 fn wait_for_key() -> Result<()> {
@@ -389,9 +487,9 @@ fn ask_mode() -> Result<Mode> {
     }
 }
 
-fn ask_guests() -> Result<Vec<String>> {
+fn ask_guest_line(prompt: &str) -> Result<Vec<String>> {
     loop {
-        let guests: Vec<String> = ask("Guest emails, separated by spaces or commas: ")?
+        let guests: Vec<String> = ask(prompt)?
             .split([' ', ','])
             .filter(|email| !email.is_empty())
             .map(str::to_string)

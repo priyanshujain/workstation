@@ -9,9 +9,11 @@ use ratatui::{Terminal, prelude::CrosstermBackend};
 
 pub mod audit;
 pub mod cleanup;
+pub mod guests;
 pub mod live;
 pub mod packages;
 pub mod share;
+pub mod shares;
 pub mod widgets;
 
 /// Install a panic hook that restores the terminal, enter alt-screen + raw mode,

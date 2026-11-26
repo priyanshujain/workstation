@@ -26,7 +26,7 @@ local function stop_sharing(ctx)
 end
 
 local function shared_tabs()
-  open_pane("Shared Tabs", { "wsctl", "share", "list", "--wait" }, { 0.15, 0.15, 0.7, 0.6 })
+  open_pane("Shared Tabs", { "wsctl", "share", "manage" }, { 0.15, 0.15, 0.7, 0.6 })
 end
 
 rex.action{ name = "share_tab_view", title = "Share Tab (view)", category = "Share", run = share_tab("view") }
