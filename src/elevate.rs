@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
 
 const KEPT: [&str; 10] = [
     "HOME",
@@ -22,7 +21,7 @@ pub fn rerun_as_root() {
         return;
     }
     let sudo = |args: &[&str]| {
-        Command::new("sudo")
+        wsctl_core::privilege::sudo()
             .args(args)
             .status()
             .is_ok_and(|status| status.success())
@@ -39,7 +38,7 @@ pub fn rerun_as_root() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let error = Command::new("sudo")
+    let error = wsctl_core::privilege::sudo()
         .args(["-n", "--", "/usr/bin/env"])
         .args(assignments(|name| std::env::var_os(name)))
         .arg(exe)
