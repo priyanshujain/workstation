@@ -92,7 +92,7 @@ fn choose(candidates: Vec<Item>, names: &[String], closed: &[PathBuf]) -> Result
     let mut picked: Vec<usize> = Vec::new();
     let mut inside: Vec<Item> = Vec::new();
     for name in names {
-        match candidate_index(&candidates, name) {
+        match candidate_index(&candidates, name)? {
             Some(index) if !picked.contains(&index) => picked.push(index),
             Some(_) => {}
             None => inside.push(path_inside(&candidates, name, closed)?),
@@ -112,14 +112,34 @@ fn choose(candidates: Vec<Item>, names: &[String], closed: &[PathBuf]) -> Result
     Ok(chosen)
 }
 
-fn candidate_index(candidates: &[Item], name: &str) -> Option<usize> {
-    if let Some(index) = candidates.iter().position(|item| item.id == name) {
-        return Some(index);
+fn check_given(name: &str) -> Result<()> {
+    let given = Path::new(name);
+    if !given.exists() && !given.is_symlink() {
+        return Ok(());
     }
-    let path = Path::new(name).canonicalize().ok()?;
-    candidates
+    if !given.is_absolute() {
+        bail!("{name}: paths must be absolute");
+    }
+    if given.components().any(|c| c == Component::ParentDir) {
+        bail!("{name}: give the path without ..");
+    }
+    if given.is_symlink() {
+        bail!("{name}: is a symlink, name what it points to");
+    }
+    Ok(())
+}
+
+fn candidate_index(candidates: &[Item], name: &str) -> Result<Option<usize>> {
+    if let Some(index) = candidates.iter().position(|item| item.id == name) {
+        return Ok(Some(index));
+    }
+    check_given(name)?;
+    let Ok(path) = Path::new(name).canonicalize() else {
+        return Ok(None);
+    };
+    Ok(candidates
         .iter()
-        .position(|item| canonical(&item.target).is_some_and(|root| root == path))
+        .position(|item| canonical(&item.target).is_some_and(|root| root == path)))
 }
 
 fn canonical(target: &Target) -> Option<PathBuf> {
@@ -137,12 +157,6 @@ fn path_inside(candidates: &[Item], name: &str, closed: &[PathBuf]) -> Result<It
     let given = Path::new(name);
     if !given.is_absolute() {
         bail!("{name}: no candidate has this id, run `wsctl disk clean` to list them");
-    }
-    if given.components().any(|c| c == Component::ParentDir) {
-        bail!("{name}: give the path without ..");
-    }
-    if given.is_symlink() {
-        bail!("{name}: is a symlink, name what it points to");
     }
     let Ok(path) = given.canonicalize() else {
         bail!("{name}: does not exist");
