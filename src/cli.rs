@@ -333,11 +333,11 @@ pub enum ShareCommand {
 
     /// Stop sharing a tab
     Stop {
-        /// Block whose share to stop
+        /// Block whose share to stop, on this machine or another
         #[arg(long, conflicts_with = "all")]
         block: Option<String>,
 
-        /// Stop every share on this machine
+        /// Stop every share from this machine
         #[arg(long)]
         all: bool,
     },

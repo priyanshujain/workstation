@@ -453,11 +453,14 @@ fn sharing_stops(tabs: &[&SharedTab], email: &str) -> String {
 pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
     let targets: Vec<ActiveShare> = match (block_id, all) {
         (_, true) => active_shares()?,
-        (Some(block_id), false) => find_share(&block_id)?.into_iter().collect(),
+        (Some(block_id), false) => match find_share(&block_id)? {
+            Some(share) => vec![share],
+            None => return stop_on_relay(&block_id),
+        },
         (None, false) => bail!("name a tab with --block, or pass --all"),
     };
     if targets.is_empty() {
-        println!("This tab is not shared");
+        println!("No tab is shared from this machine");
         return Ok(());
     }
     for share in &targets {
@@ -469,6 +472,20 @@ pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
     }
     let names: Vec<String> = targets.iter().map(|share| share.name.clone()).collect();
     println!("Sharing stopped: {}", names.join(", "));
+    Ok(())
+}
+
+fn stop_on_relay(block_id: &str) -> Result<()> {
+    let relay = Relay::connect()?;
+    let (_, shares) = relay.state()?;
+    let Some(tab) = shares.iter().find(|tab| tab.share.block_id == block_id) else {
+        println!("This tab is not shared");
+        return Ok(());
+    };
+    relay.call(ManageRequest::StopShare {
+        share_id: tab.share_id.clone(),
+    })?;
+    println!("Sharing stopped: {}", tab_title(tab));
     Ok(())
 }
 
