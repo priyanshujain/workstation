@@ -346,15 +346,13 @@ fn tab_title(tab: &SharedTab) -> String {
 }
 
 pub fn manage() -> Result<()> {
-    let relay = Relay::connect()?;
-    let result = crate::tui::shares::manage(|request| {
-        share_engine::manage(&relay.url, &relay.secret, request)
-    });
-    if let Err(error) = &result {
-        eprintln!("{error:#}");
-        return wait_for_key();
-    }
-    result
+    list()?;
+    println!("\nChange them with wsctl share:");
+    println!("  stop --block BLOCK");
+    println!("  remove-guest EMAIL [--block BLOCK]");
+    println!("  reset-password EMAIL");
+    println!("  forget EMAIL");
+    Ok(())
 }
 
 pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()> {

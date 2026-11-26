@@ -1,7 +1,6 @@
 mod cli;
 mod commands;
 mod elevate;
-mod tui;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;

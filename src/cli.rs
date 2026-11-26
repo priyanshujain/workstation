@@ -294,7 +294,7 @@ pub enum ShareCommand {
     /// List every shared tab on the relay, with guests and watchers
     List,
 
-    /// Manage shared tabs and guests: stop shares, remove guests, reset passwords
+    /// List shared tabs and guests with the commands that change them
     Manage,
 
     /// Take a guest off one shared tab, or off every tab
