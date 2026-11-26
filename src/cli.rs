@@ -132,6 +132,7 @@ pub enum Commands {
         target: ShareArgs,
     },
 
+    #[cfg(target_os = "macos")]
     /// Homebrew packages with size, whether declared, and what uses them
     Packages {
         #[command(subcommand)]
@@ -392,6 +393,7 @@ pub enum AgentsCommand {
     },
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 pub enum PackagesCommand {
     /// Uninstall packages in dependency order, then run brew autoremove

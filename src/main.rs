@@ -7,12 +7,9 @@ use tracing_subscriber::EnvFilter;
 
 use std::io::IsTerminal;
 
-use cli::{
-    AgentsCommand, Cli, Commands, DiskCommand, PackagesCommand, SelfCommand, ShareCommand,
-    ShareMode,
-};
+use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand, ShareCommand, ShareMode};
 #[cfg(target_os = "macos")]
-use cli::{AppCommand, DisplayCommand};
+use cli::{AppCommand, DisplayCommand, PackagesCommand};
 
 fn use_askpass_without_terminal() {
     if std::io::stdin().is_terminal()
@@ -200,6 +197,7 @@ fn main() -> anyhow::Result<()> {
                 }
             },
         },
+        #[cfg(target_os = "macos")]
         Commands::Packages { sub, flake } => {
             let target = commands::apply::Target::parse(&flake)?;
             match sub {
