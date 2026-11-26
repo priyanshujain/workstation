@@ -197,19 +197,17 @@ fn clean(items: Vec<Item>, closed: &[PathBuf], dry_run: bool, yes: bool) -> Resu
     print_table(&items, &live);
     println!();
 
-    let ready: Vec<&Item> = items
+    let (ready, refused): (Vec<&Item>, Vec<&Item>) = items
         .iter()
-        .filter(|item| refusal(&item.target, &live).is_none())
-        .collect();
+        .partition(|item| refusal(&item.target, &live).is_none());
     if ready.is_empty() {
-        println!("Nothing to clean: every item named is refused.");
-        return Ok(());
+        bail!("nothing cleaned: every item named is refused");
     }
     let sizes: Vec<Size> = ready.iter().map(|item| item.target.size()).collect();
     let question = format!("Clean {} item(s), {}?", ready.len(), total_label(&sizes));
     if dry_run {
         println!("Dry run: {question} Nothing changed.");
-        return Ok(());
+        return outcome(0, &refused);
     }
     if !confirm(yes, &question)? {
         println!("Cancelled, nothing changed.");
@@ -217,10 +215,22 @@ fn clean(items: Vec<Item>, closed: &[PathBuf], dry_run: bool, yes: bool) -> Resu
     }
 
     let failed = ready.iter().filter(|item| !clean_one(item)).count();
+    outcome(failed, &refused)
+}
+
+fn outcome(failed: usize, refused: &[&Item]) -> Result<()> {
+    let mut problems = Vec::new();
     if failed > 0 {
-        bail!("{failed} item(s) failed");
+        problems.push(format!("{failed} item(s) failed"));
     }
-    Ok(())
+    if !refused.is_empty() {
+        let ids: Vec<&str> = refused.iter().map(|item| item.id.as_str()).collect();
+        problems.push(format!("refused: {}", ids.join(", ")));
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    bail!("{}", problems.join("; "))
 }
 
 fn clean_one(item: &Item) -> bool {
