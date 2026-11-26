@@ -8,6 +8,7 @@ use disk::liveness::Liveness;
 use disk::projects::{MAX_DEPTH, Project, default_roots};
 use disk::report::{self, Source};
 use disk::util::format_size;
+use wsctl_core::privilege::confirm;
 
 pub struct Options {
     pub roots: Vec<PathBuf>,
@@ -227,8 +228,8 @@ pub fn run(opts: Options) -> Result<()> {
     }
 
     if !confirm(
-        &format!("Remove {} of build artifacts?", format_size(reclaimable)),
         opts.yes,
+        &format!("Remove {} of build artifacts?", format_size(reclaimable)),
     )? {
         println!("  Cancelled.");
         println!();
@@ -285,18 +286,6 @@ pub fn run(opts: Options) -> Result<()> {
     println!();
 
     Ok(())
-}
-
-fn confirm(prompt: &str, yes: bool) -> Result<bool> {
-    if yes {
-        return Ok(true);
-    }
-    use std::io::Write;
-    print!("  {prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
 
 fn unmeasured_roots(roots: &[PathBuf], closed: &[PathBuf]) -> Vec<String> {
