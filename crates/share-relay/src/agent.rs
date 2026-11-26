@@ -48,12 +48,18 @@ async fn session(relay: Arc<Relay>, mut socket: WebSocket) {
     let Some(first) = read_first(&mut socket).await else {
         return;
     };
+    if let AgentMessage::Manage { request } = first {
+        let reply = relay.manage(request).await;
+        send(&mut socket, &RelayMessage::Managed { reply }).await;
+        let _ = socket.send(Message::Close(None)).await;
+        return;
+    }
     let (engine, outbox) = mpsc::unbounded_channel();
     let Some(live) = attach(&relay, &mut socket, first, engine).await else {
         return;
     };
     let expires_at = live.share().expires_at_unix;
-    match pump(&live, &mut socket, outbox, expires_at).await {
+    match pump(&relay, &live, &mut socket, outbox, expires_at).await {
         Outcome::Ended(reason) => relay.end(&live, &reason).await,
         Outcome::Disconnected => relay.orphan(live),
     }
@@ -67,7 +73,7 @@ async fn attach(
 ) -> Option<Arc<LiveShare>> {
     match first {
         AgentMessage::Register { share } if share.expires_at_unix > unix_now() => {
-            let (live, credentials) = match relay.register(share, engine).await {
+            let (live, accounts) = match relay.register(share, engine).await {
                 Ok(registered) => registered,
                 Err(error) => {
                     tracing::error!(%error, "could not register a share");
@@ -79,7 +85,8 @@ async fn attach(
             live.send_engine(RelayMessage::Registered {
                 share_id: live.id.clone(),
                 url: relay.viewer_url(&live.id),
-                credentials,
+                credentials: accounts.credentials,
+                existing: accounts.existing,
             });
             Some(live)
         }
@@ -102,6 +109,7 @@ async fn read_first(socket: &mut WebSocket) -> Option<AgentMessage> {
 }
 
 async fn pump(
+    relay: &Relay,
     live: &LiveShare,
     socket: &mut WebSocket,
     mut outbox: UnboundedReceiver<RelayMessage>,
@@ -121,6 +129,10 @@ async fn pump(
                 Some(Ok(Message::Binary(bytes))) => live.bytes(&bytes),
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
                     Ok(AgentMessage::Ended { reason }) => return Outcome::Ended(reason),
+                    Ok(message @ AgentMessage::Status { .. }) => {
+                        live.apply(message);
+                        relay.changed();
+                    }
                     Ok(message) => live.apply(message),
                     Err(error) => tracing::warn!(%error, "bad engine message"),
                 },

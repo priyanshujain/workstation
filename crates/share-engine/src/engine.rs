@@ -74,11 +74,12 @@ impl<'a> Engine<'a> {
 
     pub async fn run(mut self) -> Result<()> {
         self.status = self.read_status().await;
-        let (mut relay, url, credentials) = self.register().await?;
+        let (mut relay, url, credentials, existing) = self.register().await?;
         (self.on_event)(ShareEvent::Ready {
             url,
             expires_at_unix: self.share.expires_at_unix,
             credentials,
+            existing,
         });
         self.send_state(&mut relay).await;
         loop {
@@ -251,6 +252,7 @@ impl<'a> Engine<'a> {
                 Step::Finish(None)
             }
             RelayMessage::Registered { .. }
+            | RelayMessage::Managed { .. }
             | RelayMessage::Resumed { .. }
             | RelayMessage::ResumeRejected { .. } => Step::Continue,
         }
@@ -316,7 +318,7 @@ impl<'a> Engine<'a> {
             .await
     }
 
-    async fn register(&mut self) -> Result<(Relay, String, Vec<GuestCredential>)> {
+    async fn register(&mut self) -> Result<(Relay, String, Vec<GuestCredential>, Vec<String>)> {
         let register = AgentMessage::Register {
             share: self.share.clone(),
         };
@@ -327,10 +329,11 @@ impl<'a> Engine<'a> {
                     share_id,
                     url,
                     credentials,
+                    existing,
                 },
             ) => {
                 self.share_id = share_id;
-                Ok((relay, url, credentials))
+                Ok((relay, url, credentials, existing))
             }
             (_, RelayMessage::Stop { reason }) => bail!("the relay refused the share: {reason}"),
             _ => bail!("the relay did not register the share"),

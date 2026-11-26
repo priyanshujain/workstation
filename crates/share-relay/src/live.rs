@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use share_protocol::{
-    AgentMessage, Mode, ProgramStatus, RelayMessage, Share, Theme, ViewerMessage,
+    AgentMessage, GuestTab, Mode, ProgramStatus, RelayMessage, Share, Theme, ViewerMessage,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::queue::{Outbound, ViewerSender};
+
+pub const ACCESS_REMOVED: &str = "the host removed your access";
 
 pub struct LiveShare {
     pub id: String,
@@ -58,6 +60,67 @@ impl LiveShare {
             .guests
             .iter()
             .any(|guest| guest.eq_ignore_ascii_case(email))
+    }
+
+    pub fn add_guests(&self, guests: &[String]) -> Vec<String> {
+        let mut state = self.state();
+        for guest in guests {
+            if !state.share.guests.contains(guest) {
+                state.share.guests.push(guest.clone());
+            }
+        }
+        state.share.guests.sort();
+        state.share.guests.clone()
+    }
+
+    pub fn remove_guest(&self, email: &str) -> Vec<String> {
+        let mut state = self.state();
+        state.share.guests.retain(|guest| guest != email);
+        let removed: Vec<u64> = state
+            .viewers
+            .iter()
+            .filter(|(_, viewer)| viewer.email == email)
+            .map(|(id, _)| *id)
+            .collect();
+        for viewer_id in removed {
+            if let Some(viewer) = state.viewers.remove(&viewer_id) {
+                viewer.tx.send(Outbound::Message(ViewerMessage::Ended {
+                    reason: ACCESS_REMOVED.to_string(),
+                }));
+                viewer.tx.send(Outbound::Close);
+                state.send_engine(RelayMessage::ViewerLeft {
+                    viewer_id,
+                    email: viewer.email,
+                });
+            }
+        }
+        state.broadcast_viewers();
+        state.share.guests.clone()
+    }
+
+    pub fn watching(&self) -> Vec<String> {
+        let mut emails: Vec<String> = self
+            .state()
+            .viewers
+            .values()
+            .map(|viewer| viewer.email.clone())
+            .collect();
+        emails.sort();
+        emails.dedup();
+        emails
+    }
+
+    pub fn guest_tab(&self) -> GuestTab {
+        let state = self.state();
+        GuestTab {
+            id: self.id.clone(),
+            label: state.share.label.clone(),
+            session_label: state.share.session_label.clone(),
+            host: state.share.host.clone(),
+            mode: state.share.mode,
+            expires_at_unix: state.share.expires_at_unix,
+            status: state.status.clone().flatten(),
+        }
     }
 
     pub fn expired(&self, now_unix: u64) -> bool {
@@ -152,7 +215,8 @@ impl LiveShare {
             }
             AgentMessage::Register { .. }
             | AgentMessage::Resume { .. }
-            | AgentMessage::Ended { .. } => {}
+            | AgentMessage::Ended { .. }
+            | AgentMessage::Manage { .. } => {}
         }
     }
 

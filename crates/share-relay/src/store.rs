@@ -22,16 +22,15 @@ CREATE TABLE IF NOT EXISTS shares (
     ended_at INTEGER,
     end_reason TEXT
 );
-CREATE TABLE IF NOT EXISTS guest_credentials (
-    share_id TEXT NOT NULL,
-    email TEXT NOT NULL,
+DROP TABLE IF EXISTS guest_credentials;
+DROP TABLE IF EXISTS viewer_sessions;
+CREATE TABLE IF NOT EXISTS guests (
+    email TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (share_id, email)
+    created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS viewer_sessions (
+CREATE TABLE IF NOT EXISTS guest_sessions (
     token_hash TEXT PRIMARY KEY,
-    share_id TEXT NOT NULL,
     email TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
@@ -120,27 +119,52 @@ impl Store {
         Ok(shares)
     }
 
-    pub async fn add_credential(
-        &self,
-        share_id: &str,
-        email: &str,
-        password_hash: &str,
-    ) -> anyhow::Result<()> {
-        self.execute(
-            "INSERT INTO guest_credentials (share_id, email, password_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![share_id, email, password_hash, unix_millis()],
+    pub async fn guest_hash(&self, email: &str) -> anyhow::Result<Option<String>> {
+        self.text(
+            "SELECT password_hash FROM guests WHERE email = ?1",
+            params![email],
         )
         .await
     }
 
-    pub async fn credential_hash(
-        &self,
-        share_id: &str,
-        email: &str,
-    ) -> anyhow::Result<Option<String>> {
-        self.text(
-            "SELECT password_hash FROM guest_credentials WHERE share_id = ?1 AND email = ?2",
-            params![share_id, email],
+    pub async fn set_guest(&self, email: &str, password_hash: &str) -> anyhow::Result<()> {
+        self.execute(
+            "INSERT INTO guests (email, password_hash, created_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (email) DO UPDATE SET password_hash = excluded.password_hash",
+            params![email, password_hash, unix_millis()],
+        )
+        .await
+    }
+
+    pub async fn forget_guest(&self, email: &str) -> anyhow::Result<()> {
+        self.execute("DELETE FROM guests WHERE email = ?1", params![email])
+            .await?;
+        self.execute(
+            "DELETE FROM guest_sessions WHERE email = ?1",
+            params![email],
+        )
+        .await
+    }
+
+    pub async fn guests(&self) -> anyhow::Result<Vec<String>> {
+        let _order = self.order.lock().await;
+        let mut rows = self
+            .connect()
+            .await?
+            .query("SELECT email FROM guests ORDER BY email", ())
+            .await?;
+        let mut emails = Vec::new();
+        while let Some(row) = rows.next().await? {
+            emails.push(row.get(0)?);
+        }
+        Ok(emails)
+    }
+
+    pub async fn share_guests(&self, share_id: &str, guests: &[String]) -> anyhow::Result<()> {
+        let guests = serde_json::to_string(guests)?;
+        self.execute(
+            "UPDATE shares SET guests = ?2 WHERE share_id = ?1",
+            params![share_id, guests],
         )
         .await
     }
@@ -148,33 +172,28 @@ impl Store {
     pub async fn add_session(
         &self,
         token_hash: &str,
-        share_id: &str,
         email: &str,
         expires_at_unix: u64,
     ) -> anyhow::Result<()> {
         let expires_at = i64::try_from(expires_at_unix.saturating_mul(1000)).unwrap_or(i64::MAX);
         self.execute(
-            "INSERT INTO viewer_sessions (token_hash, share_id, email, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![token_hash, share_id, email, unix_millis(), expires_at],
+            "INSERT INTO guest_sessions (token_hash, email, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            params![token_hash, email, unix_millis(), expires_at],
         )
         .await
     }
 
-    pub async fn session_email(
-        &self,
-        token_hash: &str,
-        share_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    pub async fn session_email(&self, token_hash: &str) -> anyhow::Result<Option<String>> {
         self.text(
-            "SELECT email FROM viewer_sessions WHERE token_hash = ?1 AND share_id = ?2 AND expires_at > ?3",
-            params![token_hash, share_id, unix_millis()],
+            "SELECT email FROM guest_sessions WHERE token_hash = ?1 AND expires_at > ?2",
+            params![token_hash, unix_millis()],
         )
         .await
     }
 
     pub async fn delete_session(&self, token_hash: &str) -> anyhow::Result<()> {
         self.execute(
-            "DELETE FROM viewer_sessions WHERE token_hash = ?1",
+            "DELETE FROM guest_sessions WHERE token_hash = ?1",
             params![token_hash],
         )
         .await
@@ -311,15 +330,10 @@ mod tests {
         let store = Store::open(&url, None).await.unwrap();
         let share_id = crate::auth::random_token::<16>().unwrap();
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-        store
-            .add_credential(&share_id, "guest@example.com", "hash")
-            .await
-            .unwrap();
+        let email = format!("{share_id}@example.com");
+        store.set_guest(&email, "hash").await.unwrap();
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-        let hash = store
-            .credential_hash(&share_id, "guest@example.com")
-            .await
-            .unwrap();
+        let hash = store.guest_hash(&email).await.unwrap();
         assert_eq!(hash.as_deref(), Some("hash"));
     }
 }

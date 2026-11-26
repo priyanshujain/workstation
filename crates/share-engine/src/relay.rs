@@ -50,6 +50,7 @@ async fn handshake(relay: &mut Relay) -> Result<RelayMessage> {
         match parse(&message?) {
             Some(
                 reply @ (RelayMessage::Registered { .. }
+                | RelayMessage::Managed { .. }
                 | RelayMessage::Resumed { .. }
                 | RelayMessage::ResumeRejected { .. }),
             ) => return Ok(reply),

@@ -7,7 +7,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use share_protocol::{
-    AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, Mode, RelayMessage, Share, ViewerMessage,
+    AGENT_PATH, AGENT_SECRET_HEADER, AgentMessage, ManageReply, ManageRequest, Mode, RelayMessage,
+    Share, ViewerMessage,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -171,25 +172,29 @@ async fn register(running: &Running, share: Share) -> (Socket, String) {
         share_id,
         url,
         credentials,
+        existing,
     } = next_json(&mut engine).await
     else {
         panic!("not registered")
     };
     assert_eq!(url, format!("https://share.example.com/s/{share_id}"));
     assert!(URL_SAFE_NO_PAD.decode(&share_id).unwrap().len() >= 16);
-    assert_eq!(credentials.len(), 1);
-    assert_eq!(credentials[0].email, GUEST);
-    assert!(credentials[0].password.len() >= 20);
-    running
-        .passwords
-        .lock()
-        .unwrap()
-        .insert(share_id.clone(), credentials[0].password.clone());
+    let mut passwords = running.passwords.lock().unwrap();
+    for credential in &credentials {
+        assert!(credential.password.len() >= 20);
+        assert!(!passwords.contains_key(&credential.email));
+        passwords.insert(credential.email.clone(), credential.password.clone());
+    }
+    for email in &existing {
+        assert!(passwords.contains_key(email));
+    }
+    assert!(passwords.contains_key(GUEST));
+    drop(passwords);
     (engine, share_id)
 }
 
-fn password(running: &Running, id: &str) -> String {
-    running.passwords.lock().unwrap()[id].clone()
+fn password(running: &Running) -> String {
+    running.passwords.lock().unwrap()[GUEST].clone()
 }
 
 fn client() -> reqwest::Client {
@@ -199,10 +204,10 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 
-async fn login(running: &Running, id: &str, email: &str, password: &str) -> (u16, Option<String>) {
+async fn login(running: &Running, email: &str, password: &str) -> (u16, Option<String>) {
     let body = format!("email={}&password={password}", email.replace('@', "%40"));
     let response = client()
-        .post(format!("http://{}/s/{id}/login", running.viewer))
+        .post(format!("http://{}/login", running.viewer))
         .header("content-type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -215,8 +220,8 @@ async fn login(running: &Running, id: &str, email: &str, password: &str) -> (u16
     (response.status().as_u16(), cookie)
 }
 
-async fn sign_in(running: &Running, id: &str) -> String {
-    let (status, cookie) = login(running, id, GUEST, &password(running, id)).await;
+async fn sign_in(running: &Running) -> String {
+    let (status, cookie) = login(running, GUEST, &password(running)).await;
     assert_eq!(status, 303);
     cookie_pair(&cookie.unwrap())
 }
@@ -234,12 +239,16 @@ async fn page(running: &Running, path: &str, cookie: Option<&str>) -> (u16, Stri
     (response.status().as_u16(), response.text().await.unwrap())
 }
 
-async fn status(running: &Running, path: &str) -> u16 {
-    page(running, path, None).await.0
+async fn share_status(running: &Running, id: &str) -> u16 {
+    let cookie = sign_in(running).await;
+    match viewer_socket_with(running, id, &cookie).await {
+        Ok(_) => 200,
+        refused => refused_status(refused),
+    }
 }
 
 async fn viewer_socket(running: &Running, id: &str) -> Socket {
-    let cookie = sign_in(running, id).await;
+    let cookie = sign_in(running).await;
     viewer_socket_with(running, id, &cookie).await.unwrap()
 }
 
@@ -378,7 +387,7 @@ async fn relays_screen_bytes_and_input() {
             reason: "stopped".into()
         }
     );
-    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
+    assert_eq!(share_status(&running, &id).await, 404);
 }
 
 #[tokio::test]
@@ -401,7 +410,7 @@ async fn stops_engine_at_expiry() {
             reason: "expired".into()
         }
     );
-    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
+    assert_eq!(share_status(&running, &id).await, 404);
 }
 
 async fn engine_socket(running: &Running) -> Socket {
@@ -500,7 +509,7 @@ async fn resumes_share_after_engine_drop() {
     );
 
     tokio::time::sleep(Duration::from_secs(6)).await;
-    assert_eq!(status(&running, &format!("/s/{id}")).await, 200);
+    assert_eq!(share_status(&running, &id).await, 200);
     assert!(prompts(&running).await.is_empty());
 }
 
@@ -614,7 +623,7 @@ async fn closes_viewer_that_falls_behind() {
 async fn restores_open_shares_after_restart() {
     let first = start_relay().await;
     let (_old_engine, id) = register(&first, share(Mode::Input, unix_now() + 60)).await;
-    let cookie = sign_in(&first, &id).await;
+    let cookie = sign_in(&first).await;
     let second = restart(&first).await;
     let mut viewer = viewer_socket_with(&second, &id, &cookie).await.unwrap();
     let ViewerMessage::Hello {
@@ -627,14 +636,9 @@ async fn restores_open_shares_after_restart() {
     expected.guests = vec![GUEST.into()];
     assert_eq!(restored, expected);
     assert_eq!(
-        login(
-            &second,
-            &id,
-            "stranger@example.com",
-            &password(&second, &id)
-        )
-        .await
-        .0,
+        login(&second, "stranger@example.com", &password(&second))
+            .await
+            .0,
         401
     );
 
@@ -679,7 +683,7 @@ async fn credential_hashes(running: &Running) -> Vec<String> {
         .unwrap();
     let connection = database.connect().unwrap();
     let mut rows = connection
-        .query("SELECT password_hash FROM guest_credentials", ())
+        .query("SELECT password_hash FROM guests", ())
         .await
         .unwrap();
     let mut hashes = Vec::new();
@@ -690,19 +694,22 @@ async fn credential_hashes(running: &Running) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn login_sets_a_session_cookie_scoped_to_the_share() {
+async fn login_sets_a_site_wide_session_cookie() {
     let running = start_relay().await;
     let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    let (status, body) = page(&running, &format!("/s/{id}"), None).await;
-    assert_eq!(status, 200);
-    assert!(body.contains("Sign in"));
+    for path in ["/".to_string(), format!("/s/{id}")] {
+        let (status, body) = page(&running, &path, None).await;
+        assert_eq!(status, 200);
+        assert!(body.contains("Sign in"));
+    }
+    let (_, body) = page(&running, "/s/x\"><script>", None).await;
+    assert!(body.contains(r#"name="next" value="/""#));
 
-    let (status, set_cookie) =
-        login(&running, &id, "Guest@Example.COM", &password(&running, &id)).await;
+    let (status, set_cookie) = login(&running, "Guest@Example.COM", &password(&running)).await;
     assert_eq!(status, 303);
     let set_cookie = set_cookie.unwrap();
     for attribute in [
-        &format!("Path=/s/{id}"),
+        "Path=/;",
         "HttpOnly",
         "SameSite=Strict",
         "Secure",
@@ -714,49 +721,75 @@ async fn login_sets_a_session_cookie_scoped_to_the_share() {
         );
     }
     let cookie = cookie_pair(&set_cookie);
-    let (status, body) = page(&running, &format!("/s/{id}"), Some(&cookie)).await;
-    assert_eq!(status, 200);
-    assert!(body.contains("id=\"terminal\""));
+    for path in ["/".to_string(), format!("/s/{id}")] {
+        let (status, body) = page(&running, &path, Some(&cookie)).await;
+        assert_eq!(status, 200);
+        assert!(body.contains("id=\"terminal\""));
+    }
+}
 
-    let (_other_engine, other) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    let (_, body) = page(&running, &format!("/s/{other}"), Some(&cookie)).await;
-    assert!(body.contains("Sign in"));
+#[tokio::test]
+async fn login_returns_to_the_requested_tab() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    for (next, expected) in [
+        (format!("/s/{id}"), format!("/s/{id}")),
+        ("https://evil.example.com".to_string(), "/".to_string()),
+        ("//evil.example.com".to_string(), "/".to_string()),
+    ] {
+        let body = format!(
+            "email={}&password={}&next={}",
+            GUEST.replace('@', "%40"),
+            password(&running),
+            next.replace(':', "%3A").replace('/', "%2F")
+        );
+        let response = client()
+            .post(format!("http://{}/login", running.viewer))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["location"], expected.as_str());
+    }
+}
+
+#[tokio::test]
+async fn one_password_covers_every_share_for_a_guest() {
+    let running = start_relay().await;
+    let (_first_engine, first) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let (_second_engine, second) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let cookie = sign_in(&running).await;
+    assert!(viewer_socket_with(&running, &first, &cookie).await.is_ok());
+    assert!(viewer_socket_with(&running, &second, &cookie).await.is_ok());
+
+    let mut private = share(Mode::View, unix_now() + 60);
+    private.guests = vec!["other@example.com".into()];
+    let (_private_engine, private) = register(&running, private).await;
     assert_eq!(
-        refused_status(viewer_socket_with(&running, &other, &cookie).await),
-        401
+        refused_status(viewer_socket_with(&running, &private, &cookie).await),
+        404
     );
 }
 
 #[tokio::test]
 async fn rejects_wrong_password_and_unknown_email() {
     let running = start_relay().await;
-    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    let (status, cookie) = login(&running, &id, GUEST, "wrong-password").await;
+    register(&running, share(Mode::View, unix_now() + 60)).await;
+    let (status, cookie) = login(&running, GUEST, "wrong-password").await;
     assert_eq!((status, cookie), (401, None));
-    let (status, cookie) = login(
-        &running,
-        &id,
-        "stranger@example.com",
-        &password(&running, &id),
-    )
-    .await;
+    let (status, cookie) = login(&running, "stranger@example.com", &password(&running)).await;
     assert_eq!((status, cookie), (401, None));
-    assert_eq!(login(&running, "unknown", GUEST, "x").await.0, 404);
 }
 
 #[tokio::test]
 async fn rate_limits_failed_logins() {
     let running = start_relay().await;
-    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    register(&running, share(Mode::View, unix_now() + 60)).await;
     for _ in 0..crate::limits::MAX_FAILURES {
-        assert_eq!(login(&running, &id, GUEST, "wrong-password").await.0, 401);
+        assert_eq!(login(&running, GUEST, "wrong-password").await.0, 401);
     }
-    assert_eq!(
-        login(&running, &id, GUEST, &password(&running, &id))
-            .await
-            .0,
-        429
-    );
+    assert_eq!(login(&running, GUEST, &password(&running)).await.0, 429);
 }
 
 #[tokio::test]
@@ -768,7 +801,7 @@ async fn socket_needs_session_cookie_and_matching_origin() {
         refused_status(connect_with(url.clone(), &[("origin", ORIGIN)]).await),
         401
     );
-    let cookie = sign_in(&running, &id).await;
+    let cookie = sign_in(&running).await;
     let wrong_origin = connect_with(
         url.clone(),
         &[("cookie", &cookie), ("origin", "https://evil.example.com")],
@@ -786,9 +819,9 @@ async fn socket_needs_session_cookie_and_matching_origin() {
 async fn logout_ends_the_session() {
     let running = start_relay().await;
     let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    let cookie = sign_in(&running, &id).await;
+    let cookie = sign_in(&running).await;
     let response = client()
-        .post(format!("http://{}/s/{id}/logout", running.viewer))
+        .post(format!("http://{}/logout", running.viewer))
         .header("cookie", &cookie)
         .send()
         .await
@@ -809,21 +842,18 @@ async fn logout_ends_the_session() {
 async fn session_and_credentials_survive_restart() {
     let first = start_relay().await;
     let (_old_engine, id) = register(&first, share(Mode::View, unix_now() + 60)).await;
-    let cookie = sign_in(&first, &id).await;
+    let cookie = sign_in(&first).await;
     let second = restart(&first).await;
     let (_, body) = page(&second, &format!("/s/{id}"), Some(&cookie)).await;
     assert!(body.contains("id=\"terminal\""));
-    assert_eq!(
-        login(&second, &id, GUEST, &password(&second, &id)).await.0,
-        303
-    );
+    assert_eq!(login(&second, GUEST, &password(&second)).await.0, 303);
 }
 
 #[tokio::test]
 async fn stores_only_password_hashes() {
     let running = start_relay().await;
-    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    let password = password(&running, &id);
+    register(&running, share(Mode::View, unix_now() + 60)).await;
+    let password = password(&running);
     let hashes = credential_hashes(&running).await;
     assert_eq!(hashes.len(), 1);
     assert!(hashes[0].starts_with("$argon2id$"));
@@ -852,7 +882,7 @@ async fn drop_table(running: &Running, table: &str) {
 #[tokio::test]
 async fn register_fails_when_credentials_cannot_be_saved() {
     let running = start_relay().await;
-    drop_table(&running, "guest_credentials").await;
+    drop_table(&running, "guests").await;
     let mut engine = engine_socket(&running).await;
     send_json(
         &mut engine,
@@ -872,14 +902,9 @@ async fn register_fails_when_credentials_cannot_be_saved() {
 #[tokio::test]
 async fn login_reports_an_unavailable_database() {
     let running = start_relay().await;
-    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
-    drop_table(&running, "guest_credentials").await;
-    assert_eq!(
-        login(&running, &id, GUEST, &password(&running, &id))
-            .await
-            .0,
-        503
-    );
+    register(&running, share(Mode::View, unix_now() + 60)).await;
+    drop_table(&running, "guests").await;
+    assert_eq!(login(&running, GUEST, &password(&running)).await.0, 503);
 }
 
 #[tokio::test]
@@ -908,5 +933,225 @@ async fn ends_share_when_input_cannot_be_recorded() {
             reason: crate::relay::AUDIT_FAILED.into()
         }
     );
-    assert_eq!(status(&running, &format!("/s/{id}")).await, 404);
+    assert_eq!(share_status(&running, &id).await, 404);
+}
+
+async fn manage(running: &Running, request: ManageRequest) -> ManageReply {
+    let mut engine = engine_socket(running).await;
+    send_json(&mut engine, &AgentMessage::Manage { request }).await;
+    let RelayMessage::Managed { reply } = next_json(&mut engine).await else {
+        panic!("no manage reply")
+    };
+    reply
+}
+
+async fn lobby(running: &Running) -> Socket {
+    let cookie = sign_in(running).await;
+    connect_with(
+        format!("ws://{}/events", running.viewer),
+        &[("cookie", &cookie), ("origin", ORIGIN)],
+    )
+    .await
+    .unwrap()
+}
+
+async fn next_tabs(socket: &mut Socket) -> Vec<String> {
+    let ViewerMessage::Tabs { tabs } = next_json(socket).await else {
+        panic!("no tabs")
+    };
+    tabs.into_iter().map(|tab| tab.id).collect()
+}
+
+#[tokio::test]
+async fn lobby_follows_the_guest_shares() {
+    let running = start_relay().await;
+    let (_first_engine, first) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut lobby = lobby(&running).await;
+    assert_eq!(next_tabs(&mut lobby).await, std::slice::from_ref(&first));
+    let (mut second_engine, second) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut both = vec![first.clone(), second.clone()];
+    both.sort();
+    let mut listed = next_tabs(&mut lobby).await;
+    listed.sort();
+    assert_eq!(listed, both);
+    send_json(
+        &mut second_engine,
+        &AgentMessage::Ended {
+            reason: "done".into(),
+        },
+    )
+    .await;
+    assert_eq!(next_tabs(&mut lobby).await, [first]);
+}
+
+#[tokio::test]
+async fn manage_lists_shares_and_guests() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let _viewer = joined_viewer(&running, &id).await;
+    let ManageReply::State { guests, shares } = manage(&running, ManageRequest::State).await else {
+        panic!("no state")
+    };
+    assert_eq!(guests, [GUEST]);
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].share_id, id);
+    assert_eq!(shares[0].share.guests, [GUEST]);
+    assert_eq!(shares[0].watching, [GUEST]);
+}
+
+#[tokio::test]
+async fn adds_guests_to_a_running_share() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let reply = manage(
+        &running,
+        ManageRequest::AddGuests {
+            share_id: id.clone(),
+            guests: vec![GUEST.into(), " New@Example.com ".into()],
+        },
+    )
+    .await;
+    let ManageReply::Credentials {
+        credentials,
+        existing,
+    } = reply
+    else {
+        panic!("no credentials")
+    };
+    assert_eq!(existing, [GUEST]);
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(credentials[0].email, "new@example.com");
+    let (status, cookie) = login(&running, "new@example.com", &credentials[0].password).await;
+    assert_eq!(status, 303);
+    let cookie = cookie_pair(&cookie.unwrap());
+    assert!(viewer_socket_with(&running, &id, &cookie).await.is_ok());
+}
+
+#[tokio::test]
+async fn removes_a_guest_from_one_share_or_all() {
+    let running = start_relay().await;
+    let mut shared = share(Mode::View, unix_now() + 60);
+    shared.guests.push("other@example.com".into());
+    let (mut first_engine, first) = register(&running, shared).await;
+    let (mut second_engine, second) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let mut viewer = joined_viewer(&running, &first).await;
+    let RelayMessage::ViewerJoined { .. } = next_json(&mut first_engine).await else {
+        panic!("no join")
+    };
+
+    let reply = manage(
+        &running,
+        ManageRequest::RemoveGuest {
+            email: GUEST.into(),
+            share_id: Some(first.clone()),
+        },
+    )
+    .await;
+    assert_eq!(reply, ManageReply::Done);
+    assert_eq!(
+        next_json::<ViewerMessage>(&mut viewer).await,
+        ViewerMessage::Ended {
+            reason: crate::live::ACCESS_REMOVED.into()
+        }
+    );
+    let RelayMessage::ViewerLeft { email, .. } = next_json(&mut first_engine).await else {
+        panic!("no leave")
+    };
+    assert_eq!(email, GUEST);
+    assert_eq!(share_status(&running, &first).await, 404);
+    assert_eq!(share_status(&running, &second).await, 200);
+    let RelayMessage::ViewerJoined { .. } = next_json(&mut second_engine).await else {
+        panic!("no join")
+    };
+
+    manage(
+        &running,
+        ManageRequest::RemoveGuest {
+            email: GUEST.into(),
+            share_id: None,
+        },
+    )
+    .await;
+    loop {
+        match next_json::<RelayMessage>(&mut second_engine).await {
+            RelayMessage::Stop { reason } => break assert_eq!(reason, "no guests are left"),
+            _ => continue,
+        }
+    }
+    let ManageReply::State { shares, .. } = manage(&running, ManageRequest::State).await else {
+        panic!("no state")
+    };
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].share.guests, ["other@example.com"]);
+}
+
+#[tokio::test]
+async fn reset_password_replaces_the_old_one() {
+    let running = start_relay().await;
+    register(&running, share(Mode::View, unix_now() + 60)).await;
+    let old = password(&running);
+    let ManageReply::Credentials { credentials, .. } = manage(
+        &running,
+        ManageRequest::ResetPassword {
+            email: GUEST.into(),
+        },
+    )
+    .await
+    else {
+        panic!("no credentials")
+    };
+    assert_eq!(login(&running, GUEST, &old).await.0, 401);
+    assert_eq!(
+        login(&running, GUEST, &credentials[0].password).await.0,
+        303
+    );
+}
+
+#[tokio::test]
+async fn forget_guest_ends_access_and_account() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let cookie = sign_in(&running).await;
+    manage(
+        &running,
+        ManageRequest::ForgetGuest {
+            email: GUEST.into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        refused_status(viewer_socket_with(&running, &id, &cookie).await),
+        401
+    );
+    assert_eq!(login(&running, GUEST, &password(&running)).await.0, 401);
+    let ManageReply::State { guests, .. } = manage(&running, ManageRequest::State).await else {
+        panic!("no state")
+    };
+    assert!(guests.is_empty());
+}
+
+#[tokio::test]
+async fn stop_share_tells_the_engine() {
+    let running = start_relay().await;
+    let (mut engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let reply = manage(
+        &running,
+        ManageRequest::StopShare {
+            share_id: id.clone(),
+        },
+    )
+    .await;
+    assert_eq!(reply, ManageReply::Done);
+    assert_eq!(
+        next_json::<RelayMessage>(&mut engine).await,
+        RelayMessage::Stop {
+            reason: "the host stopped sharing".into()
+        }
+    );
+    assert_eq!(
+        manage(&running, ManageRequest::StopShare { share_id: id }).await,
+        ManageReply::Failed {
+            reason: "that share has ended".into()
+        }
+    );
 }

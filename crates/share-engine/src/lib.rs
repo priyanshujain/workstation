@@ -8,7 +8,9 @@ mod translate;
 use anyhow::{Context, Result, bail};
 use rex::Control;
 use serde_json::{Value, json};
-use share_protocol::{GuestCredential, Mode, Share};
+use share_protocol::{
+    AgentMessage, GuestCredential, ManageReply, ManageRequest, Mode, RelayMessage, Share,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct Tab {
@@ -24,6 +26,7 @@ pub struct ShareRequest {
     pub block_id: String,
     pub mode: Mode,
     pub guests: Vec<String>,
+    pub label: Option<String>,
     pub ttl_secs: u64,
     pub relay_url: String,
     pub secret: String,
@@ -35,6 +38,7 @@ pub enum ShareEvent {
         url: String,
         expires_at_unix: u64,
         credentials: Vec<GuestCredential>,
+        existing: Vec<String>,
     },
     ViewerJoined {
         email: String,
@@ -68,6 +72,16 @@ pub fn rex_call(session_id: &str, method: &str, args: Value) -> Result<Value> {
             .call("session.attach", json!({"session_id": session_id}))
             .await?;
         control.call(method, args).await
+    })
+}
+
+pub fn manage(relay_url: &str, secret: &str, request: ManageRequest) -> Result<ManageReply> {
+    runtime()?.block_on(async {
+        let hello = AgentMessage::Manage { request };
+        match relay::connect(relay_url, secret, &hello).await? {
+            (_, RelayMessage::Managed { reply }) => Ok(reply),
+            _ => bail!("the relay did not answer the request"),
+        }
     })
 }
 
@@ -178,7 +192,7 @@ fn share_for(request: &ShareRequest, tab: &Tab) -> Result<Share> {
         session_id: tab.session_id.clone(),
         session_label: tab.session_label.clone(),
         block_id: tab.block_id.clone(),
-        label: tab.title.clone(),
+        label: request.label.clone().unwrap_or_else(|| tab.title.clone()),
         host: hostname().context("could not read the hostname")?,
         mode: request.mode,
         guests: request.guests.clone(),

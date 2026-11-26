@@ -15,40 +15,50 @@ use crate::auth::{random_token, token_hash, verify_password};
 use crate::live::LiveShare;
 use crate::prompt::PromptBuffer;
 use crate::queue::{Outbound, Received, VIEWER_BACKLOG_BYTES, ViewerReceiver, viewer_queue};
-use crate::relay::Relay;
+use crate::relay::{Relay, normalize};
 use crate::store::unix_now;
 
 const COOKIE_NAME: &str = "wsctl_share";
-const BAD_LOGIN: &str = "That email and password do not match this share.";
+const BAD_LOGIN: &str = "That email and password do not match.";
 const LIMITED_LOGIN: &str = "Too many failed attempts. Try again in 15 minutes.";
+const SESSION_SECS: u64 = 7 * 24 * 3600;
 
 #[derive(Deserialize)]
 struct Login {
     email: String,
     password: String,
+    #[serde(default)]
+    next: String,
 }
 
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
-        .route("/s/{id}", get(page))
-        .route("/s/{id}/login", post(login))
-        .route("/s/{id}/logout", post(logout))
+        .route("/", get(home))
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+        .route("/events", get(events))
+        .route("/s/{id}", get(tab))
         .route("/s/{id}/ws", get(connect))
         .route("/assets/{name}", get(asset))
         .with_state(relay)
 }
 
-async fn page(
+async fn home(State(relay): State<Arc<Relay>>, headers: HeaderMap) -> Response {
+    app_or_login(&relay, &headers, "/").await
+}
+
+async fn tab(
     State(relay): State<Arc<Relay>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    let Some(live) = relay.find(&id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    match signed_in(&relay, &headers, &live).await {
+    app_or_login(&relay, &headers, &format!("{VIEWER_PATH_PREFIX}{id}")).await
+}
+
+async fn app_or_login(relay: &Relay, headers: &HeaderMap, path: &str) -> Response {
+    match signed_in(relay, headers).await {
         Ok(Some(_)) => html(StatusCode::OK, assets::PAGE.to_string()),
-        Ok(None) => html(StatusCode::OK, login_page(&id, "")),
+        Ok(None) => html(StatusCode::OK, login_page(safe_next(path), "")),
         Err(status) => status.into_response(),
     }
 }
@@ -57,14 +67,11 @@ async fn login(
     State(relay): State<Arc<Relay>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path(id): Path<String>,
     Form(form): Form<Login>,
 ) -> Response {
-    let Some(live) = relay.find(&id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let email = form.email.trim().to_lowercase();
-    let account = format!("account:{id}:{email}");
+    let next = safe_next(&form.next);
+    let email = normalize(&form.email);
+    let account = format!("account:{email}");
     let keys = [
         account.clone(),
         format!("ip:{}", client_ip(&relay, &headers, peer)),
@@ -72,10 +79,10 @@ async fn login(
     if relay.failures.blocked(&keys) {
         return html(
             StatusCode::TOO_MANY_REQUESTS,
-            login_page(&id, LIMITED_LOGIN),
+            login_page(next, LIMITED_LOGIN),
         );
     }
-    let hash = match relay.store.credential_hash(&id, &email).await {
+    let hash = match relay.store.guest_hash(&email).await {
         Ok(hash) => hash,
         Err(error) => return unavailable(error),
     };
@@ -83,15 +90,25 @@ async fn login(
     let verified = tokio::task::spawn_blocking(move || verify_password(&password, hash.as_deref()))
         .await
         .unwrap_or(false);
-    if !verified || !live.admits(&email) {
+    if !verified {
         relay.failures.record(&keys);
-        return html(StatusCode::UNAUTHORIZED, login_page(&id, BAD_LOGIN));
+        return html(StatusCode::UNAUTHORIZED, login_page(next, BAD_LOGIN));
     }
     relay.failures.clear(&account);
-    match start_session(&relay, &live, &email).await {
-        Ok(cookie) => redirect(&id, cookie),
+    match start_session(&relay, &email).await {
+        Ok(cookie) => redirect(next, cookie),
         Err(error) => unavailable(error),
     }
+}
+
+fn safe_next(next: &str) -> &str {
+    let valid = next.strip_prefix(VIEWER_PATH_PREFIX).is_some_and(|id| {
+        !id.is_empty()
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    });
+    if valid { next } else { "/" }
 }
 
 fn unavailable(error: anyhow::Error) -> Response {
@@ -99,28 +116,22 @@ fn unavailable(error: anyhow::Error) -> Response {
     StatusCode::SERVICE_UNAVAILABLE.into_response()
 }
 
-async fn start_session(relay: &Relay, live: &LiveShare, email: &str) -> anyhow::Result<String> {
+async fn start_session(relay: &Relay, email: &str) -> anyhow::Result<String> {
     let token = random_token::<32>()?;
-    let expires_at = live.share().expires_at_unix;
     relay
         .store
-        .add_session(&token_hash(&token), &live.id, email, expires_at)
+        .add_session(&token_hash(&token), email, unix_now() + SESSION_SECS)
         .await?;
-    let max_age = expires_at.saturating_sub(unix_now());
-    Ok(cookie(relay, &live.id, &token, max_age))
+    Ok(cookie(relay, &token, SESSION_SECS))
 }
 
-async fn logout(
-    State(relay): State<Arc<Relay>>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Response {
+async fn logout(State(relay): State<Arc<Relay>>, headers: HeaderMap) -> Response {
     if let Some(token) = session_token(&headers)
         && let Err(error) = relay.store.delete_session(&token_hash(&token)).await
     {
         return unavailable(error);
     }
-    redirect(&id, cookie(&relay, &id, "", 0))
+    redirect("/", cookie(&relay, "", 0))
 }
 
 async fn asset(Path(name): Path<String>) -> Response {
@@ -129,6 +140,40 @@ async fn asset(Path(name): Path<String>) -> Response {
             ([(header::CONTENT_TYPE, content_type)], body).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn events(
+    State(relay): State<Arc<Relay>>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if !origin_allowed(&relay, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match signed_in(&relay, &headers).await {
+        Ok(Some(email)) => upgrade.on_upgrade(move |socket| lobby(relay, email, socket)),
+        Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(status) => status.into_response(),
+    }
+}
+
+async fn lobby(relay: Arc<Relay>, email: String, mut socket: WebSocket) {
+    let mut changes = relay.subscribe();
+    let mut sent = None;
+    loop {
+        let tabs = relay.guest_tabs(&email);
+        if sent.as_ref() != Some(&tabs) {
+            send(&mut socket, &ViewerMessage::Tabs { tabs: tabs.clone() }).await;
+            sent = Some(tabs);
+        }
+        tokio::select! {
+            changed = changes.changed() => if changed.is_err() { return },
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                Some(Ok(_)) => {}
+            },
+        }
     }
 }
 
@@ -141,30 +186,26 @@ async fn connect(
     if !origin_allowed(&relay, &headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(live) = relay.find(&id) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let email = match signed_in(&relay, &headers).await {
+        Ok(Some(email)) => email,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(status) => return status.into_response(),
     };
-    match signed_in(&relay, &headers, &live).await {
-        Ok(Some(email)) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
-        Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
-        Err(status) => status.into_response(),
+    match relay.find(&id).filter(|live| live.admits(&email)) {
+        Some(live) => upgrade.on_upgrade(move |socket| session(relay, live, email, socket)),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-async fn signed_in(
-    relay: &Relay,
-    headers: &HeaderMap,
-    live: &LiveShare,
-) -> Result<Option<String>, StatusCode> {
+async fn signed_in(relay: &Relay, headers: &HeaderMap) -> Result<Option<String>, StatusCode> {
     let Some(token) = session_token(headers) else {
         return Ok(None);
     };
-    let email = relay
+    relay
         .store
-        .session_email(&token_hash(&token), &live.id)
+        .session_email(&token_hash(&token))
         .await
-        .map_err(|error| unavailable(error).status())?;
-    Ok(email.filter(|email| live.admits(email)))
+        .map_err(|error| unavailable(error).status())
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -178,22 +219,22 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-fn cookie(relay: &Relay, id: &str, token: &str, max_age: u64) -> String {
+fn cookie(relay: &Relay, token: &str, max_age: u64) -> String {
     let secure = if relay.config.public_url.starts_with("https://") {
         "; Secure"
     } else {
         ""
     };
-    format!(
-        "{COOKIE_NAME}={token}; Path={VIEWER_PATH_PREFIX}{id}; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"
-    )
+    format!("{COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}")
 }
 
-fn redirect(id: &str, cookie: String) -> Response {
-    let location = format!("{VIEWER_PATH_PREFIX}{id}");
+fn redirect(location: &str, cookie: String) -> Response {
     (
         StatusCode::SEE_OTHER,
-        [(header::LOCATION, location), (header::SET_COOKIE, cookie)],
+        [
+            (header::LOCATION, location.to_string()),
+            (header::SET_COOKIE, cookie),
+        ],
     )
         .into_response()
 }
@@ -210,9 +251,9 @@ fn html(status: StatusCode, body: String) -> Response {
         .into_response()
 }
 
-fn login_page(id: &str, error: &str) -> String {
+fn login_page(next: &str, error: &str) -> String {
     assets::LOGIN
-        .replace("__ACTION__", &format!("{VIEWER_PATH_PREFIX}{id}/login"))
+        .replace("__NEXT__", next)
         .replace("__ERROR__", error)
 }
 

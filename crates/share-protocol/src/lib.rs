@@ -54,6 +54,55 @@ pub enum AgentMessage {
     Theme { theme: Theme },
     Status { status: Option<ProgramStatus> },
     Ended { reason: String },
+    Manage { request: ManageRequest },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ManageRequest {
+    State,
+    AddGuests {
+        share_id: String,
+        guests: Vec<String>,
+    },
+    RemoveGuest {
+        email: String,
+        share_id: Option<String>,
+    },
+    ForgetGuest {
+        email: String,
+    },
+    ResetPassword {
+        email: String,
+    },
+    StopShare {
+        share_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SharedTab {
+    pub share_id: String,
+    pub url: String,
+    pub share: Share,
+    pub watching: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum ManageReply {
+    State {
+        guests: Vec<String>,
+        shares: Vec<SharedTab>,
+    },
+    Credentials {
+        credentials: Vec<GuestCredential>,
+        existing: Vec<String>,
+    },
+    Done,
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +118,11 @@ pub enum RelayMessage {
         share_id: String,
         url: String,
         credentials: Vec<GuestCredential>,
+        #[serde(default)]
+        existing: Vec<String>,
+    },
+    Managed {
+        reply: ManageReply,
     },
     Resumed {
         share_id: String,
@@ -105,6 +159,18 @@ pub enum ViewerMessage {
     Status { status: Option<ProgramStatus> },
     Viewers { emails: Vec<String> },
     Ended { reason: String },
+    Tabs { tabs: Vec<GuestTab> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuestTab {
+    pub id: String,
+    pub label: String,
+    pub session_label: String,
+    pub host: String,
+    pub mode: Mode,
+    pub expires_at_unix: u64,
+    pub status: Option<ProgramStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
