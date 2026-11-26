@@ -361,7 +361,9 @@ impl Target {
             return Err(format!("{}: quit {app} first", self.name));
         }
         let path = match &self.action {
-            CleanAction::RemoveContents(path) | CleanAction::RemoveDir(path) => path,
+            CleanAction::RemoveContents(path)
+            | CleanAction::RemoveDir(path)
+            | CleanAction::RemoveFile(path) => path,
             _ => return Ok(()),
         };
         if holds_repository(path) {
