@@ -359,7 +359,8 @@ pub fn manage() -> Result<()> {
 
 pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()> {
     let relay = Relay::connect()?;
-    let (_, shares) = relay.state()?;
+    let (known, shares) = relay.state()?;
+    let email = &known_guest(&known, email)?;
     let only = block_id
         .map(|block| shared_tab(&shares, block))
         .transpose()?;
@@ -382,6 +383,36 @@ pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()
     relay.call(request)?;
     println!("{email} no longer has access.");
     Ok(())
+}
+
+pub fn reset_password(email: &str, yes: bool) -> Result<()> {
+    let relay = Relay::connect()?;
+    let (known, _) = relay.state()?;
+    let email = known_guest(&known, email)?;
+    let question = format!("Make a new password for {email}? The old one stops working.");
+    if !confirm(yes, &question)? {
+        println!("Nothing changed.");
+        return Ok(());
+    }
+    let ManageReply::Credentials { credentials, .. } =
+        relay.call(ManageRequest::ResetPassword { email })?
+    else {
+        bail!("the relay sent an unexpected reply");
+    };
+    for credential in credentials {
+        println!("Guest     {}", credential.email);
+        println!("Password  {}", credential.password);
+    }
+    println!("This password shows only once.");
+    Ok(())
+}
+
+fn known_guest(known: &[String], email: &str) -> Result<String> {
+    let email = email.trim().to_lowercase();
+    if !known.contains(&email) {
+        bail!("{email} is not a known guest; see wsctl share list");
+    }
+    Ok(email)
 }
 
 fn shared_tab<'a>(shares: &'a [SharedTab], block_id: &str) -> Result<&'a SharedTab> {

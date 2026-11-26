@@ -173,6 +173,9 @@ fn main() -> anyhow::Result<()> {
                 ShareCommand::RemoveGuest { email, block, yes } => {
                     commands::share::remove_guest(&email, block.as_deref(), yes)?
                 }
+                ShareCommand::ResetPassword { email, yes } => {
+                    commands::share::reset_password(&email, yes)?
+                }
                 ShareCommand::Stop { block, all } => commands::share::stop(block, all)?,
                 ShareCommand::Serve { target } => commands::share::serve(share_target(target))?,
                 ShareCommand::Relay {

@@ -311,6 +311,16 @@ pub enum ShareCommand {
         yes: bool,
     },
 
+    /// Make a new password for a guest and print it once; the old one stops working
+    ResetPassword {
+        /// Guest email
+        email: String,
+
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Stop sharing a tab
     Stop {
         /// Block whose share to stop
