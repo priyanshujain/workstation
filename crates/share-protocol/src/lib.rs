@@ -143,6 +143,16 @@ pub enum RelayMessage {
         email: String,
         data: String,
     },
+    Paste {
+        viewer_id: u64,
+        email: String,
+        text: String,
+    },
+    Upload {
+        viewer_id: u64,
+        email: String,
+        file: UploadFile,
+    },
     Stop {
         reason: String,
     },
@@ -177,4 +187,16 @@ pub struct GuestTab {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ViewerInput {
     Input { data: String },
+    Paste { text: String },
+    Upload { file: UploadFile },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UploadFile {
+    pub batch: String,
+    pub index: u32,
+    pub count: u32,
+    pub name: String,
+    pub mime: String,
+    pub data: String,
 }

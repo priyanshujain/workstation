@@ -247,6 +247,10 @@ impl<'a> Engine<'a> {
                 self.write_input(email, &data).await;
                 Step::Continue
             }
+            RelayMessage::Paste { text, email, .. } => {
+                self.paste(email, text).await;
+                Step::Continue
+            }
             RelayMessage::Stop { reason } => {
                 self.notify_end(&reason);
                 Step::Finish(None)
@@ -254,7 +258,8 @@ impl<'a> Engine<'a> {
             RelayMessage::Registered { .. }
             | RelayMessage::Managed { .. }
             | RelayMessage::Resumed { .. }
-            | RelayMessage::ResumeRejected { .. } => Step::Continue,
+            | RelayMessage::ResumeRejected { .. }
+            | RelayMessage::Upload { .. } => Step::Continue,
         }
     }
 
@@ -265,6 +270,19 @@ impl<'a> Engine<'a> {
         (self.on_event)(ShareEvent::Input { email });
         let args = json!({"data": data});
         let _ = self.terminal("write", args).await;
+    }
+
+    async fn paste(&mut self, email: String, text: String) {
+        if self.request.mode != Mode::Input {
+            return;
+        }
+        (self.on_event)(ShareEvent::Input { email });
+        let event = json!({
+            "session_id": self.request.session_id,
+            "block_id": self.request.block_id,
+            "event": {"type": "paste", "payload": {"text": text}},
+        });
+        let _ = self.control.call("block.event", event).await;
     }
 
     async fn send_screen(&self, relay: &mut Relay, viewer_id: u64) -> Step {
