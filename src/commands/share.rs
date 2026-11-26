@@ -76,7 +76,12 @@ fn add_guests(
     );
     println!("Guests: {}\n", shared.share.guests.join(", "));
     let guests = match guests.is_empty() {
-        true => ask_guests("Add guests: ", known, &shared.share.guests, true)?,
+        true => ask_guests(
+            "Add guests (Enter for none): ",
+            known,
+            &shared.share.guests,
+            true,
+        )?,
         false => guests,
     };
     if guests.is_empty() {
@@ -149,10 +154,41 @@ fn ask_guests(
     taken: &[String],
     allow_empty: bool,
 ) -> Result<Vec<String>> {
-    if !io::stdin().is_terminal() {
-        return ask_guest_line(prompt);
+    require_terminal("--guest")?;
+    let available: Vec<&str> = known
+        .iter()
+        .filter(|email| !taken.contains(email))
+        .map(String::as_str)
+        .collect();
+    if !available.is_empty() {
+        println!("Known guests: {}", available.join(", "));
     }
-    crate::tui::guests::ask(prompt, known, taken, allow_empty)
+    loop {
+        let guests = parse_guests(&ask(prompt)?);
+        match guests.iter().find(|email| !email.contains('@')) {
+            Some(typo) => eprintln!("{typo} is not an email"),
+            None if guests.is_empty() && !allow_empty => eprintln!("type at least one email"),
+            None => return Ok(guests),
+        }
+    }
+}
+
+fn parse_guests(line: &str) -> Vec<String> {
+    let mut guests: Vec<String> = Vec::new();
+    for email in line.split([' ', ',']).filter(|email| !email.is_empty()) {
+        let email = email.to_lowercase();
+        if !guests.contains(&email) {
+            guests.push(email);
+        }
+    }
+    guests
+}
+
+fn require_terminal(flags: &str) -> Result<()> {
+    if !io::stdin().is_terminal() {
+        bail!("no terminal to ask on; pass {flags}");
+    }
+    Ok(())
 }
 
 pub fn serve(target: Target) -> Result<()> {
@@ -523,19 +559,6 @@ fn ask_mode() -> Result<Mode> {
             "v" | "view" => return Ok(Mode::View),
             "i" | "input" => return Ok(Mode::Input),
             _ => continue,
-        }
-    }
-}
-
-fn ask_guest_line(prompt: &str) -> Result<Vec<String>> {
-    loop {
-        let guests: Vec<String> = ask(prompt)?
-            .split([' ', ','])
-            .filter(|email| !email.is_empty())
-            .map(str::to_string)
-            .collect();
-        if !guests.is_empty() && guests.iter().all(|email| email.contains('@')) {
-            return Ok(guests);
         }
     }
 }
