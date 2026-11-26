@@ -174,13 +174,13 @@ fn path_inside(candidates: &[Item], name: &str, closed: &[PathBuf]) -> Result<It
     let target = if path.is_dir() {
         Target::pending(
             &label,
-            &label,
+            "",
             Measure::Tree(path.clone()),
             CleanAction::RemoveDir(path),
         )
     } else {
         let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-        Target::new(&label, &label, size, CleanAction::RemoveFile(path))
+        Target::new(&label, "", size, CleanAction::RemoveFile(path))
     };
     let target = match owner.target.owner_app() {
         Some(app) => target.owned_by_app(app),
