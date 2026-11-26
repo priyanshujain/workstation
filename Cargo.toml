@@ -69,7 +69,6 @@ path = "src/bin/wsctl-askpass.rs"
 wsctl-core.workspace = true
 apps.workspace = true
 agents.workspace = true
-packages.workspace = true
 disk.workspace = true
 display.workspace = true
 share-engine.workspace = true
@@ -90,4 +89,5 @@ libc = "0.2"
 tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+packages.workspace = true
 plist = "1"
