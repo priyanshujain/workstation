@@ -6,6 +6,7 @@ use apps::leftovers::{Confidence, Leftover, scan};
 use apps::removal::{self, Mode};
 use disk::util::format_size;
 use wsctl_core::SystemCommandRunner;
+use wsctl_core::privilege::confirm;
 
 pub fn remove(
     name: String,
@@ -124,7 +125,7 @@ pub fn remove(
     } else {
         "Move to the Trash"
     };
-    if !confirm(&format!("{verb} {} items?", selected.len()), yes)? {
+    if !confirm(yes, &format!("{verb} {} items?", selected.len()))? {
         println!("{} Aborted.", style("×").red());
         return Ok(());
     }
@@ -212,16 +213,4 @@ fn keychain_hint(app: &AppBundle) -> Option<String> {
         .status
         .success();
     found.then(|| format!("security delete-generic-password -s {service:?}"))
-}
-
-fn confirm(prompt: &str, yes: bool) -> Result<bool> {
-    if yes {
-        return Ok(true);
-    }
-    use std::io::Write;
-    print!("{prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
