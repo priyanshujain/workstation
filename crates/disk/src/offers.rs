@@ -304,7 +304,10 @@ mod tests {
         let unique: std::collections::HashSet<&String> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");
         assert!(ids.iter().all(|id| !id.is_empty()), "{ids:?}");
-        assert!(ids.iter().any(|id| id.ends_with("-app-lib-build")), "{ids:?}");
+        assert!(
+            ids.iter().any(|id| id.ends_with("-app-lib-build")),
+            "{ids:?}"
+        );
     }
 
     #[test]
