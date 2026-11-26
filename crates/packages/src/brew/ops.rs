@@ -15,7 +15,7 @@ pub fn uninstall_formula(runner: &dyn CommandRunner, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// `brew uninstall --cask --zap <name>` — removes app and associated prefs/data.
+/// `brew uninstall --cask --zap <name>`: removes app and associated prefs/data.
 pub fn uninstall_cask_zap(runner: &dyn CommandRunner, name: &str) -> Result<()> {
     let out = runner.run("brew", &["uninstall", "--cask", "--zap", name])?;
     if !out.success {
@@ -27,7 +27,7 @@ pub fn uninstall_cask_zap(runner: &dyn CommandRunner, name: &str) -> Result<()> 
     Ok(())
 }
 
-/// `brew autoremove` — removes orphaned dependencies (no-op if none).
+/// `brew autoremove`: removes orphaned dependencies (no-op if none).
 pub fn autoremove(runner: &dyn CommandRunner) -> Result<String> {
     let out = runner.run("brew", &["autoremove"])?;
     if !out.success {
@@ -39,7 +39,7 @@ pub fn autoremove(runner: &dyn CommandRunner) -> Result<String> {
     Ok(out.stdout)
 }
 
-/// `brew list --formula/--cask <name>` — returns Ok(true) if still installed.
+/// `brew list --formula/--cask <name>`: returns Ok(true) if still installed.
 pub fn is_installed(runner: &dyn CommandRunner, name: &str, kind: PkgKind) -> Result<bool> {
     let kind_flag = match kind {
         PkgKind::Formula => "--formula",
@@ -49,7 +49,7 @@ pub fn is_installed(runner: &dyn CommandRunner, name: &str, kind: PkgKind) -> Re
     Ok(out.success)
 }
 
-/// `brew uses --installed <name>` — returns names of installed packages that
+/// `brew uses --installed <name>`: returns names of installed packages that
 /// directly depend on `name`. Only meaningful for formulae.
 pub fn dependents(runner: &dyn CommandRunner, name: &str) -> Result<Vec<String>> {
     let out = runner.run("brew", &["uses", "--installed", name])?;
