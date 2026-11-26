@@ -199,7 +199,6 @@ fn build_darwin_system(target: &Target) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-#[cfg(target_os = "macos")]
 fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     use std::process::Stdio;
     use std::sync::mpsc::{RecvTimeoutError, channel};
@@ -224,7 +223,6 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     result
 }
 
-#[cfg(target_os = "macos")]
 fn sudo_already_authorised() -> bool {
     wsctl_core::privilege::sudo()
         .args(["-n", "true"])
@@ -236,7 +234,10 @@ fn sudo_already_authorised() -> bool {
 
 #[cfg(target_os = "linux")]
 fn apply_system(target: &Target, dry_run: bool) -> Result<()> {
-    linux::run_apply(target, dry_run)
+    if dry_run {
+        return linux::run_apply(target, true);
+    }
+    with_sudo_kept_alive(|| linux::run_apply(target, false))
 }
 
 #[cfg(target_os = "linux")]
