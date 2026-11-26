@@ -40,5 +40,6 @@ pub fn confirm(yes: bool, question: &str) -> Result<bool> {
     std::io::stderr().flush()?;
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+    let answer = answer.trim().to_ascii_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }
