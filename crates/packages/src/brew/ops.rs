@@ -1,9 +1,6 @@
-//! Homebrew uninstall operations: removal, autoremove, verification.
-
 use crate::brew::info::PkgKind;
 use wsctl_core::{CommandRunner, Error, Result};
 
-/// `brew uninstall <name>`. Fails if other installed packages depend on it.
 pub fn uninstall_formula(runner: &dyn CommandRunner, name: &str) -> Result<()> {
     let out = runner.run("brew", &["uninstall", name])?;
     if !out.success {
@@ -15,7 +12,6 @@ pub fn uninstall_formula(runner: &dyn CommandRunner, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// `brew uninstall --cask --zap <name>`: removes app and associated prefs/data.
 pub fn uninstall_cask_zap(runner: &dyn CommandRunner, name: &str) -> Result<()> {
     let out = runner.run("brew", &["uninstall", "--cask", "--zap", name])?;
     if !out.success {
@@ -27,7 +23,6 @@ pub fn uninstall_cask_zap(runner: &dyn CommandRunner, name: &str) -> Result<()> 
     Ok(())
 }
 
-/// `brew autoremove`: removes orphaned dependencies (no-op if none).
 pub fn autoremove(runner: &dyn CommandRunner) -> Result<String> {
     let out = runner.run("brew", &["autoremove"])?;
     if !out.success {
@@ -39,7 +34,6 @@ pub fn autoremove(runner: &dyn CommandRunner) -> Result<String> {
     Ok(out.stdout)
 }
 
-/// `brew list --formula/--cask <name>`: returns Ok(true) if still installed.
 pub fn is_installed(runner: &dyn CommandRunner, name: &str, kind: PkgKind) -> Result<bool> {
     let kind_flag = match kind {
         PkgKind::Formula => "--formula",
