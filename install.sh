@@ -2,7 +2,7 @@
 # shellcheck shell=dash
 # shellcheck disable=SC2039 # local is non-POSIX but supported in dash/bash/zsh/ksh
 #
-# wsctl installer — fetches a prebuilt binary from GitHub Releases.
+# wsctl installer: fetches a prebuilt binary from GitHub Releases.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/priyanshujain/workstation/main/install.sh | sh
