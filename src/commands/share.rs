@@ -465,15 +465,46 @@ fn pick_tab() -> Result<(String, String)> {
     if tabs.is_empty() {
         bail!("no Rex tabs to share");
     }
-    let Some(index) = crate::tui::share::pick(&tabs)? else {
-        bail!("nothing picked");
-    };
-    let Tab {
-        session_id,
-        block_id,
-        ..
-    } = &tabs[index];
-    Ok((session_id.clone(), block_id.clone()))
+    if !io::stdin().is_terminal() {
+        bail!(
+            "pass --session and --block; open tabs:\n{}",
+            tab_flags(&tabs)
+        );
+    }
+    for (index, tab) in tabs.iter().enumerate() {
+        println!("{:>3}  {}", index + 1, tab_name(tab));
+    }
+    loop {
+        let answer = ask("Share tab number: ")?;
+        if let Some(tab) = answer
+            .parse::<usize>()
+            .ok()
+            .and_then(|number| tabs.get(number.wrapping_sub(1)))
+        {
+            return Ok((tab.session_id.clone(), tab.block_id.clone()));
+        }
+    }
+}
+
+fn tab_name(tab: &Tab) -> String {
+    format!(
+        "{} / {}  {}",
+        tab.session_label, tab.window_label, tab.title
+    )
+}
+
+fn tab_flags(tabs: &[Tab]) -> String {
+    tabs.iter()
+        .map(|tab| {
+            format!(
+                "  --session {} --block {}  {}",
+                tab.session_id,
+                tab.block_id,
+                tab_name(tab)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn ask(prompt: &str) -> Result<String> {

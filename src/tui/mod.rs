@@ -8,7 +8,6 @@ use crossterm::{
 use ratatui::{Terminal, prelude::CrosstermBackend};
 
 pub mod guests;
-pub mod share;
 pub mod shares;
 
 /// Install a panic hook that restores the terminal, enter alt-screen + raw mode,
