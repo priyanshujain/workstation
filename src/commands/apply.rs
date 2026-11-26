@@ -96,15 +96,19 @@ fn run_sudo(args: &[&str]) -> Result<()> {
     run_command(wsctl_core::privilege::sudo(), args)
 }
 
-fn run_command(mut command: Command, args: &[&str]) -> Result<()> {
-    let program = command.get_program().to_string_lossy().into_owned();
+fn scratch_dir() -> Result<std::path::PathBuf> {
     let scratch = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("wsctl");
     std::fs::create_dir_all(&scratch)?;
+    Ok(scratch)
+}
+
+fn run_command(mut command: Command, args: &[&str]) -> Result<()> {
+    let program = command.get_program().to_string_lossy().into_owned();
     let status = command
         .args(args)
-        .current_dir(&scratch)
+        .current_dir(scratch_dir()?)
         .status()
         .with_context(|| format!("could not run {program}"))?;
     if !status.success() {
