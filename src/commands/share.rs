@@ -366,7 +366,8 @@ pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()
         .filter(|tab| only.is_none_or(|only| only.share_id == tab.share_id))
         .collect();
     let question = match (only, tabs.len()) {
-        (_, 0) => bail!("{email} is not a guest of that tab; see wsctl share list"),
+        (Some(tab), 0) => bail!("{email} is not a guest of {}", tab_title(tab)),
+        (None, 0) => bail!("{email} is a guest of no shared tab"),
         (Some(tab), _) => format!("Stop sharing {} with {email}?", tab_title(tab)),
         (None, count) => format!("Stop sharing {count} tabs with {email}?"),
     };
