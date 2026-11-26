@@ -1155,3 +1155,47 @@ async fn stop_share_tells_the_engine() {
         }
     );
 }
+
+#[tokio::test]
+async fn keeps_passwords_from_per_share_credentials() {
+    let db = Arc::new(tempfile::tempdir().unwrap());
+    let database = libsql::Builder::new_local(db.path().join("share.db"))
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE guest_credentials (share_id TEXT NOT NULL, email TEXT NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);",
+        )
+        .await
+        .unwrap();
+    for (share_id, password, created_at) in
+        [("old", "older-password", 1), ("new", "newer-password", 2)]
+    {
+        let hash = crate::auth::hash_password(password).unwrap();
+        connection
+            .execute(
+                "INSERT INTO guest_credentials VALUES (?1, ?2, ?3, ?4)",
+                libsql::params![share_id, GUEST, hash, created_at],
+            )
+            .await
+            .unwrap();
+    }
+    drop(connection);
+    drop(database);
+    let running = start_relay_on(db, Arc::default()).await;
+    assert_eq!(login(&running, GUEST, "newer-password").await.0, 303);
+    assert_eq!(login(&running, GUEST, "older-password").await.0, 401);
+}
+
+#[tokio::test]
+async fn a_stale_cookie_does_not_hide_a_valid_one() {
+    let running = start_relay().await;
+    let (_engine, id) = register(&running, share(Mode::View, unix_now() + 60)).await;
+    let cookie = sign_in(&running).await;
+    let both = format!("wsctl_share=stale; {cookie}");
+    let (_, body) = page(&running, &format!("/s/{id}"), Some(&both)).await;
+    assert!(body.contains("id=\"terminal\""));
+    assert!(viewer_socket_with(&running, &id, &both).await.is_ok());
+}

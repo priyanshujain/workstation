@@ -22,8 +22,6 @@ CREATE TABLE IF NOT EXISTS shares (
     ended_at INTEGER,
     end_reason TEXT
 );
-DROP TABLE IF EXISTS guest_credentials;
-DROP TABLE IF EXISTS viewer_sessions;
 CREATE TABLE IF NOT EXISTS guests (
     email TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
@@ -62,6 +60,19 @@ CREATE TABLE IF NOT EXISTS inputs (
 );
 ";
 
+const MOVE_SHARE_PASSWORDS_TO_GUESTS: &str = "
+CREATE TABLE IF NOT EXISTS guest_credentials (
+    share_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO guests (email, password_hash, created_at)
+    SELECT email, password_hash, created_at FROM guest_credentials ORDER BY created_at DESC;
+DROP TABLE guest_credentials;
+DROP TABLE IF EXISTS viewer_sessions;
+";
+
 pub struct Store {
     database: Database,
     order: Mutex<()>,
@@ -77,7 +88,11 @@ impl Store {
                     .await?
             }
         };
-        database.connect()?.execute_batch(SCHEMA).await?;
+        let connection = database.connect()?;
+        connection.execute_batch(SCHEMA).await?;
+        connection
+            .execute_batch(MOVE_SHARE_PASSWORDS_TO_GUESTS)
+            .await?;
         Ok(Self {
             database,
             order: Mutex::new(()),
