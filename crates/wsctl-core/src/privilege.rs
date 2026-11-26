@@ -34,8 +34,7 @@ pub fn confirm(yes: bool, question: &str) -> Result<bool> {
         return Ok(true);
     }
     if !std::io::stdin().is_terminal() {
-        eprintln!("{question} Pass --yes to confirm without a terminal.");
-        return Ok(false);
+        return Err(anyhow::anyhow!("{question} Pass --yes to confirm without a terminal.").into());
     }
     eprint!("{question} [y/N] ");
     std::io::stderr().flush()?;
