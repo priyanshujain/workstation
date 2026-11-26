@@ -1917,7 +1917,6 @@ name = "packages"
 version = "0.1.2"
 dependencies = [
  "anyhow",
- "dirs",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
