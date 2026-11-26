@@ -6,6 +6,7 @@ pub mod audit;
 #[cfg(target_os = "macos")]
 pub mod default_apps;
 pub mod disk;
+pub mod disk_clean;
 #[cfg(target_os = "macos")]
 pub mod display;
 pub mod doctor;
