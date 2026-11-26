@@ -369,11 +369,26 @@ impl Target {
         if holds_repository(path) {
             return Err(format!("{}: holds a git repository", self.name));
         }
-        match live.check(path).first() {
-            Some(busy) => Err(format!("{}: {busy}", self.name)),
-            None => Ok(()),
+        if let Some(busy) = live.check(path).first() {
+            return Err(format!("{}: {busy}", self.name));
         }
+        if let CleanAction::RemoveFile(path) = &self.action
+            && let Some(pid) = opened_by(path)
+        {
+            return Err(format!("{}: pid {pid} has it open", self.name));
+        }
+        Ok(())
     }
+}
+
+fn opened_by(file: &Path) -> Option<String> {
+    let out = Command::new("lsof")
+        .args(["-t", "--"])
+        .arg(file)
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout.lines().next().map(str::to_string)
 }
 
 fn effective_uid() -> u32 {
