@@ -1,4 +1,7 @@
-{ lib, stdenv, rustPlatform, makeWrapper, src, switcher }:
+{ lib, stdenv, rustPlatform, makeWrapper, pinentry_mac, pinentry-qt, withPinentry ? true, src, switcher }:
+let
+  pinentry = if stdenv.hostPlatform.isDarwin then pinentry_mac else pinentry-qt;
+in
 rustPlatform.buildRustPackage {
   pname = "wsctl";
   version = (lib.importTOML ../Cargo.toml).workspace.package.version;
@@ -9,6 +12,8 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [ makeWrapper ];
   postInstall = ''
     wrapProgram $out/bin/wsctl --suffix PATH : ${lib.makeBinPath [ switcher ]}
+  '' + lib.optionalString withPinentry ''
+    wrapProgram $out/bin/wsctl-askpass --set-default WSCTL_PINENTRY ${lib.getExe pinentry}
   '';
   meta = {
     description = "One declarative manager for a developer's whole machine";

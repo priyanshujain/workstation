@@ -21,8 +21,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.wsctl;
-      defaultText = lib.literalExpression "workstation.packages.\${system}.wsctl";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.wsctl.override { withPinentry = false; };
+      defaultText = lib.literalExpression "workstation.packages.\${system}.wsctl.override { withPinentry = false; }";
     };
 
     viewerListen = lib.mkOption {
