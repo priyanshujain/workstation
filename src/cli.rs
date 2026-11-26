@@ -329,7 +329,11 @@ pub enum AgentsCommand {
     Leftovers,
 
     /// Ask about each leftover, then stop or remove it
-    Clean,
+    Clean {
+        /// Don't ask for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

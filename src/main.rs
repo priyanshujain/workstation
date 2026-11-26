@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Agents { sub } => match sub {
             None => commands::agents::list()?,
             Some(AgentsCommand::Leftovers) => commands::agents::leftovers()?,
-            Some(AgentsCommand::Clean) => commands::agents::clean()?,
+            Some(AgentsCommand::Clean { yes }) => commands::agents::clean(yes)?,
         },
         #[cfg(target_os = "macos")]
         Commands::Display { sub } => match sub {

@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use console::style;
 use disk::liveness::Liveness;
 use disk::util::format_size;
+use wsctl_core::privilege::confirm;
 
 pub fn list() -> Result<()> {
     let config = load_config()?;
@@ -53,14 +54,14 @@ pub fn leftovers() -> Result<()> {
     Ok(())
 }
 
-pub fn clean() -> Result<()> {
+pub fn clean(yes: bool) -> Result<()> {
     let found = Found::scan()?;
     if found.is_empty() {
         println!("no leftovers");
         return Ok(());
     }
     for orphan in &found.orphans {
-        if confirm(&format!("stop {}?", describe_orphan(orphan)))? {
+        if confirm(yes, &format!("stop {}?", describe_orphan(orphan)))? {
             match stop_tree(&found.table, orphan.process.pid) {
                 Ok(()) => println!("  stopped"),
                 Err(err) => println!("  {}", style(err).red()),
@@ -68,7 +69,7 @@ pub fn clean() -> Result<()> {
         }
     }
     for leftover in &found.leftovers {
-        if confirm(&format!("remove {}?", describe_leftover(leftover)))? {
+        if confirm(yes, &format!("remove {}?", describe_leftover(leftover)))? {
             match leftovers::remove(leftover) {
                 Ok(()) => println!("  removed"),
                 Err(reason) => println!("  {}", style(format!("kept: {reason}")).yellow()),
@@ -185,13 +186,4 @@ fn age(secs: u64) -> String {
         s if s >= 3600 => format!("{}h {}m", s / 3600, s % 3600 / 60),
         s => format!("{}m", s / 60),
     }
-}
-
-fn confirm(prompt: &str) -> Result<bool> {
-    use std::io::Write;
-    print!("{prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().eq_ignore_ascii_case("y"))
 }
