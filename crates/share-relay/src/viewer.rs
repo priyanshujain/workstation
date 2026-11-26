@@ -126,7 +126,11 @@ async fn start_session(relay: &Relay, email: &str) -> anyhow::Result<String> {
 }
 
 async fn logout(State(relay): State<Arc<Relay>>, headers: HeaderMap) -> Response {
-    if let Some(token) = session_token(&headers)
+    let token = match signed_in_token(&relay, &headers).await {
+        Ok(signed_in) => signed_in.map(|(token, _)| token),
+        Err(status) => return status.into_response(),
+    };
+    if let Some(token) = token
         && let Err(error) = relay.store.delete_session(&token_hash(&token)).await
     {
         return unavailable(error);
@@ -198,25 +202,38 @@ async fn connect(
 }
 
 async fn signed_in(relay: &Relay, headers: &HeaderMap) -> Result<Option<String>, StatusCode> {
-    let Some(token) = session_token(headers) else {
-        return Ok(None);
-    };
-    relay
-        .store
-        .session_email(&token_hash(&token))
-        .await
-        .map_err(|error| unavailable(error).status())
+    Ok(signed_in_token(relay, headers)
+        .await?
+        .map(|(_, email)| email))
 }
 
-fn session_token(headers: &HeaderMap) -> Option<String> {
+async fn signed_in_token(
+    relay: &Relay,
+    headers: &HeaderMap,
+) -> Result<Option<(String, String)>, StatusCode> {
+    for token in session_tokens(headers) {
+        let email = relay
+            .store
+            .session_email(&token_hash(&token))
+            .await
+            .map_err(|error| unavailable(error).status())?;
+        if let Some(email) = email {
+            return Ok(Some((token, email)));
+        }
+    }
+    Ok(None)
+}
+
+fn session_tokens(headers: &HeaderMap) -> Vec<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(';'))
-        .find_map(|pair| pair.trim().strip_prefix(COOKIE_NAME)?.strip_prefix('='))
+        .filter_map(|pair| pair.trim().strip_prefix(COOKIE_NAME)?.strip_prefix('='))
         .filter(|token| !token.is_empty())
         .map(str::to_string)
+        .collect()
 }
 
 fn cookie(relay: &Relay, token: &str, max_age: u64) -> String {

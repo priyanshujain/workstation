@@ -264,7 +264,7 @@ function connectLobby() {
   };
   lobby.onclose = async () => {
     try {
-      const page = await fetch("/", { cache: "no-store" });
+      const page = await fetch(location.pathname, { cache: "no-store" });
       if ((await page.text()).includes('name="password"')) {
         location.reload();
         return;
