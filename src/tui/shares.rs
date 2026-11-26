@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -386,7 +386,7 @@ impl Screen {
                     tab.share.host.clone(),
                     mode.to_string(),
                     tab.watching.len().to_string(),
-                    ends_in(tab.share.expires_at_unix),
+                    crate::commands::share::ends_in(tab.share.expires_at_unix),
                 ])
                 .bold()
             }
@@ -473,13 +473,4 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     }
-}
-
-pub fn ends_in(expires_at_unix: u64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default();
-    let left = expires_at_unix.saturating_sub(now);
-    format!("{}:{:02}:{:02}", left / 3600, left / 60 % 60, left % 60)
 }

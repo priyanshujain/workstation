@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub fn share(target: Target) -> Result<()> {
     print_access(&started.credentials, &started.existing);
     println!(
         "Ends in {}. The share keeps running when this window closes.",
-        crate::tui::shares::ends_in(started.expires_at_unix)
+        ends_in(started.expires_at_unix)
     );
     println!("Stop it with Stop Sharing. Manage guests and tabs with Shared Tabs.\n");
     wait_for_key()
@@ -117,6 +117,15 @@ fn print_access(credentials: &[GuestCredential], existing: &[String]) {
         }
     }
     println!();
+}
+
+pub fn ends_in(expires_at_unix: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let left = expires_at_unix.saturating_sub(now);
+    format!("{}:{:02}:{:02}", left / 3600, left / 60 % 60, left % 60)
 }
 
 fn mode_text(mode: Mode) -> &'static str {
@@ -239,7 +248,7 @@ pub fn list() -> Result<()> {
         println!("  guests: {}", tab.share.guests.join(", "));
         println!(
             "  watching: {watching}  ends in {}\n",
-            crate::tui::shares::ends_in(tab.share.expires_at_unix)
+            ends_in(tab.share.expires_at_unix)
         );
     }
     Ok(())
