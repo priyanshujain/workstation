@@ -96,7 +96,7 @@ pub fn ensure(dry_run: bool) -> Result<()> {
             if dry_run {
                 return Ok(());
             }
-            let status = Command::new("sudo")
+            let status = wsctl_core::privilege::sudo()
                 .args([config.xcodes.as_str(), "select", version])
                 .status()
                 .context("could not run xcodes")?;
