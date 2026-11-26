@@ -89,11 +89,20 @@ fn step(what: &str) {
 /// Runs from a scratch directory, because the switch and build tools leave a `result` link in
 /// whatever directory they start in.
 fn run(program: &str, args: &[&str]) -> Result<()> {
+    run_command(Command::new(program), args)
+}
+
+fn run_sudo(args: &[&str]) -> Result<()> {
+    run_command(wsctl_core::privilege::sudo(), args)
+}
+
+fn run_command(mut command: Command, args: &[&str]) -> Result<()> {
+    let program = command.get_program().to_string_lossy().into_owned();
     let scratch = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("wsctl");
     std::fs::create_dir_all(&scratch)?;
-    let status = Command::new(program)
+    let status = command
         .args(args)
         .current_dir(&scratch)
         .status()
@@ -147,18 +156,15 @@ pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
     step(&format!("darwin-rebuild switch --flake {attr}"));
     with_sudo_kept_alive(|| {
         let system = build_darwin_system(target)?;
-        run(
-            "sudo",
-            &[
-                "-H",
-                "nix-env",
-                "-p",
-                "/nix/var/nix/profiles/system",
-                "--set",
-                &system,
-            ],
-        )?;
-        run("sudo", &["-H", &format!("{system}/activate")])?;
+        run_sudo(&[
+            "-H",
+            "nix-env",
+            "-p",
+            "/nix/var/nix/profiles/system",
+            "--set",
+            &system,
+        ])?;
+        run_sudo(&["-H", &format!("{system}/activate")])?;
         super::xcode::ensure(false)
     })
 }
@@ -187,7 +193,7 @@ fn with_sudo_kept_alive(work: impl FnOnce() -> Result<()>) -> Result<()> {
     use std::sync::mpsc::{RecvTimeoutError, channel};
     use std::time::Duration;
 
-    run("sudo", &["-v"])?;
+    run_sudo(&["-v"])?;
     let (stop, stopped) = channel::<()>();
     let refresher = std::thread::spawn(move || {
         while stopped.recv_timeout(Duration::from_secs(60)) == Err(RecvTimeoutError::Timeout) {
@@ -218,7 +224,7 @@ pub mod linux {
     use console::style;
     use serde::Deserialize;
 
-    use super::{Target, output, run, step};
+    use super::{Target, output, run, run_sudo, step};
 
     #[derive(Deserialize)]
     struct OnActivation {
@@ -262,7 +268,7 @@ pub mod linux {
             if !dry_run {
                 let mut args = vec!["systemctl", "preset"];
                 args.extend(presets.iter().map(String::as_str));
-                run("sudo", &args)?;
+                run_sudo(&args)?;
             }
         }
 
@@ -292,7 +298,7 @@ pub mod linux {
 
         if !dry_run {
             step("grpconv");
-            run("sudo", &["grpconv"])?;
+            run_sudo(&["grpconv"])?;
         }
 
         let home = if dry_run { "build" } else { "switch" };
@@ -397,7 +403,7 @@ pub mod linux {
             }
             let mut args = vec!["pacman", "-Syyuu", "--needed", "--noconfirm"];
             args.extend(pacman.packages.iter().map(String::as_str));
-            run("sudo", &args)?;
+            run_sudo(&args)?;
         } else if !missing.is_empty() {
             println!(
                 "    {}",
@@ -406,7 +412,7 @@ pub mod linux {
             if !dry_run {
                 let mut args = vec!["pacman", "-S", "--needed", "--noconfirm"];
                 args.extend(&missing);
-                run("sudo", &args)?;
+                run_sudo(&args)?;
             }
         }
 
@@ -425,7 +431,7 @@ pub mod linux {
             if !dry_run {
                 let mut args = vec!["pacman", "-D", "--asexplicit"];
                 args.extend(&implicit);
-                run("sudo", &args)?;
+                run_sudo(&args)?;
             }
         }
         Ok(())
@@ -524,6 +530,6 @@ pub mod linux {
         }
         let mut args = vec!["pacman", flag, "--noconfirm"];
         args.extend(&undeclared);
-        run("sudo", &args)
+        run_sudo(&args)
     }
 }
