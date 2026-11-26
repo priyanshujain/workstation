@@ -145,8 +145,16 @@ pub fn sync(target: &Target, pins: Option<Pins>, named: &[String], dry_run: bool
     pins::commit_lock(target, &inputs)
 }
 
-#[cfg(target_os = "macos")]
 pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
+    let applied = apply_system(target, dry_run);
+    if !dry_run {
+        let _ = wsctl_core::privilege::sudo().arg("-k").status();
+    }
+    applied
+}
+
+#[cfg(target_os = "macos")]
+fn apply_system(target: &Target, dry_run: bool) -> Result<()> {
     let attr = target.attr();
     if dry_run {
         step(&format!("darwin-rebuild build --flake {attr}"));
@@ -223,7 +231,7 @@ fn sudo_already_authorised() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub fn run_apply(target: &Target, dry_run: bool) -> Result<()> {
+fn apply_system(target: &Target, dry_run: bool) -> Result<()> {
     linux::run_apply(target, dry_run)
 }
 
