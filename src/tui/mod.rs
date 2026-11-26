@@ -8,10 +8,8 @@ use crossterm::{
 use ratatui::{Terminal, prelude::CrosstermBackend};
 
 pub mod guests;
-pub mod packages;
 pub mod share;
 pub mod shares;
-pub mod widgets;
 
 /// Install a panic hook that restores the terminal, enter alt-screen + raw mode,
 /// run `body` with a live terminal, then tear everything down. Errors are
