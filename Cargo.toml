@@ -66,6 +66,10 @@ description = "Margin Workstation: developer control over desktop configuration"
 name = "wsctl"
 path = "src/main.rs"
 
+[[bin]]
+name = "wsctl-askpass"
+path = "src/bin/wsctl-askpass.rs"
+
 [dependencies]
 wsctl-core.workspace = true
 apps.workspace = true
