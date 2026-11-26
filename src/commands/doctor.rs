@@ -563,7 +563,7 @@ mod os {
                 }
                 Err(_) => {
                     let dir_name = dir.display().to_string();
-                    let listed = std::process::Command::new("sudo")
+                    let listed = wsctl_core::privilege::sudo()
                         .args(["-n", "find", &dir_name, "-mindepth", "1"])
                         .args(["(", "-type", "f", "-o", "-type", "l", ")"])
                         .output();
@@ -936,7 +936,7 @@ mod os {
     }
 
     fn groups() -> Result<Check> {
-        let out = std::process::Command::new("sudo")
+        let out = wsctl_core::privilege::sudo()
             .args(["-n", "grpck", "-r"])
             .output()?;
         let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
