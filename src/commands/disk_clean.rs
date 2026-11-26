@@ -254,7 +254,7 @@ fn clean_one(item: &Item) -> bool {
     let outcome = if target.needs_root() {
         target.clean_as_root()
     } else {
-        target.clean()
+        target.clean_or_sudo()
     };
     match outcome {
         Ok(bytes) => {
