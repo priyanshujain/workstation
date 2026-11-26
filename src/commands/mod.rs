@@ -11,6 +11,7 @@ pub mod disk_clean;
 pub mod display;
 pub mod doctor;
 pub mod outdated;
+pub mod packages;
 pub mod pins;
 pub mod projects;
 pub mod self_cmd;
