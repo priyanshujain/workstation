@@ -369,6 +369,7 @@ pub fn remove_guest(email: &str, block_id: Option<&str>, yes: bool) -> Result<()
         (Some(tab), 0) => bail!("{email} is not a guest of {}", tab_title(tab)),
         (None, 0) => bail!("{email} is a guest of no shared tab"),
         (Some(tab), _) => format!("Stop sharing {} with {email}?", tab_title(tab)),
+        (None, 1) => format!("Stop sharing 1 tab with {email}?"),
         (None, count) => format!("Stop sharing {count} tabs with {email}?"),
     };
     if !confirm(yes, &format!("{question}{}", sharing_stops(&tabs, email)))? {
@@ -469,9 +470,20 @@ pub fn stop(block_id: Option<String>, all: bool) -> Result<()> {
     while targets.iter().any(|share| alive(share.pid)) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let names: Vec<String> = targets.iter().map(|share| share.name.clone()).collect();
-    println!("Sharing stopped: {}", names.join(", "));
+    let (stopping, stopped): (Vec<&ActiveShare>, Vec<&ActiveShare>) =
+        targets.iter().partition(|share| alive(share.pid));
+    if !stopped.is_empty() {
+        println!("Sharing stopped: {}", share_names(&stopped));
+    }
+    if !stopping.is_empty() {
+        println!("Still stopping: {}", share_names(&stopping));
+    }
     Ok(())
+}
+
+fn share_names(shares: &[&ActiveShare]) -> String {
+    let names: Vec<&str> = shares.iter().map(|share| share.name.as_str()).collect();
+    names.join(", ")
 }
 
 fn stop_on_relay(block_id: &str) -> Result<()> {
