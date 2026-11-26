@@ -3,21 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shared terminal</title>
+<title>Shared terminals</title>
 <link rel="stylesheet" href="/assets/xterm.css">
 <link rel="stylesheet" href="/assets/share.css">
 </head>
-<body>
-<header>
-  <span id="label">Connecting</span>
-  <span id="mode" class="pill"></span>
-  <span id="status" class="pill" hidden></span>
-  <span id="viewers"></span>
-  <span id="expiry"></span>
-  <form id="logout" method="post"><button type="submit">Log out</button></form>
-</header>
-<main><div id="terminal"></div></main>
-<div id="ended" hidden></div>
+<body class="app">
+<aside id="sidebar">
+  <div id="heading">Shared with you</div>
+  <nav id="tabs"></nav>
+  <form id="logout" method="post" action="/logout"><button type="submit">Log out</button></form>
+</aside>
+<section id="view">
+  <header id="bar" hidden>
+    <span id="label"></span>
+    <span id="mode" class="pill"></span>
+    <span id="status" class="pill" hidden></span>
+    <span id="viewers"></span>
+    <span id="expiry"></span>
+  </header>
+  <main id="screen" hidden><div id="terminal"></div></main>
+  <div id="notice">Connecting</div>
+  <div id="ended" hidden></div>
+</section>
 <script src="/assets/xterm.js"></script>
 <script src="/assets/share.js"></script>
 </body>

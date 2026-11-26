@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in to the shared terminal</title>
+<title>Sign in to shared terminals</title>
 <link rel="stylesheet" href="/assets/share.css">
 </head>
 <body class="login">
-<form method="post" action="__ACTION__">
-  <h1>Shared terminal</h1>
+<form method="post" action="/login">
+  <h1>Shared terminals</h1>
   <p class="error">__ERROR__</p>
+  <input type="hidden" name="next" value="__NEXT__">
   <label>Email <input name="email" type="email" autocomplete="username" required autofocus></label>
   <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
   <button type="submit">Sign in</button>
