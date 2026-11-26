@@ -12,10 +12,28 @@ use cli::{AgentsCommand, Cli, Commands, DiskCommand, SelfCommand, ShareCommand, 
 #[cfg(target_os = "macos")]
 use cli::{AppCommand, DisplayCommand};
 
+fn use_askpass_without_terminal() {
+    if std::io::stdin().is_terminal()
+        || wsctl_core::privilege::unattended()
+        || std::env::var_os("SUDO_ASKPASS").is_some()
+    {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let askpass = exe.with_file_name("wsctl-askpass");
+    if askpass.is_file() {
+        // SAFETY: runs first in main, before any thread exists.
+        unsafe { std::env::set_var("SUDO_ASKPASS", askpass) };
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // Rust ignores SIGPIPE, so println! panics once a reader goes away and
     // `wsctl disk browse | head` ends in a backtrace instead of quietly.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    use_askpass_without_terminal();
 
     let cli = Cli::parse();
 
