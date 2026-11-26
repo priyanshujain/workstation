@@ -1,5 +1,6 @@
 pub mod command;
 pub mod error;
+pub mod privilege;
 pub mod testing;
 
 pub use command::{CommandOutput, CommandRunner, SystemCommandRunner};

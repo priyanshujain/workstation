@@ -1,0 +1,39 @@
+use std::io::{BufRead, IsTerminal, Write};
+use std::process::Command;
+
+use crate::Result;
+
+pub const UNATTENDED: &str = "WSCTL_UNATTENDED";
+
+pub fn unattended() -> bool {
+    std::env::var_os(UNATTENDED).is_some()
+}
+
+pub fn sudo() -> Command {
+    let mut command = Command::new("sudo");
+    if unattended() {
+        command.arg("-n");
+    } else if askpass_wanted() {
+        command.arg("-A");
+    }
+    command
+}
+
+fn askpass_wanted() -> bool {
+    std::env::var_os("SUDO_ASKPASS").is_some() && !std::io::stdin().is_terminal()
+}
+
+pub fn confirm(yes: bool, question: &str) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        eprintln!("{question} Pass --yes to confirm without a terminal.");
+        return Ok(false);
+    }
+    eprint!("{question} [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
