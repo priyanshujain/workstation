@@ -105,9 +105,13 @@ pub fn ensure(dry_run: bool) -> Result<()> {
             }
             Ok(())
         }
-        State::Missing if dry_run || !std::io::stdin().is_terminal() => {
+        State::Missing if dry_run => {
+            println!("{} Xcode {version} is not installed", style("!").yellow());
+            Ok(())
+        }
+        State::Missing if !std::io::stdin().is_terminal() => {
             println!(
-                "{} Xcode {version} is not installed; run wsctl apply in a terminal to install it",
+                "{} Xcode {version} is not installed: xcodes install needs an Apple ID password and a two-factor code typed in a terminal, so run wsctl apply in a terminal",
                 style("!").yellow()
             );
             Ok(())
