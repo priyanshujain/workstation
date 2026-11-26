@@ -7,9 +7,7 @@ use crossterm::{
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
 
-pub mod cleanup;
 pub mod guests;
-pub mod live;
 pub mod packages;
 pub mod share;
 pub mod shares;
