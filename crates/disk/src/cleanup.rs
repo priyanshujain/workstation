@@ -268,6 +268,14 @@ impl Target {
     /// A target that holds anything left closed is never touched: deleting it
     /// opens the closed directory and raises the dialog the walk avoided.
     pub fn clean(&self) -> Result<u64, String> {
+        self.clean_by(rm_rf)
+    }
+
+    pub fn clean_as_root(&self) -> Result<u64, String> {
+        self.clean_by(sudo_rm_rf)
+    }
+
+    fn clean_by(&self, remove: fn(&Path) -> Result<(), String>) -> Result<u64, String> {
         if self.size.denials().unattended > 0 {
             return Err(format!("{} left closed: needs Full Disk Access", self.name));
         }
@@ -277,7 +285,7 @@ impl Target {
                 let size = dir_size(path);
                 if path.exists() {
                     for entry in fs::read_dir(path).map_err(|e| e.to_string())?.flatten() {
-                        rm_rf(&entry.path())?;
+                        remove(&entry.path())?;
                     }
                 }
                 Ok(size)
@@ -285,14 +293,14 @@ impl Target {
             CleanAction::RemoveDir(path) => {
                 let size = dir_size(path);
                 if path.exists() {
-                    rm_rf(path)?;
+                    remove(path)?;
                 }
                 Ok(size)
             }
             CleanAction::RemoveFile(path) => {
                 let size = path.metadata().map(|m| m.len()).unwrap_or(0);
                 if path.exists() {
-                    rm_rf(path)?;
+                    remove(path)?;
                 }
                 Ok(size)
             }
@@ -313,7 +321,7 @@ impl Target {
                 // a child that went busy since the scan must survive.
                 let mut freed = 0u64;
                 for (path, size) in idle_children(dir, *idle_days) {
-                    rm_rf(&path)?;
+                    remove(&path)?;
                     freed += size;
                 }
                 Ok(freed)
@@ -323,7 +331,7 @@ impl Target {
 }
 
 impl Target {
-    pub(crate) fn refuse_if_in_use(&self, live: &crate::liveness::Liveness) -> Result<(), String> {
+    pub fn refuse_if_in_use(&self, live: &crate::liveness::Liveness) -> Result<(), String> {
         if let Some(app) = &self.owner_app
             && live.app_running(app)
         {
@@ -369,6 +377,19 @@ fn rm_rf(path: &Path) -> Result<(), String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("rm -rf {}: {}", path.display(), stderr.trim()));
+    }
+    Ok(())
+}
+
+fn sudo_rm_rf(path: &Path) -> Result<(), String> {
+    let output = wsctl_core::privilege::sudo()
+        .args(["rm", "-rf", "--"])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("sudo: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("sudo rm -rf {}: {}", path.display(), stderr.trim()));
     }
     Ok(())
 }
