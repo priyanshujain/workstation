@@ -8,6 +8,9 @@ const MAX_PASTE_BYTES = 128 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGES = 5;
 const TOAST_MS = 4000;
+const MIN_FONT_SIZE = 6;
+const MAX_FONT_SIZE = 24;
+const MAX_LINE_HEIGHT = 1.5;
 const IS_MAC = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform);
 
 const element = (id) => document.getElementById(id);
@@ -203,7 +206,7 @@ function applyTheme(theme) {
   if (theme.cursor) next.cursor = theme.cursor;
   theme.palette.slice(0, 16).forEach((color, index) => { next[PALETTE_KEYS[index]] = color; });
   terminal.options.theme = next;
-  if (theme.background) element("terminal").style.background = theme.background;
+  if (theme.background) element("screen").style.background = theme.background;
 }
 
 function showStatus(status) {
@@ -250,7 +253,7 @@ function handle(id, message) {
     case "hello": showReconnecting(false); break;
     case "reconnecting": showReconnecting(true); break;
     case "screen": terminal.reset(); terminal.write(message.vt); break;
-    case "resize": terminal.resize(message.cols, message.rows); break;
+    case "resize": terminal.resize(message.cols, message.rows); fitTerminal(); break;
     case "theme": applyTheme(message.theme); break;
     case "status": showReconnecting(false); showStatus(message.status); break;
     case "viewers": element("viewers").textContent = `watching: ${message.emails.join(", ")}`; break;
@@ -382,7 +385,34 @@ function onKey(event) {
   return true;
 }
 
+function overflows(box, grid) {
+  return grid.offsetWidth > box.clientWidth || grid.offsetHeight > box.clientHeight;
+}
+
+function fitFont(box, grid) {
+  const scale = Math.min(box.clientWidth / grid.offsetWidth, box.clientHeight / grid.offsetHeight);
+  let size = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.floor(terminal.options.fontSize * scale * 2) / 2));
+  terminal.options.fontSize = size;
+  while (size > MIN_FONT_SIZE && overflows(box, grid)) terminal.options.fontSize = size -= 0.5;
+}
+
+function fitLineHeight(box, grid) {
+  let height = Math.min(MAX_LINE_HEIGHT, Math.floor((box.clientHeight / grid.offsetHeight) * 100) / 100);
+  terminal.options.lineHeight = height;
+  while (height > 1 && overflows(box, grid)) terminal.options.lineHeight = height = Math.max(1, height - 0.02);
+}
+
+function fitTerminal() {
+  const box = element("screen");
+  const grid = terminal.element.querySelector(".xterm-screen");
+  if (box.hidden || !grid.offsetWidth) return;
+  terminal.options.lineHeight = 1;
+  fitFont(box, grid);
+  fitLineHeight(box, grid);
+}
+
 connectLobby();
+new ResizeObserver(fitTerminal).observe(element("screen"));
 terminal.onData((data) => sendInput({ type: "input", data }));
 terminal.attachCustomKeyEventHandler(onKey);
 element("terminal").addEventListener("paste", onPaste, true);

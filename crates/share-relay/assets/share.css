@@ -32,8 +32,8 @@ header[hidden], main[hidden] { display: none; }
 .pill.blocked { background: #8a6d00; }
 .pill.done { background: #1e6b34; }
 .pill.error { background: #8b1e1e; }
-main { flex: 1; overflow: auto; padding: 12px; }
-#terminal { display: inline-block; }
+main { flex: 1; min-height: 0; overflow: auto; display: flex; padding: 4px; background: #000; }
+#terminal { margin: auto; overflow: hidden; }
 #notice { margin: auto; max-width: 420px; padding: 24px; color: #999; text-align: center; line-height: 1.5; }
 #notice[hidden] { display: none; }
 #ended { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.7); font-size: 18px; text-align: center; padding: 24px; }
