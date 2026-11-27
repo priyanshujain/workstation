@@ -373,11 +373,33 @@ function onDrop(event) {
   uploadImages(images);
 }
 
+async function pasteClipboard() {
+  try {
+    const images = [];
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find((name) => name.startsWith("image/"));
+      if (type) images.push(new File([await item.getType(type)], "", { type }));
+    }
+    if (images.length) return uploadImages(images);
+    const text = await navigator.clipboard.readText();
+    if (text) pasteText(text);
+  } catch (error) {
+    toast("The browser blocked reading the clipboard.");
+  }
+}
+
+function pasteKey(event) {
+  if (!IS_MAC) return false;
+  event.preventDefault();
+  if (canSend()) pasteClipboard();
+  return false;
+}
+
 function onKey(event) {
-  if (IS_MAC || event.type !== "keydown" || !event.ctrlKey || event.altKey || event.metaKey) return true;
+  if (event.type !== "keydown" || !event.ctrlKey || event.altKey || event.metaKey) return true;
   const key = event.key.toLowerCase();
-  if (key === "v") return false;
-  if (key === "c" && !event.shiftKey && terminal.hasSelection()) {
+  if (key === "v") return pasteKey(event);
+  if (key === "c" && !IS_MAC && !event.shiftKey && terminal.hasSelection()) {
     event.preventDefault();
     navigator.clipboard.writeText(terminal.getSelection()).catch(() => toast("The browser blocked copying."));
     return false;
