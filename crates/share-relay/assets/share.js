@@ -395,8 +395,20 @@ function pasteKey(event) {
   return false;
 }
 
+function deleteLine(event) {
+  event.preventDefault();
+  sendInput({ type: "input", data: "\x15" });
+  return false;
+}
+
+function isCommandBackspace(event) {
+  return IS_MAC && event.metaKey && !event.ctrlKey && !event.altKey && event.key === "Backspace";
+}
+
 function onKey(event) {
-  if (event.type !== "keydown" || !event.ctrlKey || event.altKey || event.metaKey) return true;
+  if (event.type !== "keydown") return true;
+  if (isCommandBackspace(event)) return deleteLine(event);
+  if (!event.ctrlKey || event.altKey || event.metaKey) return true;
   const key = event.key.toLowerCase();
   if (key === "v") return pasteKey(event);
   if (key === "c" && !IS_MAC && !event.shiftKey && terminal.hasSelection()) {
