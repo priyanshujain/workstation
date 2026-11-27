@@ -1,5 +1,11 @@
-pub const PAGE: &str = include_str!("../assets/share.html");
-pub const LOGIN: &str = include_str!("../assets/login.html");
+use std::sync::LazyLock;
+
+use sha2::{Digest, Sha256};
+
+pub static PAGE: LazyLock<String> =
+    LazyLock::new(|| versioned(include_str!("../assets/share.html")));
+pub static LOGIN: LazyLock<String> =
+    LazyLock::new(|| versioned(include_str!("../assets/login.html")));
 
 const FILES: &[(&str, &str, &str)] = &[
     (
@@ -29,4 +35,25 @@ pub fn find(name: &str) -> Option<(&'static str, &'static str)> {
         .iter()
         .find(|(file, _, _)| *file == name)
         .map(|(_, content_type, body)| (*content_type, *body))
+}
+
+fn versioned(page: &str) -> String {
+    let version = version();
+    FILES.iter().fold(page.to_string(), |page, (name, _, _)| {
+        page.replace(
+            &format!("/assets/{name}\""),
+            &format!("/assets/{name}?v={version}\""),
+        )
+    })
+}
+
+fn version() -> String {
+    let mut hasher = Sha256::new();
+    for (_, _, body) in FILES {
+        hasher.update(body.as_bytes());
+    }
+    hasher.finalize()[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
