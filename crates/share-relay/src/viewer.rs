@@ -11,6 +11,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use share_protocol::{RelayMessage, UploadFile, VIEWER_PATH_PREFIX, ViewerInput, ViewerMessage};
+use tokio::sync::mpsc;
 
 use crate::assets;
 use crate::auth::{random_token, token_hash, verify_password};
@@ -29,6 +30,7 @@ const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const MAX_UPLOAD_FILES: u32 = 5;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_VIEWER_MESSAGE_BYTES: usize = 14 * 1024 * 1024;
+const INPUT_QUEUE: usize = 256;
 
 #[derive(Deserialize)]
 struct Login {
@@ -335,9 +337,20 @@ async fn pump(
     viewer_id: u64,
     email: &str,
     socket: &mut WebSocket,
-    mut outbox: ViewerReceiver,
+    outbox: ViewerReceiver,
 ) {
-    let mut prompts = PromptBuffer::default();
+    let (inputs, queued) = mpsc::channel(INPUT_QUEUE);
+    tokio::join!(
+        exchange(socket, outbox, inputs),
+        forward_inputs(relay, live, viewer_id, email, queued),
+    );
+}
+
+async fn exchange(
+    socket: &mut WebSocket,
+    mut outbox: ViewerReceiver,
+    inputs: mpsc::Sender<String>,
+) {
     loop {
         tokio::select! {
             outbound = outbox.recv() => match outbound {
@@ -350,11 +363,24 @@ async fn pump(
                 Received::Outbound(Outbound::Close) | Received::Closed => return,
             },
             incoming = socket.recv() => match incoming {
-                Some(Ok(Message::Text(text))) => receive(relay, live, viewer_id, email, &mut prompts, &text).await,
+                Some(Ok(Message::Text(text))) => if inputs.send(text.to_string()).await.is_err() { return },
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
                 Some(Ok(_)) => {}
             },
         }
+    }
+}
+
+async fn forward_inputs(
+    relay: &Relay,
+    live: &LiveShare,
+    viewer_id: u64,
+    email: &str,
+    mut queued: mpsc::Receiver<String>,
+) {
+    let mut prompts = PromptBuffer::default();
+    while let Some(text) = queued.recv().await {
+        receive(relay, live, viewer_id, email, &mut prompts, &text).await;
     }
 }
 
