@@ -21,7 +21,7 @@ pub async fn connect(
     request
         .headers_mut()
         .insert(AGENT_SECRET_HEADER, secret.parse()?);
-    let (mut relay, _) = tokio_tungstenite::connect_async(request)
+    let (mut relay, _) = tokio_tungstenite::connect_async_with_config(request, None, true)
         .await
         .with_context(|| format!("could not connect to the relay at {url}"))?;
     send(&mut relay, hello).await?;

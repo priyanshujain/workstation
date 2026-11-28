@@ -13,7 +13,8 @@ mod viewer;
 
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
+use axum::serve::ListenerExt;
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::relay::Relay;
 
@@ -47,10 +48,16 @@ async fn serve_relay(
     let relay = Arc::new(relay);
     relay.restore().await?;
     let viewer_server = axum::serve(
-        viewers,
+        viewers.tap_io(disable_nagle),
         viewer::router(relay.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     );
-    let agent_server = axum::serve(agents, agent::router(relay));
+    let agent_server = axum::serve(agents.tap_io(disable_nagle), agent::router(relay));
     tokio::try_join!(async { viewer_server.await }, async { agent_server.await })?;
     Ok(())
+}
+
+fn disable_nagle(stream: &mut TcpStream) {
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::warn!(%error, "could not disable Nagle on a connection");
+    }
 }
