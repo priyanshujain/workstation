@@ -14,7 +14,7 @@ const MAX_LINE_HEIGHT = 1.5;
 const IS_MAC = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform);
 
 const element = (id) => document.getElementById(id);
-const terminal = new Terminal({ cols: 80, rows: 24, disableStdin: true, scrollback: 5000 });
+const terminal = new Terminal({ cols: 80, rows: 24, disableStdin: true, scrollback: 5000, macOptionClickForcesSelection: true });
 terminal.open(element("terminal"));
 
 const tabs = new Map();
@@ -419,6 +419,16 @@ function onKey(event) {
   return true;
 }
 
+function copyFromProgram(data) {
+  const encoded = data.slice(data.indexOf(";") + 1);
+  if (!encoded || encoded === "?") return true;
+  try {
+    const text = new TextDecoder().decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
+    navigator.clipboard.writeText(text).catch(() => toast("The browser blocked copying."));
+  } catch (error) {}
+  return true;
+}
+
 function overflows(box, grid) {
   return grid.offsetWidth > box.clientWidth || grid.offsetHeight > box.clientHeight;
 }
@@ -449,6 +459,7 @@ connectLobby();
 new ResizeObserver(fitTerminal).observe(element("screen"));
 terminal.onData((data) => sendInput({ type: "input", data }));
 terminal.attachCustomKeyEventHandler(onKey);
+terminal.parser.registerOscHandler(52, copyFromProgram);
 element("terminal").addEventListener("paste", onPaste, true);
 element("screen").addEventListener("dragover", (event) => { if (carriesFiles(event)) event.preventDefault(); });
 element("screen").addEventListener("drop", onDrop, true);
